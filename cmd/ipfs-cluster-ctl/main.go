@@ -528,7 +528,6 @@ content.
 				p.ShardSize = c.Uint64("shard-size")
 				//p.Shard = shard
 				//p.ShardSize = c.Uint64("shard-size")
-				p.Shard = false
 				p.Recursive = c.Bool("recursive")
 				p.Local = c.Bool("local")
 				p.Layout = c.String("layout")
