@@ -4,7 +4,6 @@ require (
 	contrib.go.opencensus.io/exporter/jaeger v0.2.1
 	contrib.go.opencensus.io/exporter/prometheus v0.4.2
 	dario.cat/mergo v1.0.1
-	github.com/klauspost/reedsolomon v1.12.4
 	github.com/blang/semver v3.5.1+incompatible
 	github.com/cockroachdb/pebble v1.1.4
 	github.com/coreos/go-systemd/v22 v22.5.0
@@ -246,6 +245,10 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	lukechampine.com/blake3 v1.4.0 // indirect
 )
+
+replace github.com/ipfs/go-ipld-format v0.6.0 => github.com/Mo-RIZK/go-ipld-format v0.0.0-20250410100728-61bd00b1b711
+
+replace github.com/ipfs/boxo v0.27.4 => github.com/Mo-RIZK/boxo v0.0.0-20250410101145-9526dbbbde92
 
 go 1.24
 
