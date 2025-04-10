@@ -381,7 +381,7 @@ func runCmd(c *cli.Context) error {
 		return cli.Exit(errors.Wrap(err, "creating CRDT component"), 1)
 	}
 
-	tracker := stateless.New(cfgs.Statelesstracker, host.ID(), cfgs.Cluster.Peername, crdtcons.State)
+	tracker := stateless.New(cfgs.Statelesstracker, host.ID(), cfgs.Cluster.Peername, crdtcons.State, connector)
 
 	mon, err := pubsubmon.New(ctx, cfgs.Pubsubmon, pubsub, nil)
 	if err != nil {
