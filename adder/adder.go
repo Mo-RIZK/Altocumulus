@@ -35,24 +35,6 @@ var logger = logging.Logger("adder")
 
 var ipldDecoder *ipldlegacy.Decoder
 
-type ReedSolomon struct {
-	Context   context.Context
-	Original  int
-	Parity    int
-	Chunker   string
-	ShardSize uint64
-}
-
-func NewRS(ctx context.Context, original int, parity int, shardSize uint64, chunker string) *ReedSolomon {
-	return &ReedSolomon{
-		Context:   ctx,
-		Original:  original,
-		Parity:    parity,
-		Chunker:   chunker,
-		ShardSize: shardSize,
-	}
-}
-
 // create an ipld registry specific to this package
 func init() {
 	mcReg := multicodec.Registry{}
@@ -223,8 +205,8 @@ type ipfsAdder struct {
 }
 
 func newIpfsAdder(ctx context.Context, dgs ClusterDAGService, params api.AddParams, out chan api.AddedOutput) (*ipfsAdder, error) {
-	RS := NewRS(ctx, params.O, params.P, params.ShardSize, params.Chunker)
-	iadder, err := ipfsadd.NewAdder(ctx, dgs, dgs.Allocations, *RS)
+	//RS := NewRS(ctx, params.O, params.P, params.ShardSize, params.Chunker)
+	iadder, err := ipfsadd.NewAdder(ctx, dgs, dgs.Allocations, params.O, params.P)
 	if err != nil {
 		logger.Error(err)
 		return nil, err

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ipfs-cluster/ipfs-cluster/adder"
 	"io"
 	"os"
 	gopath "path"
@@ -39,7 +38,7 @@ const progressReaderIncrement = 1024 * 256
 //var liveCacheSize = uint64(256 << 10)
 
 // NewAdder Returns a new Adder used for a file add operation.
-func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, RS adder.ReedSolomon) (*Adder, error) {
+func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, Original int, Parity int) (*Adder, error) {
 	// Cluster: we don't use pinner nor GCLocker.
 	return &Adder{
 		ctx:        ctx,
@@ -48,7 +47,8 @@ func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, 
 		Progress:   false,
 		Trickle:    false,
 		Chunker:    "",
-		RS:         RS,
+		Original:   Original,
+		Parity:     Parity,
 	}, nil
 }
 
@@ -69,7 +69,8 @@ type Adder struct {
 	CidBuilder cid.Builder
 	// liveNodes  uint64 // cluster: we do not clear mfs cache.
 	lastFile mfs.FSNode
-	RS       adder.ReedSolomon
+	Original int
+	Parity   int
 	// Cluster: ipfs does a hack in commands/add.go to set the filenames
 	// in emitted events correctly. We carry a root folder name (or a
 	// filename in the case of single files here and emit those events
@@ -106,8 +107,8 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 
 	// Cluster: we don't do batching/use BufferedDS.
 
-	fmt.Fprintf(os.Stdout, " repliii %d \n", adder.RS.Original)
-	if adder.RS.Original <= 1 {
+	fmt.Fprintf(os.Stdout, " repliii %d \n", adder.Original)
+	if adder.Original <= 1 {
 		nd := adder.addRep(chnk)
 		return nd, nil
 	} else {
@@ -396,7 +397,7 @@ func (adder *Adder) addEC(chnk chunker.Splitter) ipld.Node {
 	params := DagBuilderParams{
 		Dagserv:    adder.dagService,
 		RawLeaves:  adder.RawLeaves,
-		Maxlinks:   30 * (adder.RS.Original + adder.RS.Parity),
+		Maxlinks:   30 * (adder.Original + adder.Parity),
 		NoCopy:     adder.NoCopy,
 		CidBuilder: adder.CidBuilder,
 	}
@@ -406,9 +407,9 @@ func (adder *Adder) addEC(chnk chunker.Splitter) ipld.Node {
 		return nil
 	}
 	var nd ipld.Node
-	sizeStr := strings.Split(adder.RS.Chunker, "-")[1]
+	sizeStr := strings.Split(adder.Chunker, "-")[1]
 	size, _ := strconv.Atoi(sizeStr)
-	nd, err = Layout(db, adder.RS.Original, adder.RS.Parity, size)
+	nd, err = Layout(db, adder.Original, adder.Parity, size)
 	if err != nil {
 		return nil
 	}
