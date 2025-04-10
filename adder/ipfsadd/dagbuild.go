@@ -180,7 +180,7 @@ func (db *DagBuilderHelper) NewLeafNode(data []byte, fsNodeType pb.Data_DataType
 		return rawnode, nil
 	}
 	// Encapsulate the data in UnixFS node (instead of a raw node).
-	fsNodeOverDag := db.NewFSNodeOverDag(fsNodeType)
+	fsNodeOverDag := db.NewFSNodeOverDag(fsNodeType, 0, 0)
 	fsNodeOverDag.dag.Cid()
 	fsNodeOverDag.SetFileData(data)
 	node, err := fsNodeOverDag.Commit()
@@ -402,12 +402,12 @@ type FSNodeOverDag struct {
 // decoupled from one onther (and will continue in that way until
 // `Commit` is called), with `fsNodeType` specifying the type of
 // the UnixFS layer node (either `File` or `Raw`).
-func (db *DagBuilderHelper) NewFSNodeOverDag(fsNodeType pb.Data_DataType) *FSNodeOverDag {
+func (db *DagBuilderHelper) NewFSNodeOverDag(fsNodeType pb.Data_DataType, or int, par int) *FSNodeOverDag {
 	node := new(FSNodeOverDag)
 	node.dag = new(dag.ProtoNode)
 	node.dag.SetCidBuilder(db.GetCidBuilder())
 	//TODO honnnnnn
-	//node.dag.SetEC()
+	node.dag.SetEC(or, par)
 	node.file = ft.NewFSNode(fsNodeType)
 	return node
 }

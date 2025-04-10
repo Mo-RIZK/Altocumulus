@@ -178,7 +178,7 @@ func Layout(db *DagBuilderHelper, or int, par int, size int) (ipld.Node, error) 
 		fmt.Fprintf(os.Stdout, "Entered top \n")
 		// Add the old `root` as a child of the `newRoot`.
 		//fmt.Fprintf(os.Stdout, "kam parity fi : %d kam toEncode fi : %d kam nodenb saro : %d kam last fi : %d \n", parity, len(toEncode), nodenb, len(last))
-		newRoot := db.NewFSNodeOverDag(ft.TFile)
+		newRoot := db.NewFSNodeOverDag(ft.TFile, or, par)
 		err = newRoot.AddChild(root, fileSize, db)
 		if err != nil {
 			return nil, err
@@ -249,7 +249,7 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 	}
 
 	if node == nil {
-		node = db.NewFSNodeOverDag(ft.TFile)
+		node = db.NewFSNodeOverDag(ft.TFile, 0, 0)
 	}
 
 	fmt.Fprintf(os.Stdout, "Entered bottttt \n")
