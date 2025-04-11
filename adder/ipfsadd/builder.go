@@ -355,7 +355,8 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 	if err != nil {
 		return nil, 0, nil, nil, nil, 0, 0, err
 	}
-
+	stat, _ := filledNode.Stat()
+	fmt.Fprintf(os.Stdout, " In ALTOOOOOOOOOOOOOOOO %d %d \n", stat.LinksSize, stat.BlockSize)
 	return filledNode, nodeFileSize, parity, ToEncode, last, timetakn, timetaknpad, nil
 }
 
