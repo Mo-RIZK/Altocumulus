@@ -506,6 +506,7 @@ content.
 				p.ReplicationFactorMax = c.Int("replication-max")
 				p.O = original
 				p.P = parity
+				fmt.Fprintf(os.Stdout, "The original0 is  : %d, %d and the original1 is : \n", p.O, p.P)
 				if original == 0 || parity == 0 {
 					checkErr("", errors.New("Make sure of a valid parameters for erasure coding "))
 				}
