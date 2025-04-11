@@ -250,7 +250,10 @@ func (p AddParams) ToQueryString() (string, error) {
 		return "", err
 	}
 	query.Set("shard", fmt.Sprintf("%t", p.Shard))
-
+	query.Set("c_ec", fmt.Sprintf("%t", p.Cec))
+	query.Set("s_ec", fmt.Sprintf("%t", p.Sec))
+	query.Set("or", fmt.Sprintf("%d", p.O))
+	query.Set("par", fmt.Sprintf("%d", p.P))
 	query.Set("local", fmt.Sprintf("%t", p.Local))
 	query.Set("recursive", fmt.Sprintf("%t", p.Recursive))
 	query.Set("layout", p.Layout)
@@ -284,5 +287,10 @@ func (p AddParams) Equals(p2 AddParams) bool {
 		p.StreamChannels == p2.StreamChannels &&
 		p.NoCopy == p2.NoCopy &&
 		p.Format == p2.Format &&
-		p.NoPin == p2.NoPin
+		p.NoPin == p2.NoPin &&
+		p.Cec == p2.Cec &&
+		p.Sec == p2.Sec &&
+		p.O == p2.O &&
+		p.P == p2.P
+
 }
