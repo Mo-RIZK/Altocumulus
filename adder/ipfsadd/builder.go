@@ -249,7 +249,7 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 	}
 
 	if node == nil {
-		node = db.NewFSNodeOverDag(ft.TFile, 0, 0)
+		node = db.NewFSNodeOverDag(ft.TFile)
 	}
 
 	fmt.Fprintf(os.Stdout, "Entered bottttt \n")
