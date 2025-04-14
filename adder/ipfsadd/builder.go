@@ -178,7 +178,7 @@ func Layout(db *DagBuilderHelper, or int, par int, size int) (ipld.Node, error) 
 		fmt.Fprintf(os.Stdout, "Entered top \n")
 		// Add the old `root` as a child of the `newRoot`.
 		//fmt.Fprintf(os.Stdout, "kam parity fi : %d kam toEncode fi : %d kam nodenb saro : %d kam last fi : %d \n", parity, len(toEncode), nodenb, len(last))
-		newRoot := db.NewFSNodeOverDag(ft.TFile, or, par)
+		newRoot := db.NewFSNodeOverDag(ft.TFile)
 		err = newRoot.AddChild(root, fileSize, db)
 		if err != nil {
 			return nil, err
