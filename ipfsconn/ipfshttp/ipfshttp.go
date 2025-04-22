@@ -508,7 +508,7 @@ func (ipfs *Connector) Pin(ctx context.Context, pin api.Pin) error {
 	}()
 
 	stats.Record(ipfs.ctx, observations.PinsPinAdd.M(1))
-	fmt.Fprintf(os.Stdout, "Dater start %s : %s \n", hash, time.Now().Format("2006-01-02 15:04:05.000"))
+	fmt.Fprintf(os.Stdout, "Dater start %s : %s \n", pin.Name, time.Now().Format("2006-01-02 15:04:05.000"))
 	err = ipfs.pinProgress(ctx, hash, maxDepth, outPins)
 	if err != nil {
 		stats.Record(ipfs.ctx, observations.PinsPinAddError.M(1))
@@ -516,7 +516,7 @@ func (ipfs *Connector) Pin(ctx context.Context, pin api.Pin) error {
 	}
 	totalPins := atomic.AddInt64(&ipfs.ipfsPinCount, 1)
 	stats.Record(ipfs.ctx, observations.PinsIpfsPins.M(totalPins))
-	fmt.Fprintf(os.Stdout, "Dater end %s : %s \n", hash, time.Now().Format("2006-01-02 15:04:05.000"))
+	fmt.Fprintf(os.Stdout, "Dater end %s : %s \n", pin.Name, time.Now().Format("2006-01-02 15:04:05.000"))
 
 	logger.Info("IPFS Pin request succeeded: ", hash)
 	return nil
