@@ -66,7 +66,7 @@ func (dc distanceChecker) WhoisresponsibleWithMe(ci api.Cid, tocheck []peer.ID) 
 		peerHash := dc.convertPeerID(p)
 		distance := xor(peerHash, ciHash)
 		// if myDistance is larger than for other peers...
-		if bytes.Compare(distresponsible[:], distance[:]) >= 0 {
+		if bytes.Compare(distresponsible[:], distance[:]) > 0 {
 			peerresponsible = p
 			distresponsible = distance
 		}
@@ -88,7 +88,7 @@ func (dc distanceChecker) Whoisresponsible(ci api.Cid, tocheck []peer.ID) peer.I
 		peerHash := dc.convertPeerID(p)
 		distance := xor(peerHash, ciHash)
 		// if myDistance is larger than for other peers...
-		if bytes.Compare(distresponsible[:], distance[:]) >= 0 {
+		if bytes.Compare(distresponsible[:], distance[:]) > 0 {
 			peerresponsible = p
 			distresponsible = distance
 		}
