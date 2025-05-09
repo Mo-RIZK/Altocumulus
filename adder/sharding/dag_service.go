@@ -110,7 +110,7 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 		lengthsgor:    make([]int, 0, opts.O+opts.P),
 		shardgor:      make([]*shard, 0, opts.O+opts.P),
 		try:           nil,
-		sizeint		0,
+		sizeint:		0,
 	}
 }
 
