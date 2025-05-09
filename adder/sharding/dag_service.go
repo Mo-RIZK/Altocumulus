@@ -76,6 +76,7 @@ type DAGService struct {
 	shardgor        []*shard
 	lengthsgor      []int
 	try             ipld.Node
+	sizeint		uint64
 }
 
 // New returns a new ClusterDAGService, which uses the given rpc client to perform
@@ -109,6 +110,7 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 		lengthsgor:    make([]int, 0, opts.O+opts.P),
 		shardgor:      make([]*shard, 0, opts.O+opts.P),
 		try:           nil,
+		sizeint		0,
 	}
 }
 
@@ -345,6 +347,8 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 			//FIXME: This will grow in memory
 			fmt.Fprintf(os.Stdout, "Internal node save in memory %s cid : %s\n", time.Now().Format("15:04:05.000"), n.Cid().String())
 			dgs.internalnodes = append(dgs.internalnodes, n)
+			dgs.sizeint += size
+			fmt.Fprintf(os.Stdout, "Overall size : \d", dgs.sizeint)
 			return nil
 		}
 	}
