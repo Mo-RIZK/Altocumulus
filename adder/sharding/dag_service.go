@@ -337,7 +337,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 
 	// this is not same as n.Size()
 	size := uint64(len(n.RawData()))
-
+	fmt.Fprintf(os.Stdout, "data node size : %d \n", size)
 	if dgs.internal == 0 {
 		dgs.internal = size
 		dgs.try = n
