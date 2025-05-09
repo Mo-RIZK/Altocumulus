@@ -348,7 +348,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 			fmt.Fprintf(os.Stdout, "Internal node save in memory %s cid : %s\n", time.Now().Format("15:04:05.000"), n.Cid().String())
 			dgs.internalnodes = append(dgs.internalnodes, n)
 			dgs.sizeint += size
-			fmt.Fprintf(os.Stdout, "Overall size : \d", dgs.sizeint)
+			fmt.Fprintf(os.Stdout, "Overall size : %d \n", dgs.sizeint)
 			return nil
 		}
 	}
