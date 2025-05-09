@@ -365,9 +365,9 @@ func (db *DagBuilderHelper) ProcessFileStoreParity(node ipld.Node) ipld.Node {
 // Add inserts the given node in the DAGService.
 func (db *DagBuilderHelper) Add(node ipld.Node) error {
 	st := time.Now()
-	err := db.dserv.Add(context.TODO(), node)
+	// err := db.dserv.Add(context.TODO(), node)
 	db.timetakensending += time.Since(st)
-	return err
+	return nil
 }
 
 // Maxlinks returns the configured maximum number for links
