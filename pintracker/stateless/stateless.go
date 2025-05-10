@@ -226,7 +226,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	//blacklist = append(blacklist, pin.Allocations...)-
 	prefix, err := merkledag.PrefixForCidVersion(0)
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 
 	hashFunCode, _ := multihash.Names[strings.ToLower("sha2-256")]
@@ -236,7 +236,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	cState, err := spt.getState(spt.ctx)
 	if err != nil {
 		logger.Warn(err)
-		return 0, 0
+		return 0, 0, 0
 	}
 	pinCh := make(chan api.Pin, 1024)
 	go func() {
@@ -249,7 +249,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	numpin, name, err := getShardNumber(pin.Name)
 	if err != nil {
 		fmt.Println("Error:", err)
-		return 0, 0
+		return 0, 0, 0
 	}
 	tosend := (numpin - 1) % (or + par)
 	fmt.Printf("number of the shard to repair is : %d \n", numpin)
@@ -368,7 +368,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		&struct{}{},
 	)
 	if errr != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	return timedownloadchunks, timetorepairchunksonly, wait2
 }
