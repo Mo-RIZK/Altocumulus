@@ -66,7 +66,7 @@ func NewShard(globalCtx context.Context, ctx context.Context, rpc *rpc.Client, o
 	}, nil
 }
 
-func newShards(globalCtx context.Context, ctx context.Context, rpc *rpc.Client, opts api.PinOptions) (*shard, error) {
+func NewShards(globalCtx context.Context, ctx context.Context, rpc *rpc.Client, opts api.PinOptions) (*shard, error) {
 	allocs, err := adder.BlockAllocate(ctx, rpc, opts)
 	if err != nil {
 		return nil, err
