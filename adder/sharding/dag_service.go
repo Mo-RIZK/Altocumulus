@@ -498,7 +498,7 @@ func (dgs *DAGService) ingestBlockREP(ctx context.Context, n ipld.Node) error {
 		logger.Infof("new shard for '%s': #%d", dgs.addParams.Name, len(dgs.shards))
 		var err error
 		// important: shards use the DAGService context.
-		shard, err = newShards(dgs.ctx, ctx, dgs.rpcClient, dgs.addParams.PinOptions)
+		shard, err = NewShards(dgs.ctx, ctx, dgs.rpcClient, dgs.addParams.PinOptions)
 		if err != nil {
 			return err
 		}
