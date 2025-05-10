@@ -185,8 +185,8 @@ func applyPinF(pinF func(*optracker.Operation) error, op *optracker.Operation) b
 func (spt *Tracker) pin(op *optracker.Operation) error {
 	if strings.Contains(op.Pin().Name, "Repair") {
 		fmt.Fprintf(os.Stdout, "Date start inside the pintracker repair %s : %s \n", op.Pin().Name, time.Now().Format("2006-01-02 15:04:05.000"))
-		download, repair := spt.repinUsingRS(op)
-		fmt.Fprintf(os.Stdout, "Time Taken to download chunks is : %s and to repair chunks is : %s \n", download.String(), repair.String())
+		download, repair, waittosend := spt.repinUsingRS(op)
+		fmt.Fprintf(os.Stdout, "Time Taken to download chunks is : %s and to repair chunks is : %s and additional time to wait to complete sending the shard : %s \n", download.String(), repair.String(), waittosend.String())
 		fmt.Fprintf(os.Stdout, "Date end inside the pintracker repair %s : %s \n", op.Pin().Name, time.Now().Format("2006-01-02 15:04:05.000"))
 		return nil
 	} else {
@@ -209,7 +209,7 @@ func (spt *Tracker) pin(op *optracker.Operation) error {
 	}
 }
 
-func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.Duration) {
+func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.Duration, time.Duration) {
 	repairShards := make([]pinwithmeta, 0)
 	//start := time.Now()
 	var timedownloadchunks, timetorepairchunksonly time.Duration
@@ -354,7 +354,9 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		size := uint64(len(rawnode.RawData()))
 		shh.AddLink(ctx, rawnode.Cid(), size)
 	}
+	wait1 := time.Now()
 	shh.FlushNew(spt.ctx)
+	wait2 := time.Since(wait1)
 	pin.Name = strings.Split(pin.Name, "Rep")[0]
 
 	errr := spt.rpcClient.CallContext(
@@ -368,7 +370,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	if errr != nil {
 		return 0, 0
 	}
-	return timedownloadchunks, timetorepairchunksonly
+	return timedownloadchunks, timetorepairchunksonly, wait2
 }
 
 func (spt *Tracker) getData(ctx context.Context, Cid string) []byte {
