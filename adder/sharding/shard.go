@@ -159,6 +159,7 @@ func (sh *shard) Flush(ctx context.Context, shardN int, prev cid.Cid) (cid.Cid, 
 	//startt := time.Now()
 	//fmt.Fprintf(os.Stdout, "SEND SHARD DAG %d", len(nodes))
 	for _, n := range nodes {
+		fmt.Fprintf(os.Stdout, "SHARD NODE SIZE IS: %d \n",n.Size() )
 		err = sh.sendBlock(ctx, n)
 		if err != nil {
 			close(sh.blocks)
