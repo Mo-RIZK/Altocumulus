@@ -299,8 +299,8 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		}(pinwm, i)
 	}
 	wgg.Wait()
-	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions,spt.peerID)
-	//shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
+	//shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions,spt.peerID)
+	shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
 	enc, _ := reedsolomon.New(or, par)
 	k := 0
 	for {
