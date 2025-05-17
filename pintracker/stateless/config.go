@@ -16,7 +16,7 @@ const envConfigKey = "cluster_stateless"
 // Default values for this Config.
 const (
 	DefaultMaxPinQueueSize       = 1000000
-	DefaultConcurrentPins        = 10
+	DefaultConcurrentPins        = 1
 	DefaultPriorityPinMaxAge     = 24 * time.Hour
 	DefaultPriorityPinMaxRetries = 5
 )
