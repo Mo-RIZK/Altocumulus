@@ -324,8 +324,10 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		for _, shard := range repairShards {
 			if len(shard.cids) > 0 {
 				go func(i int, shard pinwithmeta) {
+					sss := time.Now()
 					bytess := spt.getData(ctxx, shard.cids[i])
-					fmt.Printf("REPAIR GOT HERE \n")
+					nnn:= time.Since(sss)
+					fmt.Printf("REPAIR GOT HERE FOR : %s \n",nnn.String())
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
