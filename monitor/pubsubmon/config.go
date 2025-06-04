@@ -14,7 +14,7 @@ const envConfigKey = "cluster_pubsubmon"
 
 // Default values for this Config.
 const (
-	DefaultCheckInterval = 15 * time.Second
+	DefaultCheckInterval = 3 * time.Second
 )
 
 // Config allows to initialize a Monitor and customize some parameters.
