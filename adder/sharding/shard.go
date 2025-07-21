@@ -223,36 +223,29 @@ func (sh *shard) LastLink() cid.Cid {
 	lastLink := fmt.Sprintf("%d", l-1)
 	return sh.dagNode[lastLink]
 }
-func (sh *shard) FlushNew(ctx context.Context) (cid.Cid, int, error) {
+
+func (sh *shard) FlushNew(ctx context.Context) (cid.Cid, int, []ipld.Node, error) {
 	nodes, err := makeDAG(ctx, sh.dagNode)
 	if err != nil {
-		return cid.Undef, 0, err
+		return cid.Undef, 0, nil, err
 	}
 	for _, n := range nodes {
 		err = sh.sendBlock(ctx, n)
 		if err != nil {
 			close(sh.blocks)
-			return cid.Undef, 0, err
+			return cid.Undef, 0, nil, err
 		}
 	}
 	sh.Close()
 
 	select {
 	case <-ctx.Done():
-		return cid.Undef, 0, ctx.Err()
+		return cid.Undef, 0, nil, ctx.Err()
 	case <-sh.bs.Done():
 	}
 	if err := sh.bs.Err(); err != nil {
-		return cid.Undef, 0, err
-	}
-	for _, n := range nodes {
-		pinn := api.PinWithOpts(api.NewCid(n.Cid()), sh.pinOptions)
-		pinn.ReplicationFactorMin = 2
-		pinn.ReplicationFactorMax = 2
-		pinn.MaxDepth = 0
-		adder.Pin(ctx, sh.rpc, pinn)
+		return cid.Undef, 0, nil, err
 	}
 
-	
-	return nodes[0].Cid(), len(nodes), nil
+	return nodes[0].Cid(), len(nodes), nodes, nil
 }
