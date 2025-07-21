@@ -76,7 +76,7 @@ type DAGService struct {
 	shardgor        []*shard
 	lengthsgor      []int
 	try             ipld.Node
-	sizeint		uint64
+	topin           []every
 }
 
 // New returns a new ClusterDAGService, which uses the given rpc client to perform
@@ -110,7 +110,7 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 		lengthsgor:    make([]int, 0, opts.O+opts.P),
 		shardgor:      make([]*shard, 0, opts.O+opts.P),
 		try:           nil,
-		sizeint:		0,
+		topin:         make([]every, 0),
 	}
 }
 
@@ -252,6 +252,21 @@ func (dgs *DAGService) Finalize(ctx context.Context, dataRoot api.Cid) (api.Cid,
 	fmt.Fprintf(os.Stdout, "SENDING Cluster dag nodes and INTERNAL NODES and pinning them took : %s \n", et.Sub(st).String())
 	fmt.Fprintf(os.Stdout, "Overall ADD took : %s \n", et.Sub(dgs.startTime).String())
 
+	oppts := dgs.addParams.PinOptions
+	for _, e := range dgs.topin {
+		for _, n := range e.nodes {
+			pinn := api.PinWithOpts(api.NewCid(n.Cid()), dgs.addParams.PinOptions)
+			allocs, _ := adder.BlockAllocateWithBlack(ctx, dgs.rpcClient, e.black, oppts)
+			pinn.Allocations = allocs
+			pinn.MaxDepth = 0
+			errr := adder.Pin(ctx, dgs.rpcClient, pinn)
+			if errr != nil {
+				return dataRoot, errr
+			}
+		}
+
+	}
+
 	// Pin the META pin
 	/*metaPin := api.PinWithOpts(dataRoot, dgs.addParams.PinOptions)
 	  metaPin.Type = api.MetaType
@@ -337,7 +352,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 
 	// this is not same as n.Size()
 	size := uint64(len(n.RawData()))
-	fmt.Fprintf(os.Stdout, "data node size : %d \n", size)
+
 	if dgs.internal == 0 {
 		dgs.internal = size
 		dgs.try = n
@@ -347,8 +362,6 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 			//FIXME: This will grow in memory
 			fmt.Fprintf(os.Stdout, "Internal node save in memory %s cid : %s\n", time.Now().Format("15:04:05.000"), n.Cid().String())
 			dgs.internalnodes = append(dgs.internalnodes, n)
-			dgs.sizeint += size
-			fmt.Fprintf(os.Stdout, "Overall size : %d \n", dgs.sizeint)
 			return nil
 		}
 	}
@@ -688,12 +701,15 @@ func (dgs *DAGService) flushCurrentShards(ctx context.Context) (cid.Cid, error) 
 		dgs.wg.Add(1)
 		go func(shardN int) {
 			defer dgs.wg.Done()
-			shardCid, lennode,nodes, err := shardd[(shardN-1)%(dgs.original+dgs.parity)].FlushNew(ctx)
+			shardCid, lennode, nodes, err := shardd[(shardN-1)%(dgs.original+dgs.parity)].FlushNew(ctx)
 			if err != nil {
 				return
 			}
 			mu.Lock()
-			dgs.internalnodes = append(dgs.internalnodes, nodes...)
+			black := make([]peer.ID, 0)
+			black = append(black, shardd[(shardN-1)%(dgs.original+dgs.parity)].allocations...)
+			ee := every{black: black, nodes: nodes}
+			dgs.topin = append(dgs.topin, ee)
 			sharedCbor[(shardN-1)%(dgs.original+dgs.parity)] = shardCid
 			lennodes[(shardN-1)%(dgs.original+dgs.parity)] = lennode
 			mu.Unlock()
@@ -709,6 +725,7 @@ func (dgs *DAGService) flushCurrentShards(ctx context.Context) (cid.Cid, error) 
 		pin.Name = fmt.Sprintf("%s-shard-EC(%d,%d)-%d", shardd[(shardN-1)%(dgs.original+dgs.parity)].pinOptions.Name, dgs.original, dgs.parity, shardN)
 		// this sets allocations as priority allocation
 		pin.Allocations = shardd[(shardN-1)%(dgs.original+dgs.parity)].allocations
+
 		pin.Type = api.ShardType
 		ref := api.NewCid(dgs.previousShard)
 		pin.Reference = &ref
@@ -744,4 +761,9 @@ func (dgs *DAGService) flushCurrentShards(ctx context.Context) (cid.Cid, error) 
 	dgs.shardPINtime += enn.Sub(en)
 	fmt.Fprintf(os.Stdout, "This set of shards pinning took : %s\n", enn.Sub(en).String())
 	return LastLink, nil
+}
+
+type every struct {
+	black []peer.ID
+	nodes []ipld.Node
 }
