@@ -10,6 +10,7 @@ var DefaultRPCPolicy = map[string]RPCEndpointType{
 	"Cluster.Alerts":               RPCClosed,
 	"Cluster.BandwidthByProtocol":  RPCClosed,
 	"Cluster.BlockAllocate":        RPCClosed,
+	"Cluster.BlockAllocateWithBlack":        RPCClosed,
 	"Cluster.ConnectGraph":         RPCClosed,
 	"Cluster.ID":                   RPCOpen,
 	"Cluster.IDStream":             RPCOpen,
