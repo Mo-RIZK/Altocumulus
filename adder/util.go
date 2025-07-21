@@ -129,6 +129,21 @@ func BlockAllocate(ctx context.Context, rpc *rpc.Client, pinOpts api.PinOptions)
 	)
 	return allocsStr, err
 }
+// BlockAllocate helps allocating blocks to peers.
+func BlockAllocateWithBlack(ctx context.Context, rpc *rpc.Client, black []peer.ID, pinOpts api.PinOptions) ([]peer.ID, error) {
+	// Find where to allocate this file
+	var allocsStr []peer.ID
+	pinOpts.UserAllocations = black
+	err := rpc.CallContext(
+		ctx,
+		"",
+		"Cluster",
+		"BlockAllocateWithBlack",
+		api.PinWithOpts(api.CidUndef, pinOpts),
+		&allocsStr,
+	)
+	return allocsStr, err
+}
 
 // Pin helps sending local RPC pin requests.
 func Pin(ctx context.Context, rpc *rpc.Client, pin api.Pin) error {
