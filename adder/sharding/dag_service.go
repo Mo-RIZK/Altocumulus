@@ -742,5 +742,37 @@ func (dgs *DAGService) flushCurrentShards(ctx context.Context) (cid.Cid, error) 
 	enn := time.Now()
 	dgs.shardPINtime += enn.Sub(en)
 	fmt.Fprintf(os.Stdout, "This set of shards pinning took : %s\n", enn.Sub(en).String())
+
+	for shardN := lens + 1; shardN <= lens+(dgs.original+dgs.parity); shardN++ {
+		rootCid := sharedCbor[(shardN-1)%(dgs.original+dgs.parity)]
+		pin := api.PinWithOpts(api.NewCid(rootCid), shardd[(shardN-1)%(dgs.original+dgs.parity)].pinOptions)
+		pin.Name = fmt.Sprintf("%s-shard-EC(%d,%d)-%d", shardd[(shardN-1)%(dgs.original+dgs.parity)].pinOptions.Name, dgs.original, dgs.parity, shardN)
+		pin.Type = api.ShardType
+		ref := api.NewCid(dgs.previousShard)
+		pin.Reference = &ref
+		pin.MaxDepth = 0
+		pin.ShardSize = shardd[(shardN-1)%(dgs.original+dgs.parity)].Size()
+		pin.ReplicationFactorMin = 2
+		pin.ReplicationFactorMax = 2
+		adder.Pin(ctx, shardd[(shardN-1)%(dgs.original+dgs.parity)].rpc, pin)
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	
 	return LastLink, nil
 }
