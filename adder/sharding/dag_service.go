@@ -688,11 +688,12 @@ func (dgs *DAGService) flushCurrentShards(ctx context.Context) (cid.Cid, error) 
 		dgs.wg.Add(1)
 		go func(shardN int) {
 			defer dgs.wg.Done()
-			shardCid, lennode, err := shardd[(shardN-1)%(dgs.original+dgs.parity)].FlushNew(ctx)
+			shardCid, lennode,nodes, err := shardd[(shardN-1)%(dgs.original+dgs.parity)].FlushNew(ctx)
 			if err != nil {
 				return
 			}
 			mu.Lock()
+			dgs.internalnodes = append(dgs.internalnodes, nodes...)
 			sharedCbor[(shardN-1)%(dgs.original+dgs.parity)] = shardCid
 			lennodes[(shardN-1)%(dgs.original+dgs.parity)] = lennode
 			mu.Unlock()
