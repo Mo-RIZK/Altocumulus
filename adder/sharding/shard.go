@@ -245,5 +245,14 @@ func (sh *shard) FlushNew(ctx context.Context) (cid.Cid, int, error) {
 	if err := sh.bs.Err(); err != nil {
 		return cid.Undef, 0, err
 	}
+	for _, n := range nodes {
+		pinn := api.PinWithOpts(api.NewCid(n.Cid()), sh.pinOptions)
+		pinn.ReplicationFactorMin = 2
+		pinn.ReplicationFactorMax = 2
+		pinn.MaxDepth = 0
+		adder.Pin(ctx, sh.rpc, pinn)
+	}
+
+	
 	return nodes[0].Cid(), len(nodes), nil
 }
