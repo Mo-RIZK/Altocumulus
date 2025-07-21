@@ -748,7 +748,6 @@ func (dgs *DAGService) flushCurrentShards(ctx context.Context) (cid.Cid, error) 
 		pinnn := api.PinWithOpts(api.NewCid(rootCid), shardd[(shardN-1)%(dgs.original+dgs.parity)].pinOptions)
 		pinnn.Name = fmt.Sprintf("%s-shard-EC(%d,%d)-%d", shardd[(shardN-1)%(dgs.original+dgs.parity)].pinOptions.Name, dgs.original, dgs.parity, shardN)
 		pinnn.Type = api.ShardType
-		pinnn.Reference = &ref
 		pinnn.MaxDepth = 0
 		pinnn.ShardSize = shardd[(shardN-1)%(dgs.original+dgs.parity)].Size()
 		pinnn.ReplicationFactorMin = 2
