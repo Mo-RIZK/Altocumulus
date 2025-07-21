@@ -390,6 +390,43 @@ func (rpcapi *ClusterRPCAPI) BlockAllocate(ctx context.Context, in api.Pin, out 
 	return nil
 }
 
+// BlockAllocate returns allocations for blocks. This is used in the adders.
+// It's different from pin allocations when ReplicationFactor < 0.
+func (rpcapi *ClusterRPCAPI) BlockAllocateWithBlack(ctx context.Context, in api.Pin, out *[]peer.ID) error {
+	if rpcapi.c.config.FollowerMode {
+		return errFollowerMode
+	}
+
+	// Allocating for a existing pin. Usually the adder calls this with
+	// cid.Undef.
+	existing, err := rpcapi.c.PinGet(ctx, in.Cid)
+	if err != nil && err != state.ErrNotFound {
+		return err
+	}
+
+	in, err = rpcapi.c.setupPin(ctx, in, existing)
+	if err != nil {
+		return err
+	}
+
+	allocs, err := rpcapi.c.allocate(
+		ctx,
+		in.Cid,
+		existing,
+		-1,
+		-1,
+		in.UserAllocations, // blacklist
+		nil,                // prio list
+	)
+
+	if err != nil {
+		return err
+	}
+
+	*out = allocs
+	return nil
+}
+
 // RepoGC performs garbage collection sweep on all peers' repos.
 func (rpcapi *ClusterRPCAPI) RepoGC(ctx context.Context, in struct{}, out *api.GlobalRepoGC) error {
 	res, err := rpcapi.c.RepoGC(ctx)
