@@ -252,21 +252,6 @@ func (dgs *DAGService) Finalize(ctx context.Context, dataRoot api.Cid) (api.Cid,
 	fmt.Fprintf(os.Stdout, "SENDING Cluster dag nodes and INTERNAL NODES and pinning them took : %s \n", et.Sub(st).String())
 	fmt.Fprintf(os.Stdout, "Overall ADD took : %s \n", et.Sub(dgs.startTime).String())
 
-	oppts := dgs.addParams.PinOptions
-	for _, e := range dgs.topin {
-		for _, n := range e.nodes {
-			pinn := api.PinWithOpts(api.NewCid(n.Cid()), dgs.addParams.PinOptions)
-			allocs, _ := adder.BlockAllocateWithBlack(ctx, dgs.rpcClient, e.black, oppts)
-			pinn.Allocations = allocs
-			pinn.MaxDepth = 0
-			errr := adder.Pin(ctx, dgs.rpcClient, pinn)
-			if errr != nil {
-				return dataRoot, errr
-			}
-		}
-
-	}
-
 	// Pin the META pin
 	/*metaPin := api.PinWithOpts(dataRoot, dgs.addParams.PinOptions)
 	  metaPin.Type = api.MetaType
