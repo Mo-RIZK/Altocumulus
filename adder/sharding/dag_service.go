@@ -334,6 +334,9 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	logger.Debugf("ingesting block %s in shard %d (%s)", n.Cid(), len(dgs.shards), dgs.addParams.Name)
+
+	nstat,_ := n.Stat()
+	fmt.Fprintf(os.Stdout, "Size of the data is : %d\n", nstat.DataSize)
 	
 	size := uint64(len(n.RawData()))
 	if dgs.internal == 0 {
@@ -343,8 +346,6 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		if dgs.internal != size {
 			//save the internal nodes
 			//FIXME: This will grow in memory
-			sizee := n.Links()[0].Size
-			fmt.Fprintf(os.Stdout, "SIZEEEE OF CHUNK ISSSSS : %d \n",sizee)
 			fmt.Fprintf(os.Stdout, "Internal node save in memory %s cid : %s\n", time.Now().Format("15:04:05.000"), n.Cid().String())
 			dgs.internalnodes = append(dgs.internalnodes, n)
 			return nil
