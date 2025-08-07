@@ -334,10 +334,9 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	logger.Debugf("ingesting block %s in shard %d (%s)", n.Cid(), len(dgs.shards), dgs.addParams.Name)
-
-	nstat,_ := n.Stat()
-	fmt.Fprintf(os.Stdout, "Size of the data is : %d\n", nstat.DataSize)
 	
+	fmt.Fprintf(os.Stdout, "Information : %s\n", n.String())
+
 	size := uint64(len(n.RawData()))
 	if dgs.internal == 0 {
 		dgs.internal = size
