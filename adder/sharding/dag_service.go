@@ -7,8 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ipfs/boxo/ipld/unixfs"
-	"log"
 	"os"
 	"sync"
 
@@ -336,22 +334,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	logger.Debugf("ingesting block %s in shard %d (%s)", n.Cid(), len(dgs.shards), dgs.addParams.Name)
-	raw := n.RawData()
-	fsNode, err := unixfs.FSNodeFromBytes(raw)
-	if err != nil {
-		log.Fatalf("Not a UnixFS node or malformed data: %v", err)
-	}
-
-	switch fsNode.Type() {
-	case unixfs.TFile:
-		if len(fsNode.BlockSizes()) == 0 {
-			fmt.Printf("Exact chunk size: %d bytes\n", fsNode.FileSize())
-		} else {
-			fmt.Println("This is a parent node with child blocks.")
-		}
-	default:
-		fmt.Printf("Unsupported UnixFS type: %v\n", fsNode.Type())
-	}
+	
 	size := uint64(len(n.RawData()))
 	if dgs.internal == 0 {
 		dgs.internal = size
@@ -360,6 +343,8 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		if dgs.internal != size {
 			//save the internal nodes
 			//FIXME: This will grow in memory
+			sizee := n.Links()[0].Size
+			fmt.Fprintf(os.Stdout, "SIZEEEE OF CHUNK ISSSSS : %d \n",sizee)
 			fmt.Fprintf(os.Stdout, "Internal node save in memory %s cid : %s\n", time.Now().Format("15:04:05.000"), n.Cid().String())
 			dgs.internalnodes = append(dgs.internalnodes, n)
 			return nil
