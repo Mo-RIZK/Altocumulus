@@ -612,6 +612,77 @@ content.
 				return cerr
 			},
 		},
+		//////////////////////////////////////////////READDDD/////////////////////////////////////////////////////
+		{
+			Name:      "get",
+			Usage:     "Get a file or directory from ipfs",
+			ArgsUsage: "hash",
+			Description: `
+Read a file from the system.
+`,
+			/*
+				Cluster Add supports handling huge files and sharding the resulting DAG among
+				several ipfs daemons (--shard). In this case, a single ipfs daemon will not
+				contain the full dag, but only parts of it (shards). Desired shard size can
+				be provided with the --shard-size flag.
+
+				We recommend setting a --name for sharded pins. Otherwise, it will be
+				automatically generated.
+			*/
+			Flags: []cli.Flag{
+				&cli.StringFlag{
+					Name:  "mechanism",
+					Usage: "Select retrieval mechanism: ECWI, allN, originalN, Rep",
+					Value: "Rep", // default value
+				},
+			},
+			Action: func(c *cli.Context) error {
+				hash := c.Args().Get(0)
+				if hash == "" {
+					return fmt.Errorf("hash argument is required")
+				}
+				cid, err := api.DecodeCid(hash)
+				if err != nil {
+					return fmt.Errorf("invalid CID: %s", err)
+				}
+
+				mechanism := c.String("mechanism")
+				if mechanism != "originalN" && mechanism != "allN" && mechanism != "Rep" && mechanism != "ECWI" {
+					return fmt.Errorf("invalid mechanism '%s': must be one of originalN, allN, Rep, ECWI", mechanism)
+				}
+				pinInfo, err := globalClient.Status(ctx, cid, false)
+				if err != nil {
+					return fmt.Errorf("error getting status for CID: %s", err)
+				}
+
+				if len(pinInfo.PeerMap) == 0 {
+					fmt.Printf("CID %s is NOT found in the cluster state.\n", cid.String())
+					return nil
+				}
+
+				fmt.Printf("CID %s IS present in the cluster state on %d peer(s):\n", cid.String(), len(pinInfo.PeerMap))
+				for peerID, info := range pinInfo.PeerMap {
+					fmt.Printf("- Peer %s: status=%s\n", peerID, info.Status.String())
+				}
+				//HTTP Request of IPFS ls of the hash
+				pin, err := globalClient.Allocation(ctx, cid)
+				if err != nil {
+					return fmt.Errorf("could not get allocation: %w", err)
+				}
+
+				if pin.Reference != nil {
+					dataRoot := *pin.Reference
+					fmt.Printf("Cid of the main root in cluster state is : %s and the Data root CID from Reference: %s\n", pin.Cid.String(), dataRoot.String())
+					//send a get request to ipfs to do the retrieval
+					//add flags for the destination and that stuff
+				} else {
+					fmt.Println("No data root reference found in pin")
+				}
+				//we will get the shards cids
+				//is the links saved in the shard
+				return nil
+			},
+		},
 		{
 			Name:        "pin",
 			Usage:       "Pin and unpin and list items in IPFS Cluster",
