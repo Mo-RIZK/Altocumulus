@@ -239,7 +239,7 @@ func (dgs *DAGService) Finalize(ctx context.Context, dataRoot api.Cid) (api.Cid,
 	clusterDAGPin.ReplicationFactorMin = -1
 	clusterDAGPin.ReplicationFactorMax = -1
 	clusterDAGPin.MaxDepth = 0 // pin direct
-	clusterDAGPin.Name = fmt.Sprintf("%s-clusterDAG", dgs.addParams.Name)
+	clusterDAGPin.Name = fmt.Sprintf("%s-clusterDAG-EC()-chunksize", dgs.addParams.Name)
 	clusterDAGPin.Type = api.ClusterDAGType
 	clusterDAGPin.Reference = &dataRoot
 	// Update object with response.
@@ -337,7 +337,8 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 
 	// this is not same as n.Size()
 	size := uint64(len(n.RawData()))
-
+	size2,_ := n.Size()
+	fmt.Fprintf(os.Stdout, "n.rawdata length : %d and n.size() : %d\n", size, size2)
 	if dgs.internal == 0 {
 		dgs.internal = size
 		dgs.try = n
