@@ -336,11 +336,22 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	logger.Debugf("ingesting block %s in shard %d (%s)", n.Cid(), len(dgs.shards), dgs.addParams.Name)
-	fsNode, err := unixfs.FSNodeFromBytes(n.RawData())
+	raw := n.RawData()
+	fsNode, err := unixfs.FSNodeFromBytes(raw)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Not a UnixFS node or malformed data: %v", err)
 	}
-	fmt.Printf("Data size: %d\n", fsNode.FileSize())
+
+	switch fsNode.Type() {
+	case unixfs.TFile:
+		if len(fsNode.BlockSizes()) == 0 {
+			fmt.Printf("Exact chunk size: %d bytes\n", fsNode.FileSize())
+		} else {
+			fmt.Println("This is a parent node with child blocks.")
+		}
+	default:
+		fmt.Printf("Unsupported UnixFS type: %v\n", fsNode.Type())
+	}
 	size := uint64(len(n.RawData()))
 	if dgs.internal == 0 {
 		dgs.internal = size
