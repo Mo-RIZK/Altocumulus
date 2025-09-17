@@ -14,7 +14,7 @@ const envConfigKey = "cluster_disk"
 
 // Default values for disk Config
 const (
-	DefaultMetricTTL  = 30 * time.Second
+	DefaultMetricTTL  = 2 * time.Second
 	DefaultMetricType = MetricFreeSpace
 )
 
