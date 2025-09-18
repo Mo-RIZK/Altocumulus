@@ -380,7 +380,9 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 }
 
 func (spt *Tracker) getData(ctx context.Context, Cid string) []byte {
+	st := time.Now()
 	CidNew, _ := cid.Decode(Cid)
+	fmt.Printf("Decode Tooookkkkk !!!!!! : %s \n",time.Now().Sub(st))
 	nnn, _ := spt.connector.ChunkGet(ctx, CidNew)
 	return nnn
 }
