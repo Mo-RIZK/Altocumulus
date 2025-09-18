@@ -300,7 +300,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		}(pinwm, i)
 	}
 	wgg.Wait()
-	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s \n",time.Now().Since(ssss).String())
+	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s \n",time.Now().Sub(ssss).String())
 	//Local
 	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions,spt.peerID)
 	//MFS
@@ -384,7 +384,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 func (spt *Tracker) getData(ctx context.Context, Cid string) []byte {
 	st := time.Now()
 	CidNew, _ := cid.Decode(Cid)
-	fmt.Printf("Decode Tooookkkkk !!!!!! : %s \n",time.Now().Since(st).String())
+	fmt.Printf("Decode Tooookkkkk !!!!!! : %s \n",time.Now().Sub(st).String())
 	nnn, _ := spt.connector.ChunkGet(ctx, CidNew)
 	return nnn
 }
