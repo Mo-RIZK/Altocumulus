@@ -32,7 +32,7 @@ const (
 	DefaultEnableRelayHop                  = true
 	DefaultStateSyncInterval               = 5 * time.Minute
 	DefaultPinRecoverInterval              = 12 * time.Minute
-	DefaultMonitorPingInterval             = 1 * time.Second
+	DefaultMonitorPingInterval             = 5 * time.Second
 	DefaultPeerWatchInterval               = 5 * time.Second
 	DefaultReplicationFactor               = 1
 	DefaultLeaveOnShutdown                 = false
