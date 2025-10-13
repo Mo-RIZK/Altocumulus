@@ -186,7 +186,7 @@ func applyPinF(pinF func(*optracker.Operation) error, op *optracker.Operation) b
 }
 
 func (spt *Tracker) pin(op *optracker.Operation) error {
-	if strings.Contains(op.Pin().Name, "Repair") {
+	if !strings.Contains(op.Pin().Name, ")") {
 		fmt.Fprintf(os.Stdout, "Date start inside the pintracker repair %s : %s \n", op.Pin().Name, time.Now().Format("2006-01-02 15:04:05.000"))
 		//ctxx, cancell := context.WithCancel(context.Background())
 		//spt.startTimerNew5(ctxx)
@@ -195,7 +195,6 @@ func (spt *Tracker) pin(op *optracker.Operation) error {
 		fmt.Fprintf(os.Stdout, "Time Taken to download chunks is : %s and to repair chunks is : %s and additional time to wait to complete sending the shard : %s \n", download.String(), repair.String(), waittosend.String())
 		fmt.Fprintf(os.Stdout, "Date end inside the pintracker repair %s : %s \n", op.Pin().Name, time.Now().Format("2006-01-02 15:04:05.000"))
 		pinn := op.Pin()
-		pinn.Name = strings.Split(op.Pin().Name, "Rep")[0]
 		ctx, span := trace.StartSpan(op.Context(), "tracker/stateless/pin")
 		defer span.End()
 		err := spt.rpcClient.CallContext(
@@ -240,9 +239,9 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	pin := op.Pin()
 	p := pin.Allocations
 	f1 := strings.Split(pin.Name, "(")[1]
-	f2 := strings.Split(f1, ")")[0]
-	or, _ := strconv.Atoi(strings.Split(f2, ",")[0])
-	par, _ := strconv.Atoi(strings.Split(f2, ",")[1])
+	//f2 := strings.Split(f1, ")")[0]
+	or, _ := strconv.Atoi(strings.Split(f1, ",")[0])
+	par, _ := strconv.Atoi(strings.Split(f1, ",")[1])
 	logger.Debugf("repinning %s from peer %s", pin.Cid, p)
 	//blacklist := make([]peer.ID, 0)
 	//blacklist = append(blacklist, pin.Allocations...)-
@@ -604,7 +603,6 @@ func (spt *Tracker) Track(ctx context.Context, c api.Pin) error {
 		spt.optracker.Clean(ctx, op)
 		return nil
 	}
-	c.Name = strings.Split(c.Name, "Rep")[0]
 	return spt.enqueue(ctx, c, optracker.OperationPin)
 }
 
