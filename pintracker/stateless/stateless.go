@@ -383,8 +383,9 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	wait1 := time.Now()
 	shh.FlushNew(spt.ctx)
 	wait2 := time.Since(wait1)
+	fmt.Printf("REPAIR pin NNNNNNAAAAMMMEEEEE BEFOREEEEE is : %s \n", pin.Name)
 	pin.Name = strings.Split(pin.Name, "Rep")[0]
-
+	fmt.Printf("REPAIR pin NNNNNNAAAAMMMEEEEE AFTERRRRR is : %s \n", pin.Name)
 	errr := spt.rpcClient.CallContext(
 		ctx,
 		"",
