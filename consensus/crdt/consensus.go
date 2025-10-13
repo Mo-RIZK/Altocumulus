@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -229,7 +230,7 @@ func (css *Consensus) setup() {
 			logger.Error(err)
 			return
 		}
-
+		pin.Name = strings.Split(pin.Name, "Rep")[0]
 		// TODO: tracing for this context
 		err = css.rpcClient.CallContext(
 			ctx,
