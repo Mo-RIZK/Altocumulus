@@ -1000,7 +1000,10 @@ func getShardNumber(pinName string) (int, string, error) {
 	// Convert shard number (i) to integer
 	num1 := strings.Split(pinName, "]-")
 	if len(num1) < 2 {
-		return -1, "", fmt.Errorf("invalid shard format 2")
+		num1 = strings.Split(pinName, ")-")
+		if len(num1) < 2 {
+			return -1, "", fmt.Errorf("invalid shard format 2")
+		}
 	}
 	num11 := num1[1]
 	if strings.Contains(pinName, "Rep") {
