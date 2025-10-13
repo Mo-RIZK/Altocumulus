@@ -186,7 +186,7 @@ func applyPinF(pinF func(*optracker.Operation) error, op *optracker.Operation) b
 }
 
 func (spt *Tracker) pin(op *optracker.Operation) error {
-	
+
 	if !strings.Contains(op.Pin().Name, ")") && strings.Contains(op.Pin().Name, "EC") {
 		fmt.Fprintf(os.Stdout, "Date start inside the pintracker repair %s : %s \n", op.Pin().Name, time.Now().Format("2006-01-02 15:04:05.000"))
 		//ctxx, cancell := context.WithCancel(context.Background())
@@ -240,9 +240,9 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	pin := op.Pin()
 	p := pin.Allocations
 	f1 := strings.Split(pin.Name, "(")[1]
-	//f2 := strings.Split(f1, ")")[0]
-	or, _ := strconv.Atoi(strings.Split(f1, ",")[0])
-	par, _ := strconv.Atoi(strings.Split(f1, ",")[1])
+	f2 := strings.Split(f1, "]")[0]
+	or, _ := strconv.Atoi(strings.Split(f2, ",")[0])
+	par, _ := strconv.Atoi(strings.Split(f2, ",")[1])
 	logger.Debugf("repinning %s from peer %s", pin.Cid, p)
 	//blacklist := make([]peer.ID, 0)
 	//blacklist = append(blacklist, pin.Allocations...)-
@@ -998,7 +998,7 @@ func getShardNumber(pinName string) (int, string, error) {
 		return -1, "", fmt.Errorf("invalid shard format 1")
 	}
 	// Convert shard number (i) to integer
-	num1 := strings.Split(pinName, ")-")
+	num1 := strings.Split(pinName, "]-")
 	if len(num1) < 2 {
 		return -1, "", fmt.Errorf("invalid shard format 2")
 	}
