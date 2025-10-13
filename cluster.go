@@ -5,17 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ipfs-cluster/ipfs-cluster/adder"
-	"github.com/ipfs-cluster/ipfs-cluster/adder/sharding"
-	"github.com/ipfs/go-cid"
 	"mime/multipart"
 	"os"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ipfs-cluster/ipfs-cluster/adder"
+	"github.com/ipfs-cluster/ipfs-cluster/adder/sharding"
 	"github.com/ipfs-cluster/ipfs-cluster/adder/single"
 	"github.com/ipfs-cluster/ipfs-cluster/api"
 	"github.com/ipfs-cluster/ipfs-cluster/pstoremgr"
@@ -28,6 +25,7 @@ import (
 	rpc "github.com/libp2p/go-libp2p-gorpc"
 	dual "github.com/libp2p/go-libp2p-kad-dht/dual"
 	host "github.com/libp2p/go-libp2p/core/host"
+	metrics "github.com/libp2p/go-libp2p/core/metrics"
 	peer "github.com/libp2p/go-libp2p/core/peer"
 	peerstore "github.com/libp2p/go-libp2p/core/peerstore"
 	mdns "github.com/libp2p/go-libp2p/p2p/discovery/mdns"
@@ -43,34 +41,16 @@ import (
 // consensus layer.
 var ReadyTimeout = 30 * time.Second
 
-type Data map[string]map[string]string
-type DataChunk struct {
-	Dataa struct {
-		Slash struct {
-			Bytes string `json:"bytes"`
-		} `json:"/"`
-	} `json:"Data"`
-}
-
 const (
-	pingMetricName      = "ping"
-	bootstrapCount      = 3
-	reBootstrapInterval = 30 * time.Second
-	mdnsServiceTag      = "_ipfs-cluster-discovery._udp"
-	maxAlerts           = 1000
+	pingMetricName                = "ping"
+	bootstrapCount                = 3
+	reBootstrapInterval           = 30 * time.Second
+	priorityPeerReconnectInterval = 5 * time.Minute
+	mdnsServiceTag                = "_ipfs-cluster-discovery._udp"
+	maxAlerts                     = 1000
 )
 
 var errFollowerMode = errors.New("this peer is configured to be in follower mode. Write operations are disabled")
-
-type pinwithmeta struct {
-	pin   api.Pin
-	index int
-	cids  []string
-}
-type Chunk struct {
-	cid   string
-	index int
-}
 
 // Cluster is the main IPFS cluster component. It provides
 // the go-API for it and orchestrates the components that make up the system.
@@ -78,13 +58,14 @@ type Cluster struct {
 	ctx    context.Context
 	cancel func()
 
-	id          peer.ID
-	config      *Config
-	host        host.Host
-	dht         *dual.DHT
-	discovery   mdns.Service
-	datastore   ds.Datastore
-	dag         adder.ClusterDAGService
+	id                peer.ID
+	config            *Config
+	host              host.Host
+	bandwidthReporter metrics.Reporter
+	dht               *dual.DHT
+	discovery         mdns.Service
+	datastore         ds.Datastore
+
 	rpcServer   *rpc.Server
 	rpcClient   *rpc.Client
 	peerManager *pstoremgr.Manager
@@ -127,6 +108,7 @@ type Cluster struct {
 func NewCluster(
 	ctx context.Context,
 	host host.Host,
+	bwc metrics.Reporter,
 	dht *dual.DHT,
 	cfg *Config,
 	datastore ds.Datastore,
@@ -171,43 +153,47 @@ func NewCluster(
 			logger.Warnf("mDNS could not be started: %s", err)
 		}
 	}
+
 	c := &Cluster{
-		ctx:         ctx,
-		cancel:      cancel,
-		id:          host.ID(),
-		config:      cfg,
-		host:        host,
-		dht:         dht,
-		discovery:   mdnsSvc,
-		datastore:   datastore,
-		consensus:   consensus,
-		apis:        apis,
-		ipfs:        ipfs,
-		tracker:     tracker,
-		monitor:     monitor,
-		allocator:   allocator,
-		informers:   informers,
-		tracer:      tracer,
-		alerts:      []api.Alert{},
-		peerManager: peerManager,
-		shutdownB:   false,
-		removed:     false,
-		doneCh:      make(chan struct{}),
-		readyCh:     make(chan struct{}),
-		readyB:      false,
-		dag:         nil,
-		repairing:   make([]peer.ID, 0),
+		ctx:               ctx,
+		cancel:            cancel,
+		id:                host.ID(),
+		config:            cfg,
+		host:              host,
+		bandwidthReporter: bwc,
+		dht:               dht,
+		discovery:         mdnsSvc,
+		datastore:         datastore,
+		consensus:         consensus,
+		apis:              apis,
+		ipfs:              ipfs,
+		tracker:           tracker,
+		monitor:           monitor,
+		allocator:         allocator,
+		informers:         informers,
+		tracer:            tracer,
+		alerts:            []api.Alert{},
+		peerManager:       peerManager,
+		shutdownB:         false,
+		removed:           false,
+		doneCh:            make(chan struct{}),
+		readyCh:           make(chan struct{}),
+		readyB:            false,
+		repairing:         make([]peer.ID, 0),
 	}
 
-	// Import known cluster peers from peerstore file and config. Set
-	// a non permanent TTL.
+	// PeerAddresses are assumed to be permanent and have the maximum
+	// priority for bootstrapping.
+	c.peerManager.ImportPeersWithPriority(c.config.PeerAddresses, false, peerstore.PermanentAddrTTL, 0)
+	// Peerstore addresses come afterwards and have increasing priorities
+	// for bootstrapping and non permanent TTL (1h).
 	c.peerManager.ImportPeersFromPeerstore(false, peerstore.AddressTTL)
-	c.peerManager.ImportPeers(c.config.PeerAddresses, false, peerstore.AddressTTL)
-	// Attempt to connect to some peers (up to bootstrapCount)
-	connectedPeers := c.peerManager.Bootstrap(bootstrapCount)
+
+	// Attempt to connect to some peers.
+	connectedPeers := c.peerManager.Bootstrap(bootstrapCount, true, true)
 	// We cannot warn when count is low as this as this is normal if going
 	// to Join() later.
-	logger.Debugf("bootstrap count %d", len(connectedPeers))
+	logger.Debugf("Bootstrapped to %d peers successfully", len(connectedPeers))
 	// Log a ping metric for every connected peer. This will make them
 	// visible as peers without having to wait for them to send one.
 	for _, p := range connectedPeers {
@@ -576,366 +562,27 @@ func (c *Cluster) alertsHandler() {
 	}
 }
 
-/*func (c *Cluster) repinusingRS(ctx context.Context, p peer.ID, pin api.Pin) {
-
-start := time.Now()
-ctx, span := trace.StartSpan(ctx, "cluster/repinFromPeer")
-defer span.End()
-logger.Debugf("repinning %s from peer %s", pin.Cid, p)
-blacklist := make([]peer.ID, 0)
-//blacklist = append(blacklist, pin.Allocations...)-
-prefix, err := merkledag.PrefixForCidVersion(0)
-if err != nil {
-	return
-}
-var allocsStr []peer.ID
-
-hashFunCode, _ := multihash.Names[strings.ToLower("sha2-256")]
-prefix.MhType = hashFunCode
-prefix.MhLength = -1
-//here we want to recreate the missing shard
-cState, err := c.consensus.State(c.ctx)
-if err != nil {
-	logger.Warn(err)
-	return
-}
-pinCh := make(chan api.Pin, 1024)
-go func() {
-	err = cState.List(c.ctx, pinCh)
-	if err != nil {
-		logger.Warn(err)
-	}
-}()
-numpin, name, err := getShardNumber(pin.Name)
-if err != nil {
-	fmt.Println("Error:", err)
-	return
-}
-tosend := (numpin - 1) % (c.or + c.par)
-fmt.Printf("number of the shard to repair is : %d \n", numpin)
-mod := numpin % (c.or + c.par)
-before := (numpin - 1) % (c.or + c.par)
-after := (c.or + c.par - mod) % (c.or + c.par)
-//fmt.Printf("taking shards between %d and %d \n", numpin-before, numpin+after)
-for pinn := range pinCh {
-	pinnShardNum, namee, err := getShardNumber(pinn.Name)
-	if err != nil {
-		fmt.Println("Error:", err)
-		continue
-	}
-	//fmt.Printf("Current shard number : %d\n", pinnShardNum)
-	if pinnShardNum >= numpin-before && pinnShardNum <= numpin+after && pinnShardNum != numpin && name == namee {
-		// This shard is within the range, proceed with retrieval logic
-		//fmt.Printf("Retrieving shard %d: %s with index: %d \n", pinnShardNum, pinn.Name, pinnShardNum%(c.or+c.par))
-		pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
-		c.repairShards = append(c.repairShards, pinnn)
-	}
-}
-// Sort repairShard by Index in ascending order
-sortRepairShardsByIndex(c)
-
-wgg := new(sync.WaitGroup)
-wgg.Add(c.or)
-muu := new(sync.Mutex)
-ret := 0
-for i, pinwm := range c.repairShards {
-	go func(pinwm pinwithmeta, i int) {
-		cidss := c.RetrieveCids(pinwm)
-		muu.Lock()
-		if ret < c.or {
-			ret++
-			muu.Unlock()
-			for j, _ := range cidss {
-				c.repairShards[i].cids = append(c.repairShards[i].cids, cidss[j].cid)
-			}
-			wgg.Done()
-		} else {
-			muu.Unlock()
-		}
-
-	}(pinwm, i)
-
-	blacklist = append(blacklist, pinwm.pin.Allocations...)
-}
-wgg.Wait()
-for _, shard := range c.repairShards {
-	//fmt.Printf("IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII : %d\n", shard.index)
-	for _, cid := range shard.cids {
-		fmt.Printf("CIDSSSS : %s\n", cid)
-	}
-
-}
-
-c.BlockAllocate(c.ctx, pin, blacklist, &allocsStr)
-//fmt.Printf("new location is : %s \n", allocsStr[0].String())
-shh, _ := sharding.NewShard(c.ctx, c.ctx, c.rpcClient, pin.PinOptions, allocsStr[0])
-enc, _ := reedsolomon.New(c.or, c.par)
-k := 0
-for {
-	if len(c.repairShards[k].cids) == 0 {
-		k++
-	} else {
-		break
-	}
-}
-times := len(c.repairShards[k].cids)
-//open gourotines to retrieve data in parallel
-wg := new(sync.WaitGroup)
-mu := new(sync.Mutex)
-for i := 0; i < times; i++ {
-	retrieved := 0
-	sttt := time.Now()
-	reconstructshards := make([][]byte, c.or+c.par)
-	wg.Add(c.or)
-	ctxx, cancel := context.WithCancel(context.Background())
-	for _, shard := range c.repairShards {
-		if len(shard.cids) > 0 {
-			go func(i int, shard pinwithmeta) {
-				bytess := c.getData(ctxx, shard.cids[i])
-				mu.Lock()
-				if retrieved < c.or {
-					retrieved++
-					reconstructshards[(shard.index-1)%(c.or+c.par)] = bytess
-					mu.Unlock()
-					wg.Done()
-				} else {
-					cancel()
-					mu.Unlock()
-				}
-
-			}(i, shard)
-		}
-	}
-	wg.Wait()
-	// Find where to allocate this file
-	stt := time.Now()
-	c.timedownloadchunks += stt.Sub(sttt)
-	enc.Reconstruct(reconstructshards)
-	enn := time.Since(stt)
-	c.timetorepairchunksonly += enn
-	//rawnode, _ := merkledag.NewRawNodeWPrefix(reconstructshards[tosend], prefix)
-	nodee := Erasure_Coding.NewFSNodeOverDagC(ft.TFile, prefix)
-	nodee.SetFileData(reconstructshards[tosend])
-	rawnode, _ := nodee.Commit()
-	//zid l blacklist heyye list li other pins kamen fiha
-	shh.SendBlock(c.ctx, rawnode)
-	size := uint64(len(rawnode.RawData()))
-	shh.AddLink(ctx, rawnode.Cid(), size)
-}
-root, _, _ := shh.FlushNew(c.ctx)
-pinnn := api.PinWithOpts(api.NewCid(root), pin.PinOptions)
-pinnn.Allocations = shh.Allocations()
-pinnn.Name = pin.Name
-pinnn.Type = api.ShardType
-pinnn.Reference = pin.Reference
-pinnn.MaxDepth = pin.MaxDepth
-pinnn.ShardSize = shh.Size()
-adder.Pin(c.ctx, c.rpcClient, pinnn)
-//
-//c.pin(ctx, pin, blacklist)
-c.repairShards = make([]pinwithmeta, 0)
-
-//TODO: sort the chunks that I want to retrieve
-
-//TODO: The first n chunks retrieved .. put them in [][]byte array and pass them to be reconstructed
-
-//TODO: Repeat until the end of shards
-
-//TODO: pin the chunks and the shard that is recreated
-
-/*for _, pin1 := range c.repairShards {
-	nn, _ := c.ipfs.NodeGet(c.ctx, pin1.Cid.Cid)
-	//parsedData, _ := ConvertStringToJSON(nn)
-	fmt.Printf("data la hal pin : %s ---- \n %s\n", pin1.Name, nn)
-	for key, value := range parsedData {
-		// if the get node format do not contain data then we will be passing through the nodes inside each shard
-		fmt.Printf("Key: %s\n", key)
-
-		// Print the CID value from the nested map
-		if Cid, exists := value["/"]; exists {
-			fmt.Printf("CID: %s\n", Cid)
-			//CidNew, _ := cid.Decode(Cid)
-			//nnn, _ := c.ipfs.NodeGet(c.ctx, CidNew)
-			//fmt.Fprintf(os.Stdout, "Leaf node format : %s \n", nnn)
-		}
-
-
-	}
-}*/
-
-/*nn, _ := c.ipfs.NodeGet(c.ctx, pin.Cid.Cid)
-fmt.Fprintf(os.Stdout, "Name : %s \n with RS(%d,%d) ", pin.Name, c.or, c.par)
-fmt.Fprintf(os.Stdout, "String of json format to be unmarshalled : %s \n", nn)
-parsedData, _ := ConvertStringToJSON(nn)
-// Iterate through the map
-for key, value := range parsedData {
-		// if the get node format do not contains data then we will be passing through the nodes inside each shard
-		fmt.Printf("Key: %s\n", key)
-
-		// Print the CID value from the nested map
-		if Cid, exists := value["/"]; exists {
-			fmt.Printf("CID: %s\n", Cid)
-			//CidNew, _ := cid.Decode(Cid)
-			//nnn, _ := c.ipfs.NodeGet(c.ctx, CidNew)
-			//fmt.Fprintf(os.Stdout, "Leaf node format : %s \n", nnn)
-		}
-
-
-}*/
-//pin.Allocations = nil // force re-allocations
-// note that pin() should not result in different allocations
-// if we are not under the replication-factor min.
-//_, ok, err := c.pin(ctx, pin, []peer.ID{p})
-//if ok && err == nil {
-//	logger.Infof("repinned %s out of %s", pin.Cid, p)
-//}
-/*end := time.Now()
-	c.timetorepair += end.Sub(start)
-	fmt.Fprintf(os.Stdout, "Date end %s : %s \n", pin.Name, time.Now().Format("2006-01-02 15:04:05.000"))
-}*/
-
-func fResponse(c context.Context, resp interface{}) map[peer.ID]api.IPFSID {
-	peerswithids := make(map[peer.ID]api.IPFSID)
-	switch r := resp.(type) {
-	case nil:
-		return nil
-	case string:
-		fmt.Println(resp)
-	case api.ID:
-		fmt.Printf("BBBBBBBBLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO \n")
-		key := r.ID
-		value := r.IPFS
-		peerswithids[key] = value
-	}
-	return peerswithids
-}
-func (c *Cluster) BlockAllocate(ctx context.Context, in api.Pin, blacklist []peer.ID, out *[]peer.ID) error {
-	if c.config.FollowerMode {
-		return errFollowerMode
-	}
-
-	// Allocating for an existing pin. Usually the adder calls this with
-	// cid.Undef.
-	existing, err := c.PinGet(ctx, in.Cid)
-	if err != nil && err != state.ErrNotFound {
-		return err
-	}
-
-	in, err = c.setupPin(ctx, in, existing)
-	if err != nil {
-		return err
-	}
-
-	// Return the current peer list.
-	if in.ReplicationFactorMin < 0 {
-		// Returned metrics are Valid and belong to current
-		// Cluster peers.
-		metrics := c.monitor.LatestMetrics(ctx, pingMetricName)
-		peers := make([]peer.ID, len(metrics))
-		for i, m := range metrics {
-			peers[i] = m.Peer
-		}
-
-		*out = peers
+// BandwidthByProtocol returns the libp2p bandwidth metrics as provided by the
+// bandwidth reporter that the peer was initialized with. Returns nil when
+// unset.
+func (c *Cluster) BandwidthByProtocol() api.BandwidthByProtocol {
+	if c.bandwidthReporter == nil {
 		return nil
 	}
 
-	allocs, err := c.allocate(
-		ctx,
-		in.Cid,
-		existing,
-		in.ReplicationFactorMin,
-		in.ReplicationFactorMax,
-		blacklist,          // blacklist
-		in.UserAllocations, // prio list
-	)
-
-	if err != nil {
-		return err
-	}
-
-	*out = allocs
-	return nil
-}
-func (c *Cluster) getData(ctx context.Context, Cid string) []byte {
-	CidNew, _ := cid.Decode(Cid)
-	nnn, _ := c.ipfs.ChunkGet(ctx, CidNew)
-	//fmt.Printf("Length of Data : %d\n", len(nnn))
-	return nnn
-}
-
-func (c *Cluster) RetrieveCids(pinwm pinwithmeta) []Chunk {
-	nn, _ := c.ipfs.NodeGet(c.ctx, pinwm.pin.Cid.Cid)
-	parsedData, _ := ConvertStringToJSON(nn)
-	cidss := make([]Chunk, 0)
-	fmt.Printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! data la hal pin : %s ---- \n %s\n", pinwm.pin.Name, nn)
-	for key, value := range parsedData {
-		// if the get node format do not contain data then we will be passing through the nodes inside each shard
-		fmt.Printf("Key: %s\n", key)
-
-		ke, _ := strconv.Atoi(key)
-		// Print the CID value from the nested map
-		fmt.Printf("Cid of leaf nodes :\n")
-		if Cid, exists := value["/"]; exists {
-			fmt.Printf("%s\n", Cid)
-			ch := Chunk{index: ke, cid: Cid}
-			cidss = append(cidss, ch)
-			sort.Slice(cidss, func(i, j int) bool {
-				return cidss[i].index < cidss[j].index
-			})
-
-			//GetBytesFromData(nnn)
-
+	bbp := make(api.BandwidthByProtocol)
+	stats := c.bandwidthReporter.GetBandwidthByProtocol()
+	for k, v := range stats {
+		bbp[k] = api.Bandwidth{
+			TotalIn:  v.TotalIn,
+			TotalOut: v.TotalOut,
+			RateIn:   v.RateIn,
+			RateOut:  v.RateOut,
 		}
 	}
-	return cidss
+
+	return bbp
 }
-
-// ConvertStringToJSON parses the input string and converts it to JSON.
-func ConvertStringToJSON(input string) (Data, error) {
-	// Define a variable to hold the parsed JSON data
-	var result Data
-
-	// Parse the input string into JSON format
-	err := json.Unmarshal([]byte(input), &result)
-	if err != nil {
-		return nil, err
-	}
-
-	return result, nil
-}
-func ConvertStringChunkToJSON(input string) (DataChunk, error) {
-	// Define a variable to hold the parsed JSON data
-	var result DataChunk
-
-	// Parse the input string into JSON format
-	json.Unmarshal([]byte(input), &result)
-
-	return result, nil
-}
-func getShardNumber(pinName string) (int, string, error) {
-	// Assuming the format of pin.Name() is something like "xxx-shard-i"
-	parts := strings.Split(pinName, "-shard-")
-	if len(parts) < 2 {
-		return -1, "", fmt.Errorf("invalid shard format")
-	}
-	// Convert shard number (i) to integer
-	num, err := strconv.Atoi(parts[1])
-	name := parts[0]
-	return num, name, err
-}
-
-/*func (c *Cluster) Get(ctx context.Context, p api.Pin) (files.Node, error) {
-	st := time.Now()
-	// TODO: We could also apply this to api.blocks, and compose into writable api,
-	// but this requires some changes in blockservice/merkledag
-	dag := dag.NewReadOnlyDagService(dag.NewSession(ctx, c.dag))
-	nd, _ := dag.Get(c.ctx, p.Cid.Cid)
-	et := time.Now()
-	duration1 := et.Sub(st)
-	fmt.Fprintf(os.Stdout, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB %s\n", duration1)
-	return unixfile.NewUnixfsFile(ctx, dag, nd)
-}*/
 
 // detects any changes in the peerset and saves the configuration. When it
 // detects that we have been removed from the peerset, it shuts down this peer.
@@ -984,17 +631,44 @@ func (c *Cluster) watchPeers() {
 // peerstore). This should ensure that we auto-recover from situations in
 // which the network was completely gone and we lost all peers.
 func (c *Cluster) reBootstrap() {
-	ticker := time.NewTicker(reBootstrapInterval)
-	defer ticker.Stop()
+	generalBootstrap := time.NewTicker(reBootstrapInterval)
+	priorityPeerReconnect := time.NewTicker(priorityPeerReconnectInterval)
+
+	defer generalBootstrap.Stop()
+	defer priorityPeerReconnect.Stop()
 
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
-		case <-ticker.C:
-			connected := c.peerManager.Bootstrap(bootstrapCount)
+		case <-generalBootstrap.C:
+			// Attempt to reach low-water setting if for some
+			// reason we are not there already. The default low
+			// water is 100.  On small clusters this ensures we
+			// stay connected to everyone. On larger clusters this
+			// will not trigger new connections when already above
+			// low water. When it does, known peers will be randomly
+			// selected.
+			connected := c.peerManager.Bootstrap(c.config.ConnMgr.LowWater, false, false)
 			for _, p := range connected {
 				logger.Infof("reconnected to %s", p)
+			}
+		case <-priorityPeerReconnect.C:
+			// This is a safeguard for clusters with many peers.
+			// It is understood that PeerAddresses are stable,
+			// possibly "trusted" or at least honest peers.
+			//
+			// We don't need to be connected to them, but in an
+			// scenario where there rest of the (untrusted) peers
+			// works to isolate or mislead other peers (i.e. not
+			// propagating pubsub), it does not hurt to reconnect
+			// to one of these peers from time to time.
+			if len(c.config.PeerAddresses) == 0 {
+				break
+			}
+			connected := c.peerManager.Bootstrap(1, true, true)
+			for _, p := range connected {
+				logger.Infof("reconnected to priority peer %s", p)
 			}
 		}
 	}
@@ -1043,7 +717,7 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 	// note that pin() should not result in different allocations
 	// if we are not under the replication-factor min.
 	if strings.Contains(pin.Name, "EC") {
-		pin.Name = strings.Split(pin.Name, ")")[0]
+		pin.Name = pin.Name + "Repair"
 		pin.Allocations = append(pin.Allocations, c.id)
 	}
 	_, ok, err := c.pin(ctx, pin, []peer.ID{p})
@@ -1553,9 +1227,6 @@ func (c *Cluster) distances(ctx context.Context, exclude peer.ID) (*distanceChec
 //   - Sends unpin for expired items for which this peer is "closest"
 //     (skipped for follower peers)
 func (c *Cluster) StateSync(ctx context.Context) error {
-
-	fmt.Fprintf(os.Stdout, "FETTTTTNNNNNNNAAAAAAAAAAAAAAAAA StateSync \n")
-
 	ctx, span := trace.StartSpan(ctx, "cluster/StateSync")
 	defer span.End()
 
@@ -1593,7 +1264,6 @@ func (c *Cluster) StateSync(ctx context.Context) error {
 	for p := range clusterPins {
 		if p.ExpiredAt(timeNow) && distance.isClosest(p.Cid) {
 			logger.Infof("Unpinning %s: pin expired at %s", p.Cid, p.ExpireAt)
-			fmt.Fprintf(os.Stdout, "StateSync UUUUNNNNNNNPPPPPPPPIIIIIIIIIINNNNNNNNNNNN la %s \n", p.Name)
 			if _, err := c.Unpin(ctx, p.Cid); err != nil {
 				logger.Error(err)
 			}
@@ -1809,9 +1479,7 @@ func (c *Cluster) PinGet(ctx context.Context, h api.Cid) (api.Pin, error) {
 func (c *Cluster) Pin(ctx context.Context, h api.Cid, opts api.PinOptions) (api.Pin, error) {
 	ctx, span := trace.StartSpan(ctx, "cluster/Pin")
 	defer span.End()
-	for _, informer := range c.informers {
-		c.sendInformerMetrics(ctx, informer)
-	}
+
 	pin := api.PinWithOpts(h, opts)
 
 	result, _, err := c.pin(ctx, pin, []peer.ID{})
@@ -1933,7 +1601,7 @@ func (c *Cluster) pin(
 ) (api.Pin, bool, error) {
 	ctx, span := trace.StartSpan(ctx, "cluster/pin")
 	defer span.End()
-	c.sendInformersMetrics(c.ctx)
+
 	if c.config.FollowerMode {
 		return api.Pin{}, false, errFollowerMode
 	}
@@ -1962,11 +1630,10 @@ func (c *Cluster) pin(
 	// "option".
 	pin.Timestamp = time.Now()
 
-	//////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	/*if pin.Type == api.MetaType {
+	if pin.Type == api.MetaType {
 		return pin, true, c.consensus.LogPin(ctx, pin)
-	}*/
-	//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	}
+
 	// Usually allocations are unset when pinning normally, however, the
 	// allocations may have been preset by the adder in which case they
 	// need to be respected. Whenever allocations are set. We don't
@@ -2134,7 +1801,6 @@ func (c *Cluster) AddFile(ctx context.Context, reader *multipart.Reader, params 
 
 	var dags adder.ClusterDAGService
 	if params.Shard {
-		c.dag = sharding.New(ctx, c.rpcClient, params, nil)
 		dags = sharding.New(ctx, c.rpcClient, params, nil)
 	} else {
 		dags = single.New(ctx, c.rpcClient, params, params.Local)
