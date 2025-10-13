@@ -194,12 +194,28 @@ func (spt *Tracker) pin(op *optracker.Operation) error {
 		//cancell()
 		fmt.Fprintf(os.Stdout, "Time Taken to download chunks is : %s and to repair chunks is : %s and additional time to wait to complete sending the shard : %s \n", download.String(), repair.String(), waittosend.String())
 		fmt.Fprintf(os.Stdout, "Date end inside the pintracker repair %s : %s \n", op.Pin().Name, time.Now().Format("2006-01-02 15:04:05.000"))
+		pinn := op.Pin()
+		pinn.Name = strings.Split(op.Pin().Name, "Rep")[0]
+		ctx, span := trace.StartSpan(op.Context(), "tracker/stateless/pin")
+		defer span.End()
+		err := spt.rpcClient.CallContext(
+			ctx,
+			"",
+			"IPFSConnector",
+			"Pin",
+			pinn,
+			&struct{}{},
+		)
+		if err != nil {
+			return err
+		}
 		return nil
 	} else {
 		ctx, span := trace.StartSpan(op.Context(), "tracker/stateless/pin")
 		defer span.End()
 
-		logger.Debugf("is uing pin call for %s", op.Cid())
+
+		logger.Debugf("is using pin call for %s", op.Cid())
 		err := spt.rpcClient.CallContext(
 			ctx,
 			"",
@@ -383,22 +399,6 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	wait1 := time.Now()
 	shh.FlushNew(spt.ctx)
 	wait2 := time.Since(wait1)
-	fmt.Printf("REPAIR pin NNNNNNAAAAMMMEEEEE BEFOREEEEE is : %s \n", pin.Name)
-	pin.Name = strings.Split(pin.Name, "Rep")[0]
-	fmt.Printf("REPAIR pin NNNNNNAAAAMMMEEEEE AFTERRRRR is : %s \n", pin.Name)
-	errr := spt.rpcClient.CallContext(
-		ctx,
-		"",
-		"IPFSConnector",
-		"Pin",
-		pin,
-		&struct{}{},
-	)
-
-	if errr != nil {
-		return 0, 0, 0
-	}
-
 	return timedownloadchunks, timetorepairchunksonly, wait2
 }
 
