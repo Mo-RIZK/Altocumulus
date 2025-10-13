@@ -187,7 +187,7 @@ func applyPinF(pinF func(*optracker.Operation) error, op *optracker.Operation) b
 
 func (spt *Tracker) pin(op *optracker.Operation) error {
 
-	if !strings.Contains(op.Pin().Name, ")") && strings.Contains(op.Pin().Name, "EC") {
+	if strings.Contains(op.Pin().Name, "]") && strings.Contains(op.Pin().Name, "EC") {
 		fmt.Fprintf(os.Stdout, "Date start inside the pintracker repair %s : %s \n", op.Pin().Name, time.Now().Format("2006-01-02 15:04:05.000"))
 		//ctxx, cancell := context.WithCancel(context.Background())
 		//spt.startTimerNew5(ctxx)
