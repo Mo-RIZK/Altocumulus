@@ -38,7 +38,7 @@ const (
 	DefaultLeaveOnShutdown                 = false
 	DefaultPinOnlyOnTrustedPeers           = false
 	DefaultPinOnlyOnUntrustedPeers         = false
-	DefaultDisableRepinning                = false
+	DefaultDisableRepinning                = true
 	DefaultPeerstoreFile                   = "peerstore"
 	DefaultConnMgrHighWater                = 400
 	DefaultConnMgrLowWater                 = 100
