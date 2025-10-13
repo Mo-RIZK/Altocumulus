@@ -214,7 +214,6 @@ func (spt *Tracker) pin(op *optracker.Operation) error {
 		ctx, span := trace.StartSpan(op.Context(), "tracker/stateless/pin")
 		defer span.End()
 
-
 		logger.Debugf("is using pin call for %s", op.Cid())
 		err := spt.rpcClient.CallContext(
 			ctx,
@@ -605,7 +604,7 @@ func (spt *Tracker) Track(ctx context.Context, c api.Pin) error {
 		spt.optracker.Clean(ctx, op)
 		return nil
 	}
-
+	c.Name = strings.Split(c.Name, "Rep")[0]
 	return spt.enqueue(ctx, c, optracker.OperationPin)
 }
 
