@@ -717,8 +717,7 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 	// note that pin() should not result in different allocations
 	// if we are not under the replication-factor min.
 	if strings.Contains(pin.Name, "EC") {
-		splits := strings.Split(pin.Name, ")")
-		pin.Name = splits[0] + "]" + splits[1]
+		pin.Name = pin.Name + "Repair"
 		pin.Allocations = append(pin.Allocations, c.id)
 	}
 	_, ok, err := c.pin(ctx, pin, []peer.ID{p})
