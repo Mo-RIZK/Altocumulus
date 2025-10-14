@@ -68,11 +68,10 @@ type Tracker struct {
 	pinCh         chan *optracker.Operation
 	unpinCh       chan *optracker.Operation
 
-	shutdownMu   sync.Mutex
-	shutdown     bool
-	wg           sync.WaitGroup
-	connector    *ipfshttp.Connector
-	stop, toskip bool
+	shutdownMu sync.Mutex
+	shutdown   bool
+	wg         sync.WaitGroup
+	connector  *ipfshttp.Connector
 }
 
 // New creates a new StatelessPinTracker.
@@ -92,8 +91,6 @@ func New(cfg *Config, pid peer.ID, peerName string, getState func(ctx context.Co
 		pinCh:         make(chan *optracker.Operation, cfg.MaxPinQueueSize),
 		unpinCh:       make(chan *optracker.Operation, cfg.MaxPinQueueSize),
 		connector:     connector,
-		stop:          false,
-		toskip:        true,
 	}
 
 	for i := 0; i < spt.config.ConcurrentPins; i++ {
@@ -186,35 +183,17 @@ func applyPinF(pinF func(*optracker.Operation) error, op *optracker.Operation) b
 }
 
 func (spt *Tracker) pin(op *optracker.Operation) error {
-
-	if strings.Contains(op.Pin().Name, "]") && strings.Contains(op.Pin().Name, "EC") {
+	if strings.Contains(op.Pin().Name, "Repair") {
 		fmt.Fprintf(os.Stdout, "Date start inside the pintracker repair %s : %s \n", op.Pin().Name, time.Now().Format("2006-01-02 15:04:05.000"))
-		//ctxx, cancell := context.WithCancel(context.Background())
-		//spt.startTimerNew5(ctxx)
 		download, repair, waittosend := spt.repinUsingRS(op)
-		//cancell()
 		fmt.Fprintf(os.Stdout, "Time Taken to download chunks is : %s and to repair chunks is : %s and additional time to wait to complete sending the shard : %s \n", download.String(), repair.String(), waittosend.String())
 		fmt.Fprintf(os.Stdout, "Date end inside the pintracker repair %s : %s \n", op.Pin().Name, time.Now().Format("2006-01-02 15:04:05.000"))
-		pinn := op.Pin()
-		ctx, span := trace.StartSpan(op.Context(), "tracker/stateless/pin")
-		defer span.End()
-		err := spt.rpcClient.CallContext(
-			ctx,
-			"",
-			"IPFSConnector",
-			"Pin",
-			pinn,
-			&struct{}{},
-		)
-		if err != nil {
-			return err
-		}
 		return nil
 	} else {
 		ctx, span := trace.StartSpan(op.Context(), "tracker/stateless/pin")
 		defer span.End()
 
-		logger.Debugf("is using pin call for %s", op.Cid())
+		logger.Debugf("is uing pin call for %s", op.Cid())
 		err := spt.rpcClient.CallContext(
 			ctx,
 			"",
@@ -231,7 +210,6 @@ func (spt *Tracker) pin(op *optracker.Operation) error {
 }
 
 func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.Duration, time.Duration) {
-	ssss := time.Now()
 	repairShards := make([]pinwithmeta, 0)
 	//start := time.Now()
 	var timedownloadchunks, timetorepairchunksonly time.Duration
@@ -240,7 +218,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	pin := op.Pin()
 	p := pin.Allocations
 	f1 := strings.Split(pin.Name, "(")[1]
-	f2 := strings.Split(f1, "]")[0]
+	f2 := strings.Split(f1, ")")[0]
 	or, _ := strconv.Atoi(strings.Split(f2, ",")[0])
 	par, _ := strconv.Atoi(strings.Split(f2, ",")[1])
 	logger.Debugf("repinning %s from peer %s", pin.Cid, p)
@@ -302,6 +280,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	wgg.Add(or)
 	muu := new(sync.Mutex)
 	ret := 0
+	fmt.Printf("STEEEEEEEEEPPPPPPPPPP RRRRRRRRRREEEEEEETTTTTTTTT with length of repair shards is : %d \n", len(repairShards))
 	for i, pinwm := range repairShards {
 		go func(pinwm pinwithmeta, i int) {
 			cidss := spt.RetrieveCids(pinwm)
@@ -320,10 +299,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		}(pinwm, i)
 	}
 	wgg.Wait()
-	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s \n", time.Now().Sub(ssss).String())
-	//Local
-	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions, spt.peerID)
-	//MFS
+	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions,spt.peerID)
 	//shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
 	enc, _ := reedsolomon.New(or, par)
 	k := 0
@@ -335,9 +311,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 			break
 		}
 	}
-	Indexes := make([]int, or)
 	times := len(repairShards[k].cids)
-	selecting := make([]pinwithmeta, 0)
 	//open gourotines to retrieve data in parallel
 	wg := new(sync.WaitGroup)
 	mu := new(sync.Mutex)
@@ -346,29 +320,18 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		sttt := time.Now()
 		reconstructshards := make([][]byte, or+par)
 		wg.Add(or)
-		selecting = make([]pinwithmeta, 0)
 		ctxx, cancel := context.WithCancel(context.Background())
-		if spt.toskip == true {
-			selecting = repairShards
-		} else {
-			for _, idx := range Indexes {
-				if idx >= 0 && idx < len(repairShards) { // safe check
-					selecting = append(selecting, repairShards[idx])
-				}
-			}
-		}
-		for _, shard := range selecting {
+		for _, shard := range repairShards {
 			if len(shard.cids) > 0 {
 				go func(i int, shard pinwithmeta) {
 					sss := time.Now()
 					bytess := spt.getData(ctxx, shard.cids[i])
-					nnn := time.Since(sss)
-					fmt.Printf("REPAIR GOT HERE FOR : %s \n", nnn.String())
+					nnn:= time.Since(sss)
+					fmt.Printf("REPAIR GOT HERE FOR : %s \n",nnn.String())
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
 						reconstructshards[(shard.index-1)%(or+par)] = bytess
-						Indexes = append(Indexes, (shard.index-1)%(or+par))
 						mu.Unlock()
 						wg.Done()
 					} else {
@@ -398,13 +361,24 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	wait1 := time.Now()
 	shh.FlushNew(spt.ctx)
 	wait2 := time.Since(wait1)
+	pin.Name = strings.Split(pin.Name, "Rep")[0]
+
+	errr := spt.rpcClient.CallContext(
+		ctx,
+		"",
+		"IPFSConnector",
+		"Pin",
+		pin,
+		&struct{}{},
+	)
+	if errr != nil {
+		return 0, 0, 0
+	}
 	return timedownloadchunks, timetorepairchunksonly, wait2
 }
 
 func (spt *Tracker) getData(ctx context.Context, Cid string) []byte {
-	st := time.Now()
 	CidNew, _ := cid.Decode(Cid)
-	fmt.Printf("Decode Tooookkkkk !!!!!! : %s \n", time.Now().Sub(st).String())
 	nnn, _ := spt.connector.ChunkGet(ctx, CidNew)
 	return nnn
 }
@@ -459,27 +433,6 @@ type DataChunk struct {
 			Bytes string `json:"bytes"`
 		} `json:"/"`
 	} `json:"Data"`
-}
-
-func (spt *Tracker) startTimerNew5(ctx context.Context) {
-	ticker := time.NewTicker(time.Duration(1 * float64(time.Second)))
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Println("Timer stopped")
-			return
-		case <-ticker.C:
-			// Do the update by retrieving the next set of or + par chunks and update indexes with times
-			// dont forget to mutex lock not to interfere
-
-			if spt.stop == true {
-				return
-			}
-			spt.toskip = true
-
-		}
-	}
 }
 
 func (spt *Tracker) unpin(op *optracker.Operation) error {
@@ -604,6 +557,7 @@ func (spt *Tracker) Track(ctx context.Context, c api.Pin) error {
 		spt.optracker.Clean(ctx, op)
 		return nil
 	}
+
 	return spt.enqueue(ctx, c, optracker.OperationPin)
 }
 
@@ -998,12 +952,9 @@ func getShardNumber(pinName string) (int, string, error) {
 		return -1, "", fmt.Errorf("invalid shard format 1")
 	}
 	// Convert shard number (i) to integer
-	num1 := strings.Split(pinName, "]-")
+	num1 := strings.Split(pinName, ")-")
 	if len(num1) < 2 {
-		num1 = strings.Split(pinName, ")-")
-		if len(num1) < 2 {
-			return -1, "", fmt.Errorf("invalid shard format 2")
-		}
+		return -1, "", fmt.Errorf("invalid shard format 2")
 	}
 	num11 := num1[1]
 	if strings.Contains(pinName, "Rep") {
