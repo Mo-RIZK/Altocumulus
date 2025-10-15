@@ -362,14 +362,15 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	shh.FlushNew(spt.ctx)
 	wait2 := time.Since(wait1)
 	pin.Name = strings.Split(pin.Name, "Rep")[0]
-	
+
+	var ress api.Pin
 	errr := spt.rpcClient.CallContext(
 		ctx,
 		"",
 		"Cluster",
 		"Pin",
 		pin,
-		&struct{}{},
+		&ress,
 	)
 	if errr != nil {
 		return 0, 0, 0
