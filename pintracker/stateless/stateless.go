@@ -311,17 +311,35 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 			break
 		}
 	}
+	Indexes := make([]int, or)
 	times := len(repairShards[k].cids)
+	selecting := make([]pinwithmeta, 0)
 	//open gourotines to retrieve data in parallel
 	wg := new(sync.WaitGroup)
 	mu := new(sync.Mutex)
+	var toskip bool
+	toskip = true
+	ctxx, cancell := context.WithCancel(context.Background())
+	go startTimerNew5(ctxx, &toskip)
 	for i := 0; i < times; i++ {
+		Indexes = make([]int, or)
 		retrieved := 0
 		sttt := time.Now()
 		reconstructshards := make([][]byte, or+par)
 		wg.Add(or)
+		selecting = make([]pinwithmeta, 0)
 		ctxx, cancel := context.WithCancel(context.Background())
-		for _, shard := range repairShards {
+		if toskip == true {
+			selecting = repairShards
+			toskip = false
+		} else {
+			for _, idx := range Indexes {
+				if idx >= 0 && idx < len(repairShards) { // safe check
+					selecting = append(selecting, repairShards[idx])
+				}
+			}
+		}
+		for _, shard := range selecting {
 			if len(shard.cids) > 0 {
 				go func(i int, shard pinwithmeta) {
 					sss := time.Now()
@@ -332,6 +350,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 					if retrieved < or {
 						retrieved++
 						reconstructshards[(shard.index-1)%(or+par)] = bytess
+						Indexes = append(Indexes, (shard.index-1)%(or+par))
 						mu.Unlock()
 						wg.Done()
 					} else {
@@ -358,6 +377,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		size := uint64(len(rawnode.RawData()))
 		shh.AddLink(ctx, rawnode.Cid(), size)
 	}
+	cancell()
 	wait1 := time.Now()
 	shh.FlushNew(spt.ctx)
 	wait2 := time.Since(wait1)
@@ -377,7 +397,20 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	}
 	return timedownloadchunks, timetorepairchunksonly, wait2
 }
+func startTimerNew5(ctx context.Context, toskip *bool) {
+	ticker := time.NewTicker(time.Duration(1 * float64(time.Second)))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("Timer stopped")
+			*toskip = false
+		case <-ticker.C:
+			*toskip = true
 
+		}
+	}
+}
 func (spt *Tracker) getData(ctx context.Context, Cid string) []byte {
 	CidNew, _ := cid.Decode(Cid)
 	nnn, _ := spt.connector.ChunkGet(ctx, CidNew)
