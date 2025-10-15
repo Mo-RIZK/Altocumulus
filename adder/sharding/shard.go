@@ -224,6 +224,42 @@ func (sh *shard) LastLink() cid.Cid {
 	return sh.dagNode[lastLink]
 }
 
+func (sh *shard) FlushForStateless(ctx context.Context, pin api.Pin) error {
+
+	start := time.Now()
+	nodes, err := makeDAG(ctx, sh.dagNode)
+	end := time.Now()
+	fmt.Fprintf(os.Stdout, "SHARD DAG CREATION %s \n", end.Sub(start).String())
+	if err != nil {
+		return err
+	}
+	//startt := time.Now()
+	//fmt.Fprintf(os.Stdout, "SEND SHARD DAG %d", len(nodes))
+	for _, n := range nodes {
+		fmt.Fprintf(os.Stdout, "SHARD NODE SIZE IS: %d \n", uint64(len(n.RawData())))
+		err = sh.sendBlock(ctx, n)
+		if err != nil {
+			close(sh.blocks)
+			return err
+		}
+	}
+	sh.Close()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-sh.bs.Done():
+	}
+	//endd := time.Now()
+	//fmt.Fprintf(os.Stdout, "SEND SHARD DAG %s \n", endd.Sub(startt).String())
+
+	if err := sh.bs.Err(); err != nil {
+		return err
+	}
+
+	return adder.Pin(ctx, sh.rpc, pin)
+}
+
 func (sh *shard) FlushNew(ctx context.Context) (cid.Cid, int, []ipld.Node, error) {
 	nodes, err := makeDAG(ctx, sh.dagNode)
 	if err != nil {
