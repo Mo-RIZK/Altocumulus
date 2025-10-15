@@ -380,8 +380,18 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	cancell()
 	wait1 := time.Now()
 	wait2 := time.Since(wait1)
-	pin.Name = strings.Split(pin.Name, "Rep")[0]
-	shh.FlushForStateless(spt.ctx,pin)
+	shh.FlushNew(spt.ctx)
+	errr := spt.rpcClient.CallContext(
+		ctx,
+		"",
+		"IPFSConnector",
+		"Pin",
+		op.Pin(),
+		&struct{}{},
+	)
+	if errr != nil {
+		return 0, 0, 0
+	}
 	return timedownloadchunks, timetorepairchunksonly, wait2
 }
 func startTimerNew5(ctx context.Context, toskip *bool) {
