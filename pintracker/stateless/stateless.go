@@ -299,7 +299,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		}(pinwm, i)
 	}
 	wgg.Wait()
-	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions,spt.peerID)
+	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions, spt.peerID)
 	//shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
 	enc, _ := reedsolomon.New(or, par)
 	k := 0
@@ -326,8 +326,8 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 				go func(i int, shard pinwithmeta) {
 					sss := time.Now()
 					bytess := spt.getData(ctxx, shard.cids[i])
-					nnn:= time.Since(sss)
-					fmt.Printf("REPAIR GOT HERE FOR : %s \n",nnn.String())
+					nnn := time.Since(sss)
+					fmt.Printf("REPAIR GOT HERE FOR : %s \n", nnn.String())
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
@@ -362,11 +362,11 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	shh.FlushNew(spt.ctx)
 	wait2 := time.Since(wait1)
 	pin.Name = strings.Split(pin.Name, "Rep")[0]
-
+	
 	errr := spt.rpcClient.CallContext(
 		ctx,
 		"",
-		"IPFSConnector",
+		"Cluster",
 		"Pin",
 		pin,
 		&struct{}{},
