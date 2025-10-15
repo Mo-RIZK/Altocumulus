@@ -401,6 +401,23 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	return timedownloadchunks, timetorepairchunksonly, wait2
 }
 
+func startTimerNew5(ctx context.Context, toskip *bool) {
+	ticker := time.NewTicker(time.Duration(1 * float64(time.Second)))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("Timer stopped")
+			*toskip = false
+			return
+		case <-ticker.C:
+			*toskip = true
+
+		}
+	}
+}
+
+
 func (spt *Tracker) getData(ctx context.Context, Cid string) []byte {
 	st := time.Now()
 	CidNew, _ := cid.Decode(Cid)
