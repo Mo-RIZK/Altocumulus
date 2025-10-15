@@ -210,6 +210,7 @@ func (spt *Tracker) pin(op *optracker.Operation) error {
 }
 
 func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.Duration, time.Duration) {
+	ssss:=time.Now()
 	repairShards := make([]pinwithmeta, 0)
 	//start := time.Now()
 	var timedownloadchunks, timetorepairchunksonly time.Duration
@@ -299,7 +300,10 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		}(pinwm, i)
 	}
 	wgg.Wait()
-	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions, spt.peerID)
+	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s \n",time.Now().Sub(ssss).String())
+	//Local
+	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions,spt.peerID)
+	//MFS
 	//shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
 	enc, _ := reedsolomon.New(or, par)
 	k := 0
@@ -311,46 +315,27 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 			break
 		}
 	}
-	Indexes := make([]int, or)
 	times := len(repairShards[k].cids)
-	selecting := make([]pinwithmeta, 0)
 	//open gourotines to retrieve data in parallel
 	wg := new(sync.WaitGroup)
 	mu := new(sync.Mutex)
-	var toskip bool
-	toskip = true
-	ctxx, cancell := context.WithCancel(context.Background())
-	go startTimerNew5(ctxx, &toskip)
 	for i := 0; i < times; i++ {
-		Indexes = make([]int, or)
 		retrieved := 0
 		sttt := time.Now()
 		reconstructshards := make([][]byte, or+par)
 		wg.Add(or)
-		selecting = make([]pinwithmeta, 0)
 		ctxx, cancel := context.WithCancel(context.Background())
-		if toskip == true {
-			selecting = repairShards
-			toskip = false
-		} else {
-			for _, idx := range Indexes {
-				if idx >= 0 && idx < len(repairShards) { // safe check
-					selecting = append(selecting, repairShards[idx])
-				}
-			}
-		}
-		for _, shard := range selecting {
+		for _, shard := range repairShards {
 			if len(shard.cids) > 0 {
 				go func(i int, shard pinwithmeta) {
 					sss := time.Now()
 					bytess := spt.getData(ctxx, shard.cids[i])
-					nnn := time.Since(sss)
-					fmt.Printf("REPAIR GOT HERE FOR : %s \n", nnn.String())
+					nnn:= time.Since(sss)
+					fmt.Printf("REPAIR GOT HERE FOR : %s \n",nnn.String())
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
 						reconstructshards[(shard.index-1)%(or+par)] = bytess
-						Indexes = append(Indexes, (shard.index-1)%(or+par))
 						mu.Unlock()
 						wg.Done()
 					} else {
@@ -377,16 +362,17 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		size := uint64(len(rawnode.RawData()))
 		shh.AddLink(ctx, rawnode.Cid(), size)
 	}
-	cancell()
 	wait1 := time.Now()
-	wait2 := time.Since(wait1)
 	shh.FlushNew(spt.ctx)
+	wait2 := time.Since(wait1)
+	pin.Name = strings.Split(pin.Name, "Rep")[0]
+
 	errr := spt.rpcClient.CallContext(
 		ctx,
 		"",
 		"IPFSConnector",
 		"Pin",
-		op.Pin(),
+		pin,
 		&struct{}{},
 	)
 	if errr != nil {
@@ -394,23 +380,11 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 	}
 	return timedownloadchunks, timetorepairchunksonly, wait2
 }
-func startTimerNew5(ctx context.Context, toskip *bool) {
-	ticker := time.NewTicker(time.Duration(1 * float64(time.Second)))
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Println("Timer stopped")
-			*toskip = false
-			return
-		case <-ticker.C:
-			*toskip = true
 
-		}
-	}
-}
 func (spt *Tracker) getData(ctx context.Context, Cid string) []byte {
+	st := time.Now()
 	CidNew, _ := cid.Decode(Cid)
+	fmt.Printf("Decode Tooookkkkk !!!!!! : %s \n",time.Now().Sub(st).String())
 	nnn, _ := spt.connector.ChunkGet(ctx, CidNew)
 	return nnn
 }
