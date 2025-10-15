@@ -315,27 +315,46 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 			break
 		}
 	}
+	Indexes := make([]int, or)
 	times := len(repairShards[k].cids)
+	selecting := make([]pinwithmeta, 0)
 	//open gourotines to retrieve data in parallel
 	wg := new(sync.WaitGroup)
 	mu := new(sync.Mutex)
+	var toskip bool
+	toskip = true
+	ctxx, cancell := context.WithCancel(context.Background())
+	go startTimerNew5(ctxx, &toskip)
 	for i := 0; i < times; i++ {
+		Indexes = make([]int, or)
 		retrieved := 0
 		sttt := time.Now()
 		reconstructshards := make([][]byte, or+par)
 		wg.Add(or)
+		selecting = make([]pinwithmeta, 0)
 		ctxx, cancel := context.WithCancel(context.Background())
-		for _, shard := range repairShards {
+		if toskip == true {
+			selecting = repairShards
+			toskip = false
+		} else {
+			for _, idx := range Indexes {
+				if idx >= 0 && idx < len(repairShards) { // safe check
+					selecting = append(selecting, repairShards[idx])
+				}
+			}
+		}
+		for _, shard := range selecting {
 			if len(shard.cids) > 0 {
 				go func(i int, shard pinwithmeta) {
 					sss := time.Now()
 					bytess := spt.getData(ctxx, shard.cids[i])
-					nnn:= time.Since(sss)
-					fmt.Printf("REPAIR GOT HERE FOR : %s \n",nnn.String())
+					nnn := time.Since(sss)
+					fmt.Printf("REPAIR GOT HERE FOR : %s \n", nnn.String())
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
 						reconstructshards[(shard.index-1)%(or+par)] = bytess
+						Indexes = append(Indexes, (shard.index-1)%(or+par))
 						mu.Unlock()
 						wg.Done()
 					} else {
@@ -362,6 +381,7 @@ func (spt *Tracker) repinUsingRS(op *optracker.Operation) (time.Duration, time.D
 		size := uint64(len(rawnode.RawData()))
 		shh.AddLink(ctx, rawnode.Cid(), size)
 	}
+	cancell()
 	wait1 := time.Now()
 	shh.FlushNew(spt.ctx)
 	wait2 := time.Since(wait1)
