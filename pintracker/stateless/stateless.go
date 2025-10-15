@@ -405,6 +405,7 @@ func startTimerNew5(ctx context.Context, toskip *bool) {
 		case <-ctx.Done():
 			fmt.Println("Timer stopped")
 			*toskip = false
+			return
 		case <-ticker.C:
 			*toskip = true
 
