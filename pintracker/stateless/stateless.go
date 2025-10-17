@@ -412,7 +412,6 @@ func startTimerNew5(ctx context.Context, toskip *bool) {
 	}
 }
 
-
 func (spt *Tracker) repinUsingRSsixsix(op *optracker.Operation) (time.Duration, time.Duration, time.Duration) {
 	ssss := time.Now()
 	repairShards := make([]pinwithmeta, 0)
@@ -707,7 +706,7 @@ func (spt *Tracker) repinUsingRSNfromNplusKminus1(op *optracker.Operation) (time
 					sss := time.Now()
 					bytess := spt.getData(ctxx, shard.cids[i])
 					nnn := time.Since(sss)
-					fmt.Printf("REPAIR GOT HERE FOR : %s \n", nnn.String())
+					fmt.Printf("REPAIR GOT HERE FOR shard %d : %s \n",shard.index, nnn.String())
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
@@ -723,6 +722,7 @@ func (spt *Tracker) repinUsingRSNfromNplusKminus1(op *optracker.Operation) (time
 			}
 		}
 		wg.Wait()
+		fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee \n")
 		// Find where to allocate this file
 		stt := time.Now()
 		timedownloadchunks += stt.Sub(sttt)
