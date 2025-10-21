@@ -411,7 +411,7 @@ func startTimerNew5(ctx context.Context, toskip *bool) {
 		}
 	}
 }
-
+//Retrieve the fastest n shard nodes out of n+k when using RS(n,k) before using these shard nodes to repair the missing shard.
 func (spt *Tracker) repinUsingRSsixsix(op *optracker.Operation) (time.Duration, time.Duration, time.Duration) {
 	ssss := time.Now()
 	repairShards := make([]pinwithmeta, 0)
@@ -582,7 +582,9 @@ func (spt *Tracker) repinUsingRSsixsix(op *optracker.Operation) (time.Duration, 
 	}
 	return timedownloadchunks, timetorepairchunksonly, wait2
 }
-
+// get the fastest n shard nodes out of n+k and keep requesting the rest of the shard nodes in the background then ask for data to repair from the retrieved shard node, for example, if we retrieved n+1 shard nodes then we will
+//ask for n+1 data chunks and use the fastest n. Later on, maybe n+3 shard nodes are retrieved, so we will ask for n+3 data chunks and use the fastest n. That is more related to churns, some peers may 
+// come online during the repair and they may be faster than the currently used ones, so we want to keep track of this.
 func (spt *Tracker) repinUsingRSNfromNplusKminus1(op *optracker.Operation) (time.Duration, time.Duration, time.Duration) {
 	ssss := time.Now()
 	repairShards := make([]pinwithmeta, 0)
@@ -757,6 +759,8 @@ func (spt *Tracker) repinUsingRSNfromNplusKminus1(op *optracker.Operation) (time
 	return timedownloadchunks, timetorepairchunksonly, wait2
 }
 
+// This will keep track of the fastest peers to use every 1 second, in addition to that, it will add the minimal interference to the system since it will ask for six data chunks during 1 sec interval before update 
+// to the fastest n again.
 func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Duration, time.Duration, time.Duration) {
 	ssss := time.Now()
 	repairShards := make([]pinwithmeta, 0)
