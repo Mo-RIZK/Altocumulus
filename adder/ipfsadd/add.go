@@ -542,7 +542,7 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 	}
 	fmt.Fprintf(os.Stdout, "enddddddd encodinggggggggg \n")
 	//create nodes and send to destination
-	//AddShardsToDB(adder.ctx, shards, adder.Original, adder.Parity, int(adder.ShardSize), size, db)
+	AddShardsToDB(adder.ctx, shards, adder.Original, adder.Parity, int(adder.ShardSize), size, db)
 	//nd here is the root node of the merkle DAG
 	return nd
 }
