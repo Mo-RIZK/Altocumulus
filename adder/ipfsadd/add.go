@@ -492,10 +492,12 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 		return nil
 	}
 	var nd ipld.Node
+	fmt.Fprintf(os.Stdout, "Starttttt merkleeeeee DAGGGGG \n")
 	nd, err = LayoutC(db)
+	fmt.Fprintf(os.Stdout, "endddddddd merkleeeeee DAGGGGG \n")
 	//align data
 	shards := make([][]byte, adder.Original+adder.Parity)
-
+	fmt.Fprintf(os.Stdout, "Starttttt fillinggggggggg \n")
 	for i := 0; i < adder.Original; i++ {
 		shards[i] = make([]byte, adder.ShardSize)
 		n, errr := io.ReadFull(reader, shards[i])
@@ -509,14 +511,17 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 			}
 		}
 	}
+	fmt.Fprintf(os.Stdout, "endddddddd fillinggggggggg \n")
 	sizeStr := strings.Split(adder.Chunker, "-")[1]
 	size, _ := strconv.Atoi(sizeStr)
+	fmt.Fprintf(os.Stdout, "Starttttt encodinggggggggg \n")
 	errr := GenerateParityShards(shards, adder.Original, adder.Parity, int(adder.ShardSize), size)
 	if errr != nil {
 		return nil
 	}
+	fmt.Fprintf(os.Stdout, "enddddddd encodinggggggggg \n")
 	//create nodes and send to destination
-	AddShardsToDB(adder.ctx, shards, adder.Original, adder.Parity, int(adder.ShardSize), size, db)
+	//AddShardsToDB(adder.ctx, shards, adder.Original, adder.Parity, int(adder.ShardSize), size, db)
 	//nd here is the root node of the merkle DAG
 	return nd
 }
