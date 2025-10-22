@@ -175,11 +175,12 @@ func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSi
 			chunkBlock[i] = make([]byte, stripeSize)
 		}
 
+		fmt.Fprintf(os.Stdout, "Encodingggg \n")
 		// --- Encode this stripe ---
 		if err := enc.Encode(chunkBlock); err != nil {
 			return fmt.Errorf("encoding failed at stripe %d: %w", stripe, err)
 		}
-
+		fmt.Fprintf(os.Stdout, "Endddd Encodingggg \n")
 		// --- Copy parity chunks safely ---
 		for i := 0; i < parityShards; i++ {
 			parityIndex := dataShards + i
@@ -194,7 +195,6 @@ func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSi
 	fmt.Fprintf(os.Stdout, "✅ Parity encoding completed successfully\n")
 	return nil
 }
-
 
 // Cluster: commented as it is unused
 // // RootNode returns the mfs root node
