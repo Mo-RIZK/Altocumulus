@@ -133,50 +133,63 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSize, chunkSize int) error {
 	totalShards := dataShards + parityShards
 
-	// Create the RS encoder
+	// Create the Reed-Solomon encoder
 	enc, err := reedsolomon.New(dataShards, parityShards)
 	if err != nil {
 		return fmt.Errorf("failed to create encoder: %w", err)
 	}
 
-	// Number of stripes to process
+	// Number of stripes (chunks) per shard
 	numStripes := int(math.Ceil(float64(shardSize) / float64(chunkSize)))
-	fmt.Fprintf(os.Stdout, "Encodinnggggg 11111 with number of stripes is: %d \n", numStripes)
+	fmt.Fprintf(os.Stdout, "Encoding with %d stripes (chunk size %d bytes)\n", numStripes, chunkSize)
+
 	for stripe := 0; stripe < numStripes; stripe++ {
-		fmt.Fprintf(os.Stdout, "Encodinnggggg 222222 \n")
 		offset := stripe * chunkSize
 
-		// Determine the size of this stripe (last stripe may be smaller)
+		// Determine this stripe's actual size (the last one may be smaller)
 		stripeSize := chunkSize
 		if offset+chunkSize > shardSize {
 			stripeSize = shardSize - offset
 		}
 
-		// Prepare double array for this stripe
+		// Prepare one chunk block (data + parity)
 		chunkBlock := make([][]byte, totalShards)
 		for i := 0; i < dataShards; i++ {
+			// Ensure we don't read out of bounds
+			end := offset + stripeSize
+			if end > len(shards[i]) {
+				end = len(shards[i])
+			}
 			chunkBlock[i] = make([]byte, stripeSize)
-			copy(chunkBlock[i], shards[i][offset:offset+stripeSize])
+			copy(chunkBlock[i], shards[i][offset:end])
 		}
+
+		// Initialize parity slices
 		for i := dataShards; i < totalShards; i++ {
 			chunkBlock[i] = make([]byte, stripeSize)
 		}
-		fmt.Fprintf(os.Stdout, "BEFOOOORRRREEEEE starttt of Encodinnggggg \n")
-		// Encode parity for this stripe
-		errrr := enc.Encode(chunkBlock)
-		if errrr != nil {
-			return fmt.Errorf("encode failed at stripe %d: %w", stripe, err)
+
+		// Encode this stripe
+		err = enc.Encode(chunkBlock)
+		if err != nil {
+			return fmt.Errorf("encoding failed at stripe %d: %w", stripe, err)
 		}
-		fmt.Fprintf(os.Stdout, "AFTEEEERRRRRRRRRRRR enddddddd of Encodinnggggg \n")
-		// Copy parity stripes back into parity shards
+
+		// Copy parity chunks into parity shards
 		for i := 0; i < parityShards; i++ {
-			copy(shards[dataShards+i][offset:offset+stripeSize], chunkBlock[dataShards+i])
+			parityIndex := dataShards + i
+			end := offset + stripeSize
+			if end > len(shards[parityIndex]) {
+				end = len(shards[parityIndex])
+			}
+			copy(shards[parityIndex][offset:end], chunkBlock[parityIndex])
 		}
-		fmt.Fprintf(os.Stdout, "Encodinnggggg 3333333 \n")
 	}
 
+	fmt.Fprintf(os.Stdout, "✅ Parity encoding completed successfully\n")
 	return nil
 }
+
 
 // Cluster: commented as it is unused
 // // RootNode returns the mfs root node
