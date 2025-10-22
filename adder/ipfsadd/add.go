@@ -139,10 +139,12 @@ func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSi
 		return fmt.Errorf("failed to create encoder: %w", err)
 	}
 
+	
 	// Number of stripes to process
 	numStripes := int(math.Ceil(float64(shardSize) / float64(chunkSize)))
-
+	fmt.Fprintf(os.Stdout, "Encodinnggggg 11111 \n")
 	for stripe := 0; stripe < numStripes; stripe++ {
+		fmt.Fprintf(os.Stdout, "Encodinnggggg 222222 \n")
 		offset := stripe * chunkSize
 
 		// Determine the size of this stripe (last stripe may be smaller)
@@ -171,6 +173,7 @@ func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSi
 		for i := 0; i < parityShards; i++ {
 			copy(shards[dataShards+i][offset:offset+stripeSize], chunkBlock[dataShards+i])
 		}
+		fmt.Fprintf(os.Stdout, "Encodinnggggg 3333333 \n")
 	}
 
 	return nil
