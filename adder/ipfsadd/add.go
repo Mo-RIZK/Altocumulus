@@ -141,7 +141,7 @@ func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSi
 
 	// Number of stripes to process
 	numStripes := int(math.Ceil(float64(shardSize) / float64(chunkSize)))
-	fmt.Fprintf(os.Stdout, "Encodinnggggg 11111 \n")
+	fmt.Fprintf(os.Stdout, "Encodinnggggg 11111 with number of stripes is: %d \n",numStripes)
 	for stripe := 0; stripe < numStripes; stripe++ {
 		fmt.Fprintf(os.Stdout, "Encodinnggggg 222222 \n")
 		offset := stripe * chunkSize
