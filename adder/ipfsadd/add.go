@@ -139,7 +139,6 @@ func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSi
 		return fmt.Errorf("failed to create encoder: %w", err)
 	}
 
-	
 	// Number of stripes to process
 	numStripes := int(math.Ceil(float64(shardSize) / float64(chunkSize)))
 	fmt.Fprintf(os.Stdout, "Encodinnggggg 11111 \n")
@@ -508,6 +507,7 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 			return nil
 		}
 		if uint64(n) < adder.ShardSize {
+			fmt.Fprintf(os.Stdout, "PADDDDDINGGGGGG \n")
 			// pad the last shard if necessary
 			for j := n; uint64(j) < adder.ShardSize; j++ {
 				shards[i][j] = 0
