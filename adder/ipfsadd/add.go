@@ -141,7 +141,7 @@ func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSi
 
 	// Number of stripes to process
 	numStripes := int(math.Ceil(float64(shardSize) / float64(chunkSize)))
-	fmt.Fprintf(os.Stdout, "Encodinnggggg 11111 with number of stripes is: %d \n",numStripes)
+	fmt.Fprintf(os.Stdout, "Encodinnggggg 11111 with number of stripes is: %d \n", numStripes)
 	for stripe := 0; stripe < numStripes; stripe++ {
 		fmt.Fprintf(os.Stdout, "Encodinnggggg 222222 \n")
 		offset := stripe * chunkSize
@@ -161,13 +161,13 @@ func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSi
 		for i := dataShards; i < totalShards; i++ {
 			chunkBlock[i] = make([]byte, stripeSize)
 		}
-
+		fmt.Fprintf(os.Stdout, "BEFOOOORRRREEEEE starttt of Encodinnggggg \n")
 		// Encode parity for this stripe
-		err := enc.Encode(chunkBlock)
-		if err != nil {
+		errrr := enc.Encode(chunkBlock)
+		if errrr != nil {
 			return fmt.Errorf("encode failed at stripe %d: %w", stripe, err)
 		}
-
+		fmt.Fprintf(os.Stdout, "AFTEEEERRRRRRRRRRRR enddddddd of Encodinnggggg \n")
 		// Copy parity stripes back into parity shards
 		for i := 0; i < parityShards; i++ {
 			copy(shards[dataShards+i][offset:offset+stripeSize], chunkBlock[dataShards+i])
