@@ -133,29 +133,35 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSize, chunkSize int) error {
 	totalShards := dataShards + parityShards
 
+	// --- Safety check: allocate parity shards if missing ---
+	for i := dataShards; i < totalShards; i++ {
+		if shards[i] == nil || len(shards[i]) < shardSize {
+			shards[i] = make([]byte, shardSize)
+		}
+	}
+
 	// Create the Reed-Solomon encoder
 	enc, err := reedsolomon.New(dataShards, parityShards)
 	if err != nil {
 		return fmt.Errorf("failed to create encoder: %w", err)
 	}
 
-	// Number of stripes (chunks) per shard
+	// Number of stripes per shard
 	numStripes := int(math.Ceil(float64(shardSize) / float64(chunkSize)))
 	fmt.Fprintf(os.Stdout, "Encoding with %d stripes (chunk size %d bytes)\n", numStripes, chunkSize)
 
 	for stripe := 0; stripe < numStripes; stripe++ {
 		offset := stripe * chunkSize
-
-		// Determine this stripe's actual size (the last one may be smaller)
 		stripeSize := chunkSize
 		if offset+chunkSize > shardSize {
 			stripeSize = shardSize - offset
 		}
 
-		// Prepare one chunk block (data + parity)
+		// Prepare data and parity chunks for this stripe
 		chunkBlock := make([][]byte, totalShards)
+
+		// --- Copy data chunks safely ---
 		for i := 0; i < dataShards; i++ {
-			// Ensure we don't read out of bounds
 			end := offset + stripeSize
 			if end > len(shards[i]) {
 				end = len(shards[i])
@@ -164,18 +170,17 @@ func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSi
 			copy(chunkBlock[i], shards[i][offset:end])
 		}
 
-		// Initialize parity slices
+		// --- Allocate parity buffers ---
 		for i := dataShards; i < totalShards; i++ {
 			chunkBlock[i] = make([]byte, stripeSize)
 		}
 
-		// Encode this stripe
-		err = enc.Encode(chunkBlock)
-		if err != nil {
+		// --- Encode this stripe ---
+		if err := enc.Encode(chunkBlock); err != nil {
 			return fmt.Errorf("encoding failed at stripe %d: %w", stripe, err)
 		}
 
-		// Copy parity chunks into parity shards
+		// --- Copy parity chunks safely ---
 		for i := 0; i < parityShards; i++ {
 			parityIndex := dataShards + i
 			end := offset + stripeSize
