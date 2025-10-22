@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/klauspost/reedsolomon"
 	"io"
+	"math"
 	"os"
 	gopath "path"
 	"path/filepath"
@@ -18,6 +20,7 @@ import (
 	files "github.com/ipfs/boxo/files"
 	posinfo "github.com/ipfs/boxo/filestore/posinfo"
 	dag "github.com/ipfs/boxo/ipld/merkledag"
+	ft "github.com/ipfs/boxo/ipld/unixfs"
 	unixfs "github.com/ipfs/boxo/ipld/unixfs"
 	balanced "github.com/ipfs/boxo/ipld/unixfs/importer/balanced"
 	ihelper "github.com/ipfs/boxo/ipld/unixfs/importer/helpers"
@@ -38,7 +41,7 @@ const progressReaderIncrement = 1024 * 256
 //var liveCacheSize = uint64(256 << 10)
 
 // NewAdder Returns a new Adder used for a file add operation.
-func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, Original int, Parity int) (*Adder, error) {
+func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, Original int, Parity int, striped bool, shardsize uint64) (*Adder, error) {
 	// Cluster: we don't use pinner nor GCLocker.
 	return &Adder{
 		ctx:        ctx,
@@ -49,6 +52,8 @@ func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, 
 		Chunker:    "",
 		Original:   Original,
 		Parity:     Parity,
+		Striped:    striped,
+		ShardSize:  shardsize,
 	}, nil
 }
 
@@ -68,9 +73,11 @@ type Adder struct {
 	tempRoot   cid.Cid
 	CidBuilder cid.Builder
 	// liveNodes  uint64 // cluster: we do not clear mfs cache.
-	lastFile mfs.FSNode
-	Original int
-	Parity   int
+	lastFile  mfs.FSNode
+	Original  int
+	Parity    int
+	Striped   bool
+	ShardSize uint64
 	// Cluster: ipfs does a hack in commands/add.go to set the filenames
 	// in emitted events correctly. We carry a root folder name (or a
 	// filename in the case of single files here and emit those events
@@ -104,17 +111,69 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	// Cluster: we don't do batching/use BufferedDS.
-
 	fmt.Fprintf(os.Stdout, " repliii %d \n", adder.Original)
 	if adder.Original <= 1 {
 		nd := adder.addRep(chnk)
 		return nd, nil
 	} else {
-		nd := adder.addEC(chnk)
-		return nd, nil
+		if adder.Striped {
+			nd := adder.addEC(chnk)
+			return nd, nil
+		} else {
+			// create merkle dag without sending data to destinations
+			nd := adder.addECC(chnk, reader)
+
+			return nd, nil
+		}
+
 	}
+}
+
+func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSize, chunkSize int) error {
+	totalShards := dataShards + parityShards
+
+	// Create the RS encoder
+	enc, err := reedsolomon.New(dataShards, parityShards)
+	if err != nil {
+		return fmt.Errorf("failed to create encoder: %w", err)
+	}
+
+	// Number of stripes to process
+	numStripes := int(math.Ceil(float64(shardSize) / float64(chunkSize)))
+
+	for stripe := 0; stripe < numStripes; stripe++ {
+		offset := stripe * chunkSize
+
+		// Determine the size of this stripe (last stripe may be smaller)
+		stripeSize := chunkSize
+		if offset+chunkSize > shardSize {
+			stripeSize = shardSize - offset
+		}
+
+		// Prepare double array for this stripe
+		chunkBlock := make([][]byte, totalShards)
+		for i := 0; i < dataShards; i++ {
+			chunkBlock[i] = make([]byte, stripeSize)
+			copy(chunkBlock[i], shards[i][offset:offset+stripeSize])
+		}
+		for i := dataShards; i < totalShards; i++ {
+			chunkBlock[i] = make([]byte, stripeSize)
+		}
+
+		// Encode parity for this stripe
+		err := enc.Encode(chunkBlock)
+		if err != nil {
+			return fmt.Errorf("encode failed at stripe %d: %w", stripe, err)
+		}
+
+		// Copy parity stripes back into parity shards
+		for i := 0; i < parityShards; i++ {
+			copy(shards[dataShards+i][offset:offset+stripeSize], chunkBlock[dataShards+i])
+		}
+	}
+
+	return nil
 }
 
 // Cluster: commented as it is unused
@@ -409,12 +468,101 @@ func (adder *Adder) addEC(chnk chunker.Splitter) ipld.Node {
 	var nd ipld.Node
 	sizeStr := strings.Split(adder.Chunker, "-")[1]
 	size, _ := strconv.Atoi(sizeStr)
-	nd, err = Layout(db, adder.Original, adder.Parity, size)
-	if err != nil {
-		return nil
+	if adder.Striped {
+		nd, err = Layout(db, adder.Original, adder.Parity, size)
+		if err != nil {
+			return nil
+		}
 	}
 
 	return nd
+}
+func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
+
+	params := DagBuilderParams{
+		Dagserv:    adder.dagService,
+		RawLeaves:  adder.RawLeaves,
+		Maxlinks:   30 * (adder.Original + adder.Parity),
+		NoCopy:     adder.NoCopy,
+		CidBuilder: adder.CidBuilder,
+	}
+
+	db, err := params.New(chnk)
+	if err != nil {
+		return nil
+	}
+	var nd ipld.Node
+	nd, err = LayoutC(db)
+	//align data
+	shards := make([][]byte, adder.Original+adder.Parity)
+
+	for i := 0; i < adder.Original; i++ {
+		shards[i] = make([]byte, adder.ShardSize)
+		n, errr := io.ReadFull(reader, shards[i])
+		if errr != nil && errr != io.EOF && errr != io.ErrUnexpectedEOF {
+			return nil
+		}
+		if uint64(n) < adder.ShardSize {
+			// pad the last shard if necessary
+			for j := n; uint64(j) < adder.ShardSize; j++ {
+				shards[i][j] = 0
+			}
+		}
+	}
+	sizeStr := strings.Split(adder.Chunker, "-")[1]
+	size, _ := strconv.Atoi(sizeStr)
+	errr := GenerateParityShards(shards, adder.Original, adder.Parity, int(adder.ShardSize), size)
+	if errr != nil {
+		return nil
+	}
+	//create nodes and send to destination
+	AddShardsToDB(adder.ctx, shards, adder.Original, adder.Parity, int(adder.ShardSize), size, db)
+	//nd here is the root node of the merkle DAG
+	return nd
+}
+
+// AddShardsToDB reads each shard chunk-by-chunk and adds them as leaf nodes to the DB.
+func AddShardsToDB(
+	ctx context.Context,
+	shards [][]byte,
+	dataShards, parityShards int,
+	shardSize, chunkSize int,
+	db *DagBuilderHelper, // your DB object
+) error {
+	totalShards := dataShards + parityShards
+
+	// Calculate number of stripes (ceil division)
+	numStripes := (shardSize + chunkSize - 1) / chunkSize
+
+	for stripe := 0; stripe < numStripes; stripe++ {
+		offset := stripe * chunkSize
+		stripeLength := chunkSize
+		if offset+chunkSize > shardSize {
+			stripeLength = shardSize - offset
+		}
+
+		for shardIndex := 0; shardIndex < totalShards; shardIndex++ {
+			// Read the chunk from this shard
+			dataread := make([]byte, stripeLength)
+			copy(dataread, shards[shardIndex][offset:offset+stripeLength])
+
+			// Create a leaf node
+			node, err := db.NewLeafNode(dataread, ft.TFile)
+			if err != nil {
+				return fmt.Errorf("failed to create leaf node for shard %d stripe %d: %w",
+					shardIndex, stripe, err)
+			}
+
+			// Add the node to the DB/service
+			err = db.dserv.Add(ctx, node)
+			if err != nil {
+				return fmt.Errorf("failed to add node for shard %d stripe %d: %w",
+					shardIndex, stripe, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (adder *Adder) addRep(chnk chunker.Splitter) ipld.Node {
