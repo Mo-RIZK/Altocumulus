@@ -498,7 +498,6 @@ func (adder *Adder) addEC(chnk chunker.Splitter) ipld.Node {
 	return nd
 }
 func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
-
 	params := DagBuilderParams{
 		Dagserv:    adder.dagService,
 		RawLeaves:  adder.RawLeaves,
@@ -506,14 +505,14 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 		NoCopy:     adder.NoCopy,
 		CidBuilder: adder.CidBuilder,
 	}
-
 	db, err := params.New(chnk)
 	if err != nil {
 		return nil
 	}
 	var nd ipld.Node
+	nodes := make([]ipld.Node, 0)
 	fmt.Fprintf(os.Stdout, "Starttttt merkleeeeee DAGGGGG \n")
-	nd, err = LayoutC(db)
+	nd, err = LayoutC(db,nodes)
 	fmt.Fprintf(os.Stdout, "endddddddd merkleeeeee DAGGGGG \n")
 	//align data
 	shards := make([][]byte, adder.Original+adder.Parity)
@@ -542,7 +541,7 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 	}
 	fmt.Fprintf(os.Stdout, "enddddddd encodinggggggggg \n")
 	//create nodes and send to destination
-	AddShardsToDB(adder.ctx, shards, adder.Original, adder.Parity, int(adder.ShardSize), size, db)
+	AddShardsToDB(adder.ctx, shards, adder.Original, adder.Parity, int(adder.ShardSize), size, db,nodes)
 	//nd here is the root node of the merkle DAG
 	return nd
 }
@@ -554,6 +553,7 @@ func AddShardsToDB(
 	dataShards, parityShards int,
 	shardSize, chunkSize int,
 	db *DagBuilderHelper, // your DB object
+	nodes []ipld.Node,
 ) error {
 	totalShards := dataShards + parityShards
 
@@ -585,6 +585,12 @@ func AddShardsToDB(
 				return fmt.Errorf("failed to add node for shard %d stripe %d: %w",
 					shardIndex, stripe, err)
 			}
+		}
+	}
+	for _,node :=range nodes{
+		err := db.dserv.Add(ctx, node)
+		if err != nil {
+			return fmt.Errorf("failed to add  internal node %w",err)
 		}
 	}
 
