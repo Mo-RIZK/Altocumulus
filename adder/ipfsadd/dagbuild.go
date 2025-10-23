@@ -125,6 +125,18 @@ func (db *DagBuilderHelper) prepareNext() {
 	db.readtime += en.Sub(st)
 }
 
+func (db *DagBuilderHelper) prepareNextC() {
+	// if we already have data waiting to be consumed, we're ready
+	if db.nextData != nil || db.recvdErr != nil {
+		return
+	}
+
+	db.nextData, db.recvdErr = db.spl.NextBytes()
+	if db.recvdErr == io.EOF {
+		db.recvdErr = nil
+	}
+}
+
 // Done returns whether or not we're done consuming the incoming data.
 func (db *DagBuilderHelper) Done() bool {
 	// ensure we have an accurate perspective on data
@@ -142,6 +154,15 @@ func (db *DagBuilderHelper) Done() bool {
 // that the current building operation should finish.
 func (db *DagBuilderHelper) Next() ([]byte, error) {
 	db.prepareNext() // idempotent
+	d := db.nextData
+	db.nextData = nil // signal we've consumed it
+	if db.recvdErr != nil {
+		return nil, db.recvdErr
+	}
+	return d, nil
+}
+func (db *DagBuilderHelper) NextC() ([]byte, error) {
+	db.prepareNextC() // idempotent
 	d := db.nextData
 	db.nextData = nil // signal we've consumed it
 	if db.recvdErr != nil {
@@ -261,6 +282,28 @@ func (db *DagBuilderHelper) NewLeafDataNode(fsNodeType pb.Data_DataType) (node i
 	db.createnode += end.Sub(st)
 	return node, dataSize, fileData, nil
 }
+
+func (db *DagBuilderHelper) NewLeafDataNodeC(fsNodeType pb.Data_DataType) (node ipld.Node, dataSize uint64, data []byte, err error) {
+	fileData, err := db.NextC()
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	st := time.Now()
+	dataSize = uint64(len(fileData))
+
+	// Create a new leaf node containing the file chunk data.
+	node, err = db.NewLeafNode(fileData, fsNodeType)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+
+	// Convert this leaf to a `FilestoreNode` if needed.
+	node = db.ProcessFileStore(node, dataSize)
+	end := time.Now()
+	db.createnode += end.Sub(st)
+	return node, dataSize, fileData, nil
+}
+
 func (db *DagBuilderHelper) NewLeafDataNodeRep(fsNodeType pb.Data_DataType) (node ipld.Node, dataSize uint64, err error) {
 	fileData, err := db.Next()
 	if err != nil {
