@@ -2,6 +2,7 @@
 package ipfsadd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -511,16 +512,17 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 	}
 	var nd ipld.Node
 	nodes := make([]ipld.Node, 0)
+	data := make([]byte, 0)
 	fmt.Fprintf(os.Stdout, "Starttttt merkleeeeee DAGGGGG \n")
-	nd, err = LayoutC(db,nodes)
+	nd, data, err = LayoutC(db, nodes, data)
 	fmt.Fprintf(os.Stdout, "endddddddd merkleeeeee DAGGGGG \n")
 	//align data
+	readerr := bytes.NewReader(data)
 	shards := make([][]byte, adder.Original+adder.Parity)
 	fmt.Fprintf(os.Stdout, "Starttttt fillinggggggggg \n")
 	for i := 0; i < adder.Original; i++ {
 		shards[i] = make([]byte, adder.ShardSize)
-		n, errr := io.ReadFull(reader, shards[i])
-		fmt.Fprintf(os.Stdout, "Filled shard number %d with %d data \n",i,n)
+		n, errr := io.ReadFull(readerr, shards[i])
 		if errr != nil && errr != io.EOF && errr != io.ErrUnexpectedEOF {
 			return nil
 		}
@@ -542,7 +544,7 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 	}
 	fmt.Fprintf(os.Stdout, "enddddddd encodinggggggggg \n")
 	//create nodes and send to destination
-	AddShardsToDB(adder.ctx, shards, adder.Original, adder.Parity, int(adder.ShardSize), size, db,nodes)
+	AddShardsToDB(adder.ctx, shards, adder.Original, adder.Parity, int(adder.ShardSize), size, db, nodes)
 	//nd here is the root node of the merkle DAG
 	return nd
 }
@@ -588,10 +590,10 @@ func AddShardsToDB(
 			}
 		}
 	}
-	for _,node :=range nodes{
+	for _, node := range nodes {
 		err := db.dserv.Add(ctx, node)
 		if err != nil {
-			return fmt.Errorf("failed to add  internal node %w",err)
+			return fmt.Errorf("failed to add  internal node %w", err)
 		}
 	}
 
