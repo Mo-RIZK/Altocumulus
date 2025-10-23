@@ -520,6 +520,7 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 	for i := 0; i < adder.Original; i++ {
 		shards[i] = make([]byte, adder.ShardSize)
 		n, errr := io.ReadFull(reader, shards[i])
+		fmt.Fprintf(os.Stdout, "Filled shard number %d with %d data \n",i,n)
 		if errr != nil && errr != io.EOF && errr != io.ErrUnexpectedEOF {
 			return nil
 		}
