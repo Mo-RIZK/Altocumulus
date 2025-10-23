@@ -127,7 +127,7 @@ import (
 //	  +=========+   +=========+   + - - - - +
 //	  | Chunk 1 |   | Chunk 2 |   | Chunk 3 |
 //	  +=========+   +=========+   + - - - - +
-func LayoutC(db *DagBuilderHelper, nodes []ipld.Node) (ipld.Node, error) {
+func LayoutC(db *DagBuilderHelper, nodes []ipld.Node, data []byte) (ipld.Node, []byte, error) {
 	var root ipld.Node
 	var err error
 
@@ -137,25 +137,27 @@ func LayoutC(db *DagBuilderHelper, nodes []ipld.Node) (ipld.Node, error) {
 		// This works without Filestore support (`ProcessFileStore`).
 		// TODO: Why? Is there a test case missing?
 	} else {
-		root, err = layoutData(db, nodes)
+		root, data, err = layoutData(db, nodes, data)
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	nodes = append(nodes, root)
-	return root, nil
+
+	return root, data, nil
 }
 
-func layoutData(db *DagBuilderHelper, nodes []ipld.Node) (ipld.Node, error) {
+func layoutData(db *DagBuilderHelper, nodes []ipld.Node, data []byte) (ipld.Node, []byte, error) {
 	// The first `root` will be a single leaf node with data
 	// (corner case), after that subsequent `root` nodes will
 	// always be internal nodes (with a depth > 0) that can
 	// be handled by the loop.
-	root, fileSize, _, err := db.NewLeafDataNode(ft.TFile)
+	root, fileSize, dataa, err := db.NewLeafDataNodeC(ft.TFile)
+	data = append(data, dataa...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Each time a DAG of a certain `depth` is filled (because it
@@ -167,19 +169,19 @@ func layoutData(db *DagBuilderHelper, nodes []ipld.Node) (ipld.Node, error) {
 		newRoot := db.NewFSNodeOverDag(ft.TFile)
 		err = newRoot.AddChildC(root, fileSize, db, nodes)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// Fill the `newRoot` (that has the old `root` already as child)
 		// and make it the current `root` for the next iteration (when
 		// it will become "old").
-		root, fileSize, err = fillNodeRecC(db, newRoot, depth, nodes)
+		root, fileSize, data, err = fillNodeRecC(db, newRoot, depth, nodes, data)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
-	return root, nil
+	return root, data, nil
 }
 
 // fillNodeRec will "fill" the given internal (non-leaf) `node` with data by
@@ -222,9 +224,9 @@ func layoutData(db *DagBuilderHelper, nodes []ipld.Node) (ipld.Node, error) {
 // seeking through the DAG when reading data later).
 //
 // warning: **children** pinned indirectly, but input node IS NOT pinned.
-func fillNodeRecC(db *DagBuilderHelper, node *FSNodeOverDag, depth int, nodes []ipld.Node) (filledNode ipld.Node, nodeFileSize uint64, err error) {
+func fillNodeRecC(db *DagBuilderHelper, node *FSNodeOverDag, depth int, nodes []ipld.Node, data []byte) (filledNode ipld.Node, nodeFileSize uint64, da []byte, err error) {
 	if depth < 1 {
-		return nil, 0, errors.New("attempt to fillNode at depth < 1")
+		return nil, 0, nil, errors.New("attempt to fillNode at depth < 1")
 	}
 
 	if node == nil {
@@ -242,23 +244,25 @@ func fillNodeRecC(db *DagBuilderHelper, node *FSNodeOverDag, depth int, nodes []
 	for node.NumChildren() < db.Maxlinks() && !db.Done() {
 
 		if depth == 1 {
+			dataa := make([]byte, 0)
 			// Base case: add leaf node with data.
-			childNode, childFileSize, _, err = db.NewLeafDataNode(ft.TFile)
+			childNode, childFileSize, dataa, err = db.NewLeafDataNode(ft.TFile)
+			data = append(data, dataa...)
 			if err != nil {
-				return nil, 0, err
+				return nil, 0, nil, err
 			}
 		} else {
 			// Recursion case: create an internal node to in turn keep
 			// descending in the DAG and adding child nodes to it.
-			childNode, childFileSize, err = fillNodeRecC(db, nil, depth-1, nodes)
+			childNode, childFileSize, data, err = fillNodeRecC(db, nil, depth-1, nodes, data)
 			if err != nil {
-				return nil, 0, err
+				return nil, 0, nil, err
 			}
 		}
 
 		err = node.AddChildC(childNode, childFileSize, db, nodes)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 	}
 
@@ -267,10 +271,10 @@ func fillNodeRecC(db *DagBuilderHelper, node *FSNodeOverDag, depth int, nodes []
 	// Get the final `dag.ProtoNode` with the `FSNode` data encoded inside.
 	filledNode, err = node.Commit()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 
-	return filledNode, nodeFileSize, nil
+	return filledNode, nodeFileSize, data, nil
 }
 func (n *FSNodeOverDag) AddChildC(child ipld.Node, fileSize uint64, db *DagBuilderHelper, nodes []ipld.Node) error {
 	err := n.dag.AddNodeLink("", child)
