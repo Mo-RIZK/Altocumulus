@@ -460,6 +460,10 @@ content.
 					Name:  "s_ec",
 					Usage: "Use striped layout erasure coding",
 				},
+				cli.BoolFlag{
+					Name:  "seq",
+					Usage: "use this flag to add data sequentially",
+				},
 				cli.IntFlag{
 					Name:  "or",
 					Usage: "used to set the original chunks number when using erasure coding",
@@ -475,10 +479,14 @@ content.
 				shard := c.Bool("shard")
 				c_ec := c.Bool("c_ec")
 				s_ec := c.Bool("s_ec")
+				seq := c.Bool("seq")
 				original := c.Int("or")
 				parity := c.Int("par")
 				if c_ec && s_ec {
-					checkErr("", errors.New("impossible to launch contigous and striped layouts together"))
+					checkErr("", errors.New("impossible to launch multiple layouts together"))
+				}
+				if s_ec && seq {
+					checkErr("", errors.New("impossible to launch striped data layout with sequential adds"))
 				}
 				name := c.String("name")
 				if shard && name == "" {
@@ -506,7 +514,9 @@ content.
 				p.ReplicationFactorMax = c.Int("replication-max")
 				p.O = original
 				p.P = parity
-				fmt.Fprintf(os.Stdout, "The original0 is  : %d, %d and the original1 is : \n", p.O, p.P)
+				if seq {
+					p.Seq = seq
+				}
 				if original == 0 || parity == 0 {
 					checkErr("", errors.New("Make sure of a valid parameters for erasure coding "))
 				}
