@@ -77,6 +77,7 @@ type DAGService struct {
 	lengthsgor      []int
 	try             ipld.Node
 	topin           []every
+	seq             bool
 }
 
 // New returns a new ClusterDAGService, which uses the given rpc client to perform
@@ -111,6 +112,7 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 		shardgor:      make([]*shard, 0, opts.O+opts.P),
 		try:           nil,
 		topin:         make([]every, 0),
+		seq:           opts.Seq,
 	}
 }
 
@@ -121,7 +123,7 @@ func (dgs *DAGService) Add(ctx context.Context, node ipld.Node) error {
 	/*if !dgs.addedSet.Visit(node.Cid()) {
 	        return nil
 	}*/
-	if dgs.original == 1 {
+	if dgs.original == 1 || dgs.seq {
 		return dgs.ingestBlockREP(ctx, node)
 	} else {
 		return dgs.ingestBlock(ctx, node)
@@ -132,7 +134,7 @@ func (dgs *DAGService) Add(ctx context.Context, node ipld.Node) error {
 // Close performs cleanup and should be called when the DAGService is not
 // going to be used anymore.
 func (dgs *DAGService) Close() error {
-	if dgs.original == 1 {
+	if dgs.original == 1 || dgs.seq {
 		if dgs.currentShardrep != nil {
 			dgs.currentShardrep.Close()
 		}
@@ -150,7 +152,7 @@ func (dgs *DAGService) Close() error {
 // Finalize finishes sharding, creates the cluster DAG and pins it along
 // with the meta pin for the root node of the content.
 func (dgs *DAGService) Finalize(ctx context.Context, dataRoot api.Cid) (api.Cid, error) {
-	if dgs.original == 1 {
+	if dgs.original == 1 || dgs.seq {
 		return dgs.FinalizeRep(ctx, dataRoot)
 	}
 	dgs.ingestLastBlocks(dgs.ctx)
@@ -291,7 +293,7 @@ func (dgs *DAGService) Finalize(ctx context.Context, dataRoot api.Cid) (api.Cid,
 func (dgs *DAGService) Allocations() []peer.ID {
 	// FIXME: this is probably not safe in concurrency?  However, there is
 	// no concurrent execution of any code in the DAGService I think.
-	if dgs.original == 1 {
+	if dgs.original == 1 || dgs.seq {
 		if dgs.currentShardrep != nil {
 			return dgs.currentShardrep.Allocations()
 		}
@@ -334,7 +336,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	logger.Debugf("ingesting block %s in shard %d (%s)", n.Cid(), len(dgs.shards), dgs.addParams.Name)
-	
+
 	fmt.Fprintf(os.Stdout, "Information : %s\n", n.String())
 
 	size := uint64(len(n.RawData()))
