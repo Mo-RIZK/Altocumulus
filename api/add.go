@@ -49,6 +49,7 @@ type AddParams struct {
 	Cec       bool
 	O         int
 	P         int
+	Seq       bool
 
 	StreamChannels bool
 	Format         string // selects with adder
@@ -68,6 +69,7 @@ func DefaultAddParams() AddParams {
 		Shard:  false,
 		Sec:    false,
 		Cec:    false,
+		Seq:    false,
 		O:      1,
 		P:      1,
 
@@ -235,6 +237,10 @@ func AddParamsFromQuery(query url.Values) (AddParams, error) {
 	if err != nil {
 		return params, err
 	}
+	err = parseBoolParam(query, "seq", &params.Sec)
+	if err != nil {
+		return params, err
+	}
 
 	return params, nil
 }
@@ -251,6 +257,7 @@ func (p AddParams) ToQueryString() (string, error) {
 	}
 	query.Set("shard", fmt.Sprintf("%t", p.Shard))
 	query.Set("c_ec", fmt.Sprintf("%t", p.Cec))
+	query.Set("c_ec", fmt.Sprintf("%t", p.Seq))
 	query.Set("s_ec", fmt.Sprintf("%t", p.Sec))
 	query.Set("or", fmt.Sprintf("%d", p.O))
 	query.Set("par", fmt.Sprintf("%d", p.P))
@@ -290,6 +297,7 @@ func (p AddParams) Equals(p2 AddParams) bool {
 		p.NoPin == p2.NoPin &&
 		p.Cec == p2.Cec &&
 		p.Sec == p2.Sec &&
+		p.Seq == p2.Seq &&
 		p.O == p2.O &&
 		p.P == p2.P
 
