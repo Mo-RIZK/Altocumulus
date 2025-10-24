@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ipfs-cluster/ipfs-cluster/api"
 
@@ -84,6 +85,7 @@ type Adder struct {
 	// filename in the case of single files here and emit those events
 	// correctly from the beginning).
 	OutputPrefix string
+	Seq          bool
 }
 
 func (adder *Adder) mfsRoot() (*mfs.Root, error) {
@@ -122,10 +124,10 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 			nd := adder.addEC(chnk)
 			return nd, nil
 		} else {
-			// create merkle dag without sending data to destinations
+			// related work implementation, it is striped but with different pipeline
 			nd := adder.addECC(chnk, reader)
-
 			return nd, nil
+
 		}
 
 	}
@@ -514,16 +516,18 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 	nodes := make([]ipld.Node, 0)
 	data := make([]byte, 0)
 	fmt.Fprintf(os.Stdout, "Starttttt merkleeeeee DAGGGGG \n")
+	st1 := time.Now()
 	nd, data, err = LayoutC(db, nodes, data)
+	fmt.Fprintf(os.Stdout, "Time taken to create DAG is: %s \n", time.Since(st1).String())
 	fmt.Fprintf(os.Stdout, "endddddddd merkleeeeee DAGGGGG \n")
 	//align data
 	readerr := bytes.NewReader(data)
 	shards := make([][]byte, adder.Original+adder.Parity)
 	fmt.Fprintf(os.Stdout, "Starttttt fillinggggggggg \n")
+	st2 := time.Now()
 	for i := 0; i < adder.Original; i++ {
 		shards[i] = make([]byte, adder.ShardSize)
 		n, errr := io.ReadFull(readerr, shards[i])
-		fmt.Fprintf(os.Stdout, "filled shard number %d with %d data \n",i,n)
 		if errr != nil && errr != io.EOF && errr != io.ErrUnexpectedEOF {
 			return nil
 		}
@@ -536,16 +540,21 @@ func (adder *Adder) addECC(chnk chunker.Splitter, reader io.Reader) ipld.Node {
 		}
 	}
 	fmt.Fprintf(os.Stdout, "endddddddd fillinggggggggg \n")
+	fmt.Fprintf(os.Stdout, "Time taken to align data in shards is: %s \n", time.Since(st2).String())
 	sizeStr := strings.Split(adder.Chunker, "-")[1]
 	size, _ := strconv.Atoi(sizeStr)
 	fmt.Fprintf(os.Stdout, "Starttttt encodinggggggggg \n")
+	st3 := time.Now()
 	errr := GenerateParityShards(shards, adder.Original, adder.Parity, int(adder.ShardSize), size)
 	if errr != nil {
 		return nil
 	}
 	fmt.Fprintf(os.Stdout, "enddddddd encodinggggggggg \n")
+	fmt.Fprintf(os.Stdout, "Time taken to encode is: %s \n", time.Since(st3).String())
 	//create nodes and send to destination
+	st4 := time.Now()
 	AddShardsToDB(adder.ctx, shards, adder.Original, adder.Parity, int(adder.ShardSize), size, db, nodes)
+	fmt.Fprintf(os.Stdout, "Time taken to send data is: %s \n", time.Since(st4).String())
 	//nd here is the root node of the merkle DAG
 	return nd
 }
