@@ -257,7 +257,7 @@ func (p AddParams) ToQueryString() (string, error) {
 	}
 	query.Set("shard", fmt.Sprintf("%t", p.Shard))
 	query.Set("c_ec", fmt.Sprintf("%t", p.Cec))
-	query.Set("c_ec", fmt.Sprintf("%t", p.Seq))
+	query.Set("seq", fmt.Sprintf("%t", p.Seq))
 	query.Set("s_ec", fmt.Sprintf("%t", p.Sec))
 	query.Set("or", fmt.Sprintf("%d", p.O))
 	query.Set("par", fmt.Sprintf("%d", p.P))
