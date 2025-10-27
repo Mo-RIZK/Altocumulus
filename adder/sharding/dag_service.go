@@ -124,8 +124,10 @@ func (dgs *DAGService) Add(ctx context.Context, node ipld.Node) error {
 	        return nil
 	}*/
 	if dgs.original == 1 || dgs.seq {
+		fmt.Fprintf(os.Stdout, "Entered to sequentialllllllllllllll \n")
 		return dgs.ingestBlockREP(ctx, node)
 	} else {
+		fmt.Fprintf(os.Stdout, "Entered to parallelllllll \n")
 		return dgs.ingestBlock(ctx, node)
 	}
 
