@@ -237,7 +237,7 @@ func AddParamsFromQuery(query url.Values) (AddParams, error) {
 	if err != nil {
 		return params, err
 	}
-	err = parseBoolParam(query, "seq", &params.Sec)
+	err = parseBoolParam(query, "seq", &params.Seq)
 	if err != nil {
 		return params, err
 	}
