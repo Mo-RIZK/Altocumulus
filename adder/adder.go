@@ -207,7 +207,7 @@ type ipfsAdder struct {
 
 func newIpfsAdder(ctx context.Context, dgs ClusterDAGService, params api.AddParams, out chan api.AddedOutput) (*ipfsAdder, error) {
 	//RS := NewRS(ctx, params.O, params.P, params.ShardSize, params.Chunker)
-	fmt.Fprintf(os.Stdout, "original is : %d and parity is : %d and sequential is \n", params.O, params.P)
+	fmt.Fprintf(os.Stdout, "original is : %d and parity is : %d and sequential is %t \n", params.O, params.P,params.Seq)
 	iadder, err := ipfsadd.NewAdder(ctx, dgs, dgs.Allocations, params.O, params.P, params.Sec, params.ShardSize)
 	if err != nil {
 		logger.Error(err)
