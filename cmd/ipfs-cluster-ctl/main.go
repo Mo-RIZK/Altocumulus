@@ -514,9 +514,7 @@ content.
 				p.ReplicationFactorMax = c.Int("replication-max")
 				p.O = original
 				p.P = parity
-				if seq {
-					p.Seq = seq
-				}
+				p.Seq = seq
 				if original == 0 || parity == 0 {
 					checkErr("", errors.New("Make sure of a valid parameters for erasure coding "))
 				}
