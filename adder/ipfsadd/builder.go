@@ -359,12 +359,12 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 }
 
 func encodeTest(data [][]byte, enc reedsolomon.Encoder, or int, timetaken time.Duration) ([][]byte, time.Duration) {
-	start := time.Now()
 	var Shard []byte
 	for _, shard := range data {
 		Shard = append(Shard, shard...)
 	}
 	shards1, _ := enc.Split(Shard)
+	start := time.Now()
 	enc.Encode(shards1)
 	end := time.Now()
 	timetaken += end.Sub(start)
