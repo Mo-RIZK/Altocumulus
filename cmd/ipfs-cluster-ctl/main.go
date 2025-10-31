@@ -682,7 +682,9 @@ Read a file from the system.
 					dataRoot := *pin.Reference
 					fmt.Printf("Cid of the main root in cluster state is : %s and the Data root CID from Reference: %s\n", pin.Cid.String(), dataRoot.String())
 					//send a get request to ipfs to do the retrieval
-					//add flags for the destination and that stuff
+					ipfs := globalClient.IPFS(ctx)
+					errr := ipfs.Get(dataRoot.String(),".")
+					if errr != nil {fmt.Printf("Problemmmmmm in gettinggggg %s \n", errr.Error()) }
 				} else {
 					fmt.Println("No data root reference found in pin")
 				}
