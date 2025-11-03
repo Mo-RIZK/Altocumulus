@@ -1600,8 +1600,8 @@ func RetrieveCids(ctx context.Context, pinwm pinwithmeta) []Chunk {
 
 	nodeStr := string(nodeBytes)
 	cids := doTheProcess(nodeStr)
-	for cid := range cids {
-		fmt.Fprintf(os.Stdout, "CID: %s \n", cid)
+	for _,cid := range cids {
+		fmt.Fprintf(os.Stdout, "CID: %s \n", cid.cid)
 	}
 	return cids
 }
