@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -720,8 +721,19 @@ Read a file from the system.
 				ipfs := globalClient.IPFS(ctx)
 				var node map[string]interface{}
 				for _, pinn := range pinsOfFile {
-					ipfs.DagGet(pinn.Cid.String(),&node)
-					fmt.Printf("The data is %s \n", node)
+					ipfs.DagGet(pinn.Cid.String(), &node)
+					// Marshal node to JSON string
+					nodeBytes, err := json.Marshal(node)
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					nodeStr := string(nodeBytes)
+					cids := doTheProcess(nodeStr)
+					for _, cidd := range cids {
+						fmt.Printf("CID:%s \n", cidd.cid)
+					}
+
 				}
 				return nil
 			},
