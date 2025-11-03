@@ -1507,7 +1507,6 @@ func doTheProcess(nn string) []Chunk {
 		ke, _ := strconv.Atoi(key)
 		// Print the CID value from the nested map
 		if Cid, exists := value["/"]; exists {
-			fmt.Printf("%s\n", Cid)
 			ch := Chunk{index: ke, cid: Cid}
 			cidss = append(cidss, ch)
 			sort.Slice(cidss, func(i, j int) bool {
@@ -1628,12 +1627,12 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
 		}
 
 	}
-	for _,repairShard := range repairShards {
+	for _, repairShard := range repairShards {
 		fmt.Printf("Repair shard of index : %d \n", repairShard.index)
 	}
 	// Sort repairShard by Index in ascending order
 	sortRepairShardsByIndex(repairShards)
-	for _,repairShard := range repairShards {
+	for _, repairShard := range repairShards {
 		fmt.Printf("Repair shard of index : %d \n", repairShard.index)
 	}
 	// Do the retrieval depending on the strategy
@@ -1675,7 +1674,9 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
 		for _, shard := range repairShards {
 			if len(shard.cids) > 0 {
 				go func(i int, shard pinwithmeta) {
+					
 					bytess, _ := ipfs.BlockGet(shard.cids[i])
+					fmt.Printf("Ask for : %s \n", shard.cids[i])
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
