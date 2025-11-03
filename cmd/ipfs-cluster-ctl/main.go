@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	ft "github.com/ipfs/boxo/ipld/unixfs"
 	"io"
 	"log"
 	"os"
@@ -681,6 +682,30 @@ Read a file from the system.
 				}
 				//HTTP Request of IPFS ls of the hash
 				pin, err := globalClient.Allocation(ctx, cid)
+				rootCid := pin.Reference.Cid.String()
+
+				var dagNode map[string]interface{}
+				errr := globalClient.IPFS(ctx).DagGet(rootCid, &dagNode)
+				if errr != nil {
+					log.Fatal(err)
+				}
+
+				// Extract the raw Data field
+				dataInterface, ok := dagNode["Data"].([]byte)
+				if !ok {
+					log.Fatal("DAG node does not contain raw data")
+				}
+
+				// Decode UnixFS node
+				fsNode, err := ft.FromBytes(dataInterface)
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				// Get the file size
+				fileSize := fsNode.Filesize
+				fmt.Printf("File size from DAG root: %d bytes\n", fileSize)
+
 				if err != nil {
 					return fmt.Errorf("could not get allocation: %w", err)
 				}
