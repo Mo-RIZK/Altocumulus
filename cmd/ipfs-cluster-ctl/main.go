@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -690,9 +691,7 @@ Read a file from the system.
 					if err != nil {
 						fmt.Printf("error getting allocations: %v\n", err)
 					}
-					close(shards)
 				}()
-
 				for shard := range shards {
 					//if the name of the shard shard.Name do contain the first name of the pin filtered earlier then take it into consideration
 					if strings.Contains(shard.Name, firstName) {
@@ -700,8 +699,20 @@ Read a file from the system.
 						pinsOfFile = append(pinsOfFile, shard)
 					}
 				}
+				ii := 0
+				var f1 , f2 string
+				var or ,par int 
+				
 				for _, pinn := range pinsOfFile {
 					fmt.Printf("Pin %s:\n", pinn.Name)
+					if ii == 0{
+						f1 = strings.Split(pinn.Name, "(")[1]
+						f2 = strings.Split(f1, ")")[0]
+						or, _ = strconv.Atoi(strings.Split(f2, ",")[0])
+						par, _ = strconv.Atoi(strings.Split(f2, ",")[1])
+						fmt.Printf("Original is %d and parity is %d \n", or, par)
+						ii++
+					}
 				}
 				// Do the retrieval depending on the strategy
 
