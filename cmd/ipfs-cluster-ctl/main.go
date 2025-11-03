@@ -702,39 +702,22 @@ Read a file from the system.
 						pinsOfFile = append(pinsOfFile, shard)
 					}
 				}
-				ii := 0
-				var f1, f2 string
-				var or, par int
+				outDir := "."
+				// Ensure the directory exists
+				os.MkdirAll(outDir, 0755)
 
-				for _, pinn := range pinsOfFile {
-					fmt.Printf("Pin %s:\n", pinn.Name)
-					if ii == 0 {
-						f1 = strings.Split(pinn.Name, "(")[1]
-						f2 = strings.Split(f1, ")")[0]
-						or, _ = strconv.Atoi(strings.Split(f2, ",")[0])
-						par, _ = strconv.Atoi(strings.Split(f2, ",")[1])
-						fmt.Printf("Original is %d and parity is %d \n", or, par)
-						ii++
-					}
+				// Construct full file path
+				outFile := filepath.Join(outDir, hash)
+
+				// Create the file
+				f, errr := os.Create(outFile)
+				if errr != nil {
+					log.Fatalf("failed to create file: %v", err)
 				}
-				// Do the retrieval depending on the strategy
-				ipfs := globalClient.IPFS(ctx)
-				var node map[string]interface{}
-				for _, pinn := range pinsOfFile {
-					ipfs.DagGet(pinn.Cid.String(), &node)
-					// Marshal node to JSON string
-					nodeBytes, err := json.Marshal(node)
-					if err != nil {
-						log.Fatal(err)
-					}
+				defer f.Close()
 
-					nodeStr := string(nodeBytes)
-					cids := doTheProcess(nodeStr)
-					for _, cidd := range cids {
-						fmt.Printf("CID:%s \n", cidd.cid)
-					}
+				RetrieveOriginal(ctx, pinsOfFile, *f)
 
-				}
 				return nil
 			},
 		},
@@ -1564,4 +1547,157 @@ type DataChunk struct {
 			Bytes string `json:"bytes"`
 		} `json:"/"`
 	} `json:"Data"`
+}
+type pinwithmeta struct {
+	pin   api.Pin
+	index int
+	cids  []string
+}
+
+func getShardNumber(pinName string) (int, string, error) {
+	// Assuming the format of pin.Name() is something like "xxx-shard-i"
+	parts := strings.Split(pinName, "-shard-")
+	if len(parts) < 2 {
+		return -1, "", fmt.Errorf("invalid shard format 1")
+	}
+	// Convert shard number (i) to integer
+	num1 := strings.Split(pinName, ")-")
+	if len(num1) < 2 {
+		return -1, "", fmt.Errorf("invalid shard format 2")
+	}
+	num11 := num1[1]
+	if strings.Contains(pinName, "Rep") {
+		num2 := strings.Split(num11, "Rep")
+		if len(num2) < 2 {
+			return -1, "", fmt.Errorf("invalid shard format 3")
+		}
+		num, err := strconv.Atoi(num2[0])
+		name := parts[0]
+		fmt.Fprintf(os.Stdout, "getShardNumber : name is %s and number is : %d \n", name, num)
+		return num, name, err
+	} else {
+		num, err := strconv.Atoi(num11)
+		name := parts[0]
+		fmt.Fprintf(os.Stdout, "getShardNumber : name is %s and number is : %d \n", name, num)
+		return num, name, err
+	}
+}
+func sortRepairShardsByIndex(repairShards []pinwithmeta) {
+	// Sorting c.repairShards slice by index field in increasing order
+	sort.Slice(repairShards, func(i, j int) bool {
+		return repairShards[i].index < repairShards[j].index
+	})
+}
+func RetrieveCids(ctx context.Context, pinwm pinwithmeta) []Chunk {
+	ipfs := globalClient.IPFS(ctx)
+	var node map[string]interface{}
+	ipfs.DagGet(pinwm.pin.Cid.String(), &node)
+	// Marshal node to JSON string
+	nodeBytes, err := json.Marshal(node)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	nodeStr := string(nodeBytes)
+	cids := doTheProcess(nodeStr)
+	return cids
+}
+func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
+	ii := 0
+	var f1, f2 string
+	var or, par int
+	repairShards := make([]pinwithmeta, 0)
+	for _, pinn := range pinsOfFile {
+		fmt.Printf("Pin %s:\n", pinn.Name)
+		if ii == 0 {
+			f1 = strings.Split(pinn.Name, "(")[1]
+			f2 = strings.Split(f1, ")")[0]
+			or, _ = strconv.Atoi(strings.Split(f2, ",")[0])
+			par, _ = strconv.Atoi(strings.Split(f2, ",")[1])
+			fmt.Printf("Original is %d and parity is %d \n", or, par)
+			ii++
+		}
+		pinnShardNum, _, err := getShardNumber(pinn.Name)
+		if err != nil {
+			fmt.Println("Error:", err)
+			continue
+		}
+		if pinnShardNum <= or {
+			pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
+			repairShards = append(repairShards, pinnn)
+		}
+
+	}
+	// Sort repairShard by Index in ascending order
+	sortRepairShardsByIndex(repairShards)
+	// Do the retrieval depending on the strategy
+	ipfs := globalClient.IPFS(ctx)
+	var muu sync.Mutex
+	var wgg sync.WaitGroup
+	wgg.Add(or)
+	ret := 0
+	for i, pinwm := range repairShards {
+		go func(pinwm pinwithmeta, i int) {
+			cidss := RetrieveCids(ctx, pinwm)
+			muu.Lock()
+			if ret < or {
+				ret++
+				for j, _ := range cidss {
+					repairShards[i].cids = append(repairShards[i].cids, cidss[j].cid)
+				}
+				wgg.Done()
+			} else {
+				for j, _ := range cidss {
+					repairShards[i].cids = append(repairShards[i].cids, cidss[j].cid)
+				}
+			}
+			muu.Unlock()
+
+		}(pinwm, i)
+	}
+	wgg.Wait()
+	k := 0
+	repairShards = repairShards[:or]
+	times := len(repairShards[k].cids)
+	//open gourotines to retrieve data in parallel
+	wg := new(sync.WaitGroup)
+	mu := new(sync.Mutex)
+	for i := 0; i < times; i++ {
+		retrieved := 0
+		reconstructshards := make([][]byte, or+par)
+		wg.Add(or)
+		for _, shard := range repairShards {
+			if len(shard.cids) > 0 {
+				go func(i int, shard pinwithmeta) {
+					sss := time.Now()
+					bytess, _ := ipfs.BlockGet(shard.cids[i])
+					nnn := time.Since(sss)
+					fmt.Printf("REPAIR GOT HERE FOR : %s \n", nnn.String())
+					mu.Lock()
+					if retrieved < or {
+						retrieved++
+						reconstructshards[(shard.index-1)%(or+par)] = bytess
+						mu.Unlock()
+						wg.Done()
+					} else {
+						mu.Unlock()
+					}
+
+				}(i, shard)
+			}
+		}
+		wg.Wait()
+		twrite := make([]byte,0)
+		for _, shard := range reconstructshards {
+			if len(shard) == 0 {
+				continue
+			}
+			twrite = append(twrite, shard...)
+		}
+		_, err := file.Write(twrite)
+		if err != nil {
+			log.Fatalf("failed to write shard: %v", err)
+		}
+	}
+	return
 }
