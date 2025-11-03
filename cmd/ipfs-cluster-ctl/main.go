@@ -1600,9 +1600,6 @@ func RetrieveCids(ctx context.Context, pinwm pinwithmeta) []Chunk {
 
 	nodeStr := string(nodeBytes)
 	cids := doTheProcess(nodeStr)
-	for _,cid := range cids {
-		fmt.Fprintf(os.Stdout, "CID: %s \n", cid.cid)
-	}
 	return cids
 }
 func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
@@ -1631,8 +1628,14 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
 		}
 
 	}
+	for _,repairShard := range repairShards {
+		fmt.Printf("Repair shard of index : %d \n", repairShard.index)
+	}
 	// Sort repairShard by Index in ascending order
 	sortRepairShardsByIndex(repairShards)
+	for _,repairShard := range repairShards {
+		fmt.Printf("Repair shard of index : %d \n", repairShard.index)
+	}
 	// Do the retrieval depending on the strategy
 	ipfs := globalClient.IPFS(ctx)
 	var muu sync.Mutex
