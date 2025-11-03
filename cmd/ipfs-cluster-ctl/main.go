@@ -1600,6 +1600,9 @@ func RetrieveCids(ctx context.Context, pinwm pinwithmeta) []Chunk {
 
 	nodeStr := string(nodeBytes)
 	cids := doTheProcess(nodeStr)
+	for cid := range cids {
+		fmt.Fprintf(os.Stdout, "CID: %s \n", cid)
+	}
 	return cids
 }
 func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
@@ -1669,10 +1672,7 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
 		for _, shard := range repairShards {
 			if len(shard.cids) > 0 {
 				go func(i int, shard pinwithmeta) {
-					sss := time.Now()
 					bytess, _ := ipfs.BlockGet(shard.cids[i])
-					nnn := time.Since(sss)
-					fmt.Printf("REPAIR GOT HERE FOR : %s \n", nnn.String())
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
@@ -1687,7 +1687,7 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
 			}
 		}
 		wg.Wait()
-		twrite := make([]byte,0)
+		twrite := make([]byte, 0)
 		for _, shard := range reconstructshards {
 			if len(shard) == 0 {
 				continue
