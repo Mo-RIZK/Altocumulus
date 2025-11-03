@@ -681,21 +681,15 @@ Read a file from the system.
 					return fmt.Errorf("could not get allocation: %w", err)
 				}
 
-				if pin.Reference != nil {
-					dataRoot := *pin.Reference
-					fmt.Printf("Cid of the main root in cluster state is : %s and the Data root CID from Reference: %s and the name is : %s \n", pin.Cid.String(), dataRoot.String(), pin.Name)
-					//send a get request to ipfs to do the retrieval
-					//ipfs := globalClient.IPFS(ctx)
-					/*errr := ipfs.Get(dataRoot.String(), ".")
-					if errr != nil {
-						fmt.Printf("Problemmmmmm in gettinggggg %s \n", errr.Error())
-					}*/
-					//add flags for the destination and that stuff
-				} else {
-					fmt.Println("No data root reference found in pin")
-				}
-				//we will get the shards cids
-				//is the links saved in the shard
+				// get the name of the file in the cluster dag pin.Name and filter it to get the first name
+				firstName := strings.Split(pin.Name, "clusterDAG")[0]
+				fmt.Printf("The first name of the file is %s:\n", firstName)
+				shards := make(chan api.Pin)
+				globalClient.Allocations(ctx, api.ShardType, shards)
+				//for shard := range shards {
+					//if the name of the shard shard.Name do contain the first name of the pin filtered earlier then take it into consideration
+				//}
+				// Do the retrieval depending on the strategy
 
 				return nil
 			},
