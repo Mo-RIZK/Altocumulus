@@ -684,27 +684,20 @@ Read a file from the system.
 				pin, err := globalClient.Allocation(ctx, cid)
 				rootCid := pin.Reference.Cid.String()
 
-				var dagNode map[string]interface{}
-				errr := globalClient.IPFS(ctx).DagGet(rootCid, &dagNode)
-				if errr != nil {
-					log.Fatal(err)
-				}
-
-				// Extract the raw Data field
-				dataInterface, ok := dagNode["Data"].([]byte)
-				if !ok {
-					log.Fatal("DAG node does not contain raw data")
-				}
-
-				// Decode UnixFS node
-				fsNode, err := ft.FromBytes(dataInterface)
+				blockData, err := globalClient.IPFS(ctx).BlockGet(rootCid)
 				if err != nil {
 					log.Fatal(err)
 				}
 
-				// Get the file size
-				fileSize := fsNode.Filesize
-				fmt.Printf("File size from DAG root: %d bytes\n", fileSize)
+				// Decode the UnixFS node
+				fsNode, err := ft.FromBytes(blockData)
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				// Get file size
+				fmt.Printf("File size: %d bytes\n", fsNode.Filesize)
+
 
 				if err != nil {
 					return fmt.Errorf("could not get allocation: %w", err)
