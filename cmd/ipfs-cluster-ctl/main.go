@@ -1669,14 +1669,14 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
 	mu := new(sync.Mutex)
 	for i := 0; i < times; i++ {
 		retrieved := 0
-		reconstructshards := make([][]byte, or+par)
+		reconstructshards := make([][]byte, or)
 		wg.Add(or)
 		for _, shard := range repairShards {
 			if len(shard.cids) > 0 {
 				go func(i int, shard pinwithmeta) {
-					
+
 					bytess, _ := ipfs.BlockGet(shard.cids[i])
-					fmt.Printf("Ask for : %s \n", shard.cids[i])
+					fmt.Printf("Ask for : %s with length : %d \n", shard.cids[i], len(bytess))
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
@@ -1691,16 +1691,12 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
 			}
 		}
 		wg.Wait()
-		twrite := make([]byte, 0)
+		//twrite := make([]byte, 0)
 		for _, shard := range reconstructshards {
-			if len(shard) == 0 {
-				continue
+			_, err := file.Write(shard)
+			if err != nil {
+				log.Fatalf("failed to write shard: %v", err)
 			}
-			twrite = append(twrite, shard...)
-		}
-		_, err := file.Write(twrite)
-		if err != nil {
-			log.Fatalf("failed to write shard: %v", err)
 		}
 	}
 	return
