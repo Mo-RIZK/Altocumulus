@@ -4,11 +4,13 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -700,12 +702,12 @@ Read a file from the system.
 					}
 				}
 				ii := 0
-				var f1 , f2 string
-				var or ,par int 
-				
+				var f1, f2 string
+				var or, par int
+
 				for _, pinn := range pinsOfFile {
 					fmt.Printf("Pin %s:\n", pinn.Name)
-					if ii == 0{
+					if ii == 0 {
 						f1 = strings.Split(pinn.Name, "(")[1]
 						f2 = strings.Split(f1, ")")[0]
 						or, _ = strconv.Atoi(strings.Split(f2, ",")[0])
@@ -715,7 +717,12 @@ Read a file from the system.
 					}
 				}
 				// Do the retrieval depending on the strategy
-
+				ipfs := globalClient.IPFS(ctx)
+				var node map[string]interface{}
+				for _, pinn := range pinsOfFile {
+					ipfs.DagGet(pinn.Cid.String(),&node)
+					fmt.Printf("The data is %s \n", node)
+				}
 				return nil
 			},
 		},
@@ -1495,4 +1502,54 @@ func writeChunksFromChannel(chunks <-chan []byte, outdir, filename string) error
 
 	fmt.Printf("File successfully written to %s\n", outpath)
 	return nil
+}
+func doTheProcess(nn string) []Chunk {
+	parsedData, _ := ConvertStringToJSON(nn)
+	cidss := make([]Chunk, 0)
+	for key, value := range parsedData {
+		// if the get node format do not contain data then we will be passing through the nodes inside each shard
+
+		ke, _ := strconv.Atoi(key)
+		// Print the CID value from the nested map
+		if Cid, exists := value["/"]; exists {
+			fmt.Printf("%s\n", Cid)
+			ch := Chunk{index: ke, cid: Cid}
+			cidss = append(cidss, ch)
+			sort.Slice(cidss, func(i, j int) bool {
+				return cidss[i].index < cidss[j].index
+			})
+
+			//GetBytesFromData(nnn)
+
+		}
+	}
+	return cidss
+}
+
+type Chunk struct {
+	cid   string
+	index int
+}
+
+// ConvertStringToJSON parses the input string and converts it to JSON.
+func ConvertStringToJSON(input string) (Data, error) {
+	// Define a variable to hold the parsed JSON data
+	var result Data
+
+	// Parse the input string into JSON format
+	err := json.Unmarshal([]byte(input), &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+type Data map[string]map[string]string
+type DataChunk struct {
+	Dataa struct {
+		Slash struct {
+			Bytes string `json:"bytes"`
+		} `json:"/"`
+	} `json:"Data"`
 }
