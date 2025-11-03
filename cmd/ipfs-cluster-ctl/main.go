@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -514,7 +515,9 @@ content.
 				p.ReplicationFactorMax = c.Int("replication-max")
 				p.O = original
 				p.P = parity
-				p.Seq = seq
+				if seq {
+					p.Seq = seq
+				}
 				if original == 0 || parity == 0 {
 					checkErr("", errors.New("Make sure of a valid parameters for erasure coding "))
 				}
@@ -655,8 +658,8 @@ Read a file from the system.
 				}
 
 				mechanism := c.String("mechanism")
-				if mechanism != "originalN" && mechanism != "allN" && mechanism != "Rep" && mechanism != "ECWI" {
-					return fmt.Errorf("invalid mechanism '%s': must be one of originalN, allN, Rep, ECWI", mechanism)
+				if mechanism != "originalN" && mechanism != "allN" && mechanism != "Rep" && mechanism != "ECWID" {
+					return fmt.Errorf("invalid mechanism '%s': must be one of originalN, allN, Rep, ECWID", mechanism)
 				}
 				pinInfo, err := globalClient.Status(ctx, cid, false)
 				if err != nil {
@@ -680,16 +683,20 @@ Read a file from the system.
 
 				if pin.Reference != nil {
 					dataRoot := *pin.Reference
-					fmt.Printf("Cid of the main root in cluster state is : %s and the Data root CID from Reference: %s\n", pin.Cid.String(), dataRoot.String())
+					fmt.Printf("Cid of the main root in cluster state is : %s and the Data root CID from Reference: %s and the name is : %s \n", pin.Cid.String(), dataRoot.String(), pin.Name)
 					//send a get request to ipfs to do the retrieval
-					ipfs := globalClient.IPFS(ctx)
-					errr := ipfs.Get(dataRoot.String(),".")
-					if errr != nil {fmt.Printf("Problemmmmmm in gettinggggg %s \n", errr.Error()) }
+					//ipfs := globalClient.IPFS(ctx)
+					/*errr := ipfs.Get(dataRoot.String(), ".")
+					if errr != nil {
+						fmt.Printf("Problemmmmmm in gettinggggg %s \n", errr.Error())
+					}*/
+					//add flags for the destination and that stuff
 				} else {
 					fmt.Println("No data root reference found in pin")
 				}
 				//we will get the shards cids
 				//is the links saved in the shard
+
 				return nil
 			},
 		},
@@ -1445,6 +1452,28 @@ func parseMetadata(metadata []string) map[string]string {
 // 	// Register/enable the trace exporter
 // 	trace.RegisterExporter(je)
 
-// 	// For demo purposes, set the trace sampling probability to be high
-// 	trace.ApplyConfig(trace.Config{DefaultSampler: trace.ProbabilitySampler(1.0)})
-// }
+//		// For demo purposes, set the trace sampling probability to be high
+//		trace.ApplyConfig(trace.Config{DefaultSampler: trace.ProbabilitySampler(1.0)})
+//	}
+func writeChunksFromChannel(chunks <-chan []byte, outdir, filename string) error {
+	// Ensure the output directory exists
+	if err := os.MkdirAll(outdir, 0755); err != nil {
+		return err
+	}
+
+	outpath := filepath.Join(outdir, filename)
+	f, err := os.Create(outpath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	for chunk := range chunks {
+		if _, err := f.Write(chunk); err != nil {
+			return err
+		}
+	}
+
+	fmt.Printf("File successfully written to %s\n", outpath)
+	return nil
+}
