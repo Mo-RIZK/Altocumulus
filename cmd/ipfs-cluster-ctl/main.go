@@ -680,15 +680,29 @@ Read a file from the system.
 				if err != nil {
 					return fmt.Errorf("could not get allocation: %w", err)
 				}
-
+				pinsOfFile := make([]api.Pin, 0)
 				// get the name of the file in the cluster dag pin.Name and filter it to get the first name
-				firstName := strings.Split(pin.Name, "clusterDAG")[0]
+				firstName := strings.Split(pin.Name, "-clusterDAG")[0]
 				fmt.Printf("The first name of the file is %s:\n", firstName)
 				shards := make(chan api.Pin)
-				globalClient.Allocations(ctx, api.ShardType, shards)
-				//for shard := range shards {
+				go func() {
+					err := globalClient.Allocations(ctx, api.ShardType, shards)
+					if err != nil {
+						fmt.Printf("error getting allocations: %v\n", err)
+					}
+					close(shards)
+				}()
+
+				for shard := range shards {
 					//if the name of the shard shard.Name do contain the first name of the pin filtered earlier then take it into consideration
-				//}
+					if strings.Contains(shard.Name, firstName) {
+						//save this pin in memory
+						pinsOfFile = append(pinsOfFile, shard)
+					}
+				}
+				for _, pinn := range pinsOfFile {
+					fmt.Printf("Pin %s:\n", pinn.Name)
+				}
 				// Do the retrieval depending on the strategy
 
 				return nil
