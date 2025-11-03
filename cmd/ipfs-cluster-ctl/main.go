@@ -1675,7 +1675,19 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
 			if len(shard.cids) > 0 {
 				go func(i int, shard pinwithmeta) {
 
-					bytess, _ := ipfs.BlockGet(shard.cids[i])
+					cidStr := shard.cids[i]
+					reader, err := ipfs.Cat(cidStr)
+					if err != nil {
+						log.Fatal(err)
+					}
+					defer reader.Close()
+
+					// Read the entire file into memory
+					bytess, err := io.ReadAll(reader)
+					if err != nil {
+						log.Fatal(err)
+					}
+					//bytess, _ := ipfs.BlockGet(shard.cids[i])
 					fmt.Printf("Ask for : %s with length : %d \n", shard.cids[i], len(bytess))
 					mu.Lock()
 					if retrieved < or {
@@ -1686,13 +1698,13 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
 					} else {
 						mu.Unlock()
 					}
-
 				}(i, shard)
 			}
 		}
 		wg.Wait()
 		//twrite := make([]byte, 0)
 		for _, shard := range reconstructshards {
+
 			_, err := file.Write(shard)
 			if err != nil {
 				log.Fatalf("failed to write shard: %v", err)
