@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	ft "github.com/ipfs/boxo/ipld/unixfs"
 	"io"
 	"log"
 	"os"
@@ -684,19 +683,18 @@ Read a file from the system.
 				pin, err := globalClient.Allocation(ctx, cid)
 				rootCid := pin.Reference.Cid.String()
 
-				blockData, err := globalClient.IPFS(ctx).BlockGet(rootCid)
+				ipfs := globalClient.IPFS(ctx)
+
+				// Fetch DAG node from IPFS
+				stat, err := ipfs.FilesStat(ctx, "/ipfs/"+rootCid)
 				if err != nil {
-					log.Fatal(err)
+					log.Fatalf("FilesStat failed: %v", err)
 				}
 
-				// Decode the UnixFS node
-				fsNode, err := ft.FromBytes(blockData)
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				// Get file size
-				fmt.Printf("File size: %d bytes\n", fsNode.Filesize)
+				fmt.Printf("File CID: %s\n", stat.Hash)
+				fmt.Printf("File size: %d bytes\n", stat.Size)
+				fmt.Printf("Cumulative size (including all blocks): %d bytes\n", stat.CumulativeSize)
+				fmt.Printf("Number of blocks: %d\n", stat.Blocks)
 
 				if err != nil {
 					return fmt.Errorf("could not get allocation: %w", err)
