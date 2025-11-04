@@ -698,7 +698,6 @@ Read a file from the system.
 				// Get file size
 				fmt.Printf("File size: %d bytes\n", fsNode.Filesize)
 
-
 				if err != nil {
 					return fmt.Errorf("could not get allocation: %w", err)
 				}
@@ -721,6 +720,7 @@ Read a file from the system.
 					}
 				}
 				outDir := "."
+
 				// Ensure the directory exists
 				os.MkdirAll(outDir, 0755)
 
