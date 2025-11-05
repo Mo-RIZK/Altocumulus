@@ -1823,6 +1823,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 			if retrieved < or {
 				shards[(shard.index-1)%(or+par)] = sharddata
 				wg.Done()
+				retrieved ++ 
 			}
 			mu.Unlock()
 			return
@@ -1838,14 +1839,14 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 	//reconstruction phase add code
 
 	for _, shard := range shards {
-			if written+uint64(len(shard)) <= filesize {
-				file.Write(shard)
-				written += uint64(len(shard))
-			} else {
-				towrite := shard[0 : filesize-written]
-				file.Write(towrite)
-				return
-			}
+		if written+uint64(len(shard)) <= filesize {
+			file.Write(shard)
+			written += uint64(len(shard))
+		} else {
+			towrite := shard[0 : filesize-written]
+			file.Write(towrite)
+			return
+		}
 	}
 	return
 }
