@@ -1805,7 +1805,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 	mu := new(sync.Mutex)
 	for i := 0; i < times; i++ {
 		retrieved := 0
-		wg.Add(or)
+		wg.Add(or+par)
 		for _, shard := range repairShards {
 			if len(shard.cids) > 0 {
 				go func(i int, shard pinwithmeta) {
@@ -1824,7 +1824,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 					}
 					//bytess, _ := ipfs.BlockGet(shard.cids[i])
 					mu.Lock()
-					if retrieved < or {
+					if retrieved < or+par {
 						retrieved++
 						shards[(shard.index-1)%(or+par)] = append(shards[(shard.index-1)%(or+par)], bytess...)
 						mu.Unlock()
@@ -1838,7 +1838,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 		wg.Wait()
 		//twrite := make([]byte, 0)
 	}
-	for i,shard := range shards{
+	for i, shard := range shards {
 		fmt.Printf("Shard %d of length %d \n", i, len(shard))
 	}
 
