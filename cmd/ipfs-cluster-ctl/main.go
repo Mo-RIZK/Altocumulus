@@ -1810,7 +1810,6 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 				if err != nil {
 					log.Fatal(err)
 				}
-				defer reader.Close()
 
 				// Read the entire file into memory
 				bytess, err := io.ReadAll(reader)
@@ -1818,6 +1817,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 					log.Fatal(err)
 				}
 				sharddata = append(sharddata, bytess...)
+				reader.Close()
 			}
 			mu.Lock()
 			if retrieved < or {
@@ -1838,12 +1838,21 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 
 	//reconstruction phase add code
 
-	for _, shard := range shards {
-		if written+uint64(len(shard)) <= filesize {
-			file.Write(shard)
-			written += uint64(len(shard))
+	keys := make([]int, 0, len(shards))
+	for k := range shards {
+		keys = append(keys, k)
+	}
+
+	// 2. Sort keys from lowest to highest
+	sort.Ints(keys)
+
+	// 3. Concatenate values in order
+	for _, k := range keys {
+		if written+uint64(len(shards[k])) <= filesize {
+			file.Write(shards[k])
+			written += uint64(len(shards[k]))
 		} else {
-			towrite := shard[0 : filesize-written]
+			towrite := shards[k][0 : filesize-written]
 			file.Write(towrite)
 			return
 		}
