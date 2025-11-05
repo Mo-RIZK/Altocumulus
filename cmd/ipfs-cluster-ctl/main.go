@@ -1797,47 +1797,40 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 		}(pinwm, i)
 	}
 	wgg.Wait()
-	shards := make([][]byte, or+par)
-	k := 0
-	times := len(repairShards[k].cids)
-	//open gourotines to retrieve data in parallel
-	wg := new(sync.WaitGroup)
+	shards := make([][]byte,or)
+	retrieved := 0
 	mu := new(sync.Mutex)
-	for i := 0; i < times; i++ {
-		retrieved := 0
-		wg.Add(or+par)
-		for _, shard := range repairShards {
-			if len(shard.cids) > 0 {
-				go func(i int, shard pinwithmeta) {
+	wg := new(sync.WaitGroup)
+	wg.Add(or)
+	for _, shard := range repairShards {
+		go func(shard pinwithmeta) {
+			sharddata := make([]byte,0)
+			for _,cid := range shard.cids{
+				reader, err := ipfs.Cat(cid)
+				if err != nil {
+					log.Fatal(err)
+				}
+				defer reader.Close()
 
-					cidStr := shard.cids[i]
-					reader, err := ipfs.Cat(cidStr)
-					if err != nil {
-						log.Fatal(err)
-					}
-					defer reader.Close()
-
-					// Read the entire file into memory
-					bytess, err := io.ReadAll(reader)
-					if err != nil {
-						log.Fatal(err)
-					}
-					//bytess, _ := ipfs.BlockGet(shard.cids[i])
-					mu.Lock()
-					if retrieved < or+par {
-						retrieved++
-						shards[(shard.index-1)%(or+par)] = append(shards[(shard.index-1)%(or+par)], bytess...)
-						mu.Unlock()
-						wg.Done()
-					} else {
-						mu.Unlock()
-					}
-				}(i, shard)
+				// Read the entire file into memory
+				bytess, err := io.ReadAll(reader)
+				if err != nil {
+					log.Fatal(err)
+				}
+				sharddata = append(sharddata,bytess...)
 			}
-		}
-		wg.Wait()
-		//twrite := make([]byte, 0)
+			mu.Lock()
+			if retrieved < or{
+				shards[(shard.index-1)%(or+par)] = append(shards[(shard.index-1)%(or+par)], sharddata...)
+				wg.Done()
+			}
+			mu.Unlock()
+			return 
+		}(shard)
 	}
+	wg.Wait()
+	
+	//repair if retrieved parity data
 	for i, shard := range shards {
 		fmt.Printf("Shard %d of length %d \n", i, len(shard))
 	}
