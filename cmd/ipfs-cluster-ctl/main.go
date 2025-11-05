@@ -1757,7 +1757,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 			fmt.Println("Error:", err)
 			continue
 		}
-		if pinnShardNum <= or+par {
+		if pinnShardNum <= or {
 			pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
 			repairShards = append(repairShards, pinnn)
 		}
@@ -1775,13 +1775,13 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 	ipfs := globalClient.IPFS(ctx)
 	var muu sync.Mutex
 	var wgg sync.WaitGroup
-	wgg.Add(or + par)
+	wgg.Add(or)
 	ret := 0
 	for i, pinwm := range repairShards {
 		go func(pinwm pinwithmeta, i int) {
 			cidss := RetrieveCids(ctx, pinwm)
 			muu.Lock()
-			if ret < or+par {
+			if ret < or {
 				ret++
 				for j, _ := range cidss {
 					repairShards[i].cids = append(repairShards[i].cids, cidss[j].cid)
@@ -1823,7 +1823,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 			if retrieved < or {
 				shards[(shard.index-1)%(or+par)] = sharddata
 				wg.Done()
-				retrieved ++ 
+				retrieved++
 			}
 			mu.Unlock()
 			return
