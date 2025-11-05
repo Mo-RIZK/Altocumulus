@@ -1757,7 +1757,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 			fmt.Println("Error:", err)
 			continue
 		}
-		if pinnShardNum <= or {
+		if pinnShardNum <= or + par {
 			pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
 			repairShards = append(repairShards, pinnn)
 		}
@@ -1775,13 +1775,13 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 	ipfs := globalClient.IPFS(ctx)
 	var muu sync.Mutex
 	var wgg sync.WaitGroup
-	wgg.Add(or+par)
+	wgg.Add(or + par)
 	ret := 0
 	for i, pinwm := range repairShards {
 		go func(pinwm pinwithmeta, i int) {
 			cidss := RetrieveCids(ctx, pinwm)
 			muu.Lock()
-			if ret < or + par {
+			if ret < or+par {
 				ret++
 				for j, _ := range cidss {
 					repairShards[i].cids = append(repairShards[i].cids, cidss[j].cid)
@@ -1797,7 +1797,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 		}(pinwm, i)
 	}
 	wgg.Wait()
-	shards := make([][]byte,or+par)
+	shards := make([][]byte, or+par)
 	k := 0
 	times := len(repairShards[k].cids)
 	//open gourotines to retrieve data in parallel
@@ -1827,7 +1827,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
-						shards[(shard.index-1)%(or+par)] = append(shards[(shard.index-1)%(or+par)],bytess...)
+						shards[(shard.index-1)%(or+par)] = append(shards[(shard.index-1)%(or+par)], bytess...)
 						mu.Unlock()
 						wg.Done()
 					} else {
@@ -1839,11 +1839,11 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 		wg.Wait()
 		//twrite := make([]byte, 0)
 	}
-	
+
 	//reconstruction phase add code
-	
+
 	for i, shard := range shards {
-		if i<or {
+		if i < or {
 			if written+uint64(len(shard)) <= filesize {
 				file.Write(shard)
 				written += uint64(len(shard))
