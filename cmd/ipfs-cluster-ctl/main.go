@@ -695,6 +695,7 @@ Read a file from the system.
 				fmt.Printf("File size: %d bytes\n", stat.Size)
 				fmt.Printf("Cumulative size (including all blocks): %d bytes\n", stat.CumulativeSize)
 				fmt.Printf("Number of blocks: %d\n", stat.Blocks)
+				filesize := stat.Size
 
 				if err != nil {
 					return fmt.Errorf("could not get allocation: %w", err)
@@ -732,7 +733,7 @@ Read a file from the system.
 				}
 				defer f.Close()
 
-				RetrieveOriginal(ctx, pinsOfFile, *f)
+				RetrieveOriginal(ctx, pinsOfFile, *f,filesize)
 
 				return nil
 			},
@@ -1617,10 +1618,11 @@ func RetrieveCids(ctx context.Context, pinwm pinwithmeta) []Chunk {
 	cids := doTheProcess(nodeStr)
 	return cids
 }
-func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
+func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File,filesize uint64) {
 	ii := 0
 	var f1, f2 string
 	var or, par int
+	var written uint64
 	repairShards := make([]pinwithmeta, 0)
 	for _, pinn := range pinsOfFile {
 		fmt.Printf("Pin %s:\n", pinn.Name)
@@ -1719,11 +1721,16 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File) {
 		}
 		wg.Wait()
 		//twrite := make([]byte, 0)
-		for _, shard := range reconstructshards {
-
-			_, err := file.Write(shard)
-			if err != nil {
-				log.Fatalf("failed to write shard: %v", err)
+		for i, shard := range reconstructshards{
+			if i < or {
+				if written+uint64(len(shard)) <= filesize {
+					file.Write(shard)
+					written += uint64(len(shard))
+				} else {
+					towrite := shard[0 : filesize-written]
+					file.Write(towrite)
+					return
+				}
 			}
 		}
 	}
