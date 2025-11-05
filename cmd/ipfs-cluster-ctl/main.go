@@ -733,8 +733,8 @@ Read a file from the system.
 				}
 				defer f.Close()
 
-				RetrieveOriginal(ctx, pinsOfFile, *f,filesize)
-
+				//RetrieveOriginal(ctx, pinsOfFile, *f,filesize)
+				RetrieveWithStreaming(ctx, pinsOfFile, *f, filesize)
 				return nil
 			},
 		},
@@ -1618,7 +1618,7 @@ func RetrieveCids(ctx context.Context, pinwm pinwithmeta) []Chunk {
 	cids := doTheProcess(nodeStr)
 	return cids
 }
-func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File,filesize uint64) {
+func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesize uint64) {
 	ii := 0
 	var f1, f2 string
 	var or, par int
@@ -1721,7 +1721,7 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File,fi
 		}
 		wg.Wait()
 		//twrite := make([]byte, 0)
-		for i, shard := range reconstructshards{
+		for i, shard := range reconstructshards {
 			if i < or {
 				if written+uint64(len(shard)) <= filesize {
 					file.Write(shard)
@@ -1734,5 +1734,58 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File,fi
 			}
 		}
 	}
+	return
+}
+
+func RetrieveWithStreaming(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesize uint64) {
+	ii := 0
+	var f1, f2 string
+	var or, par int
+	//var written uint64
+	repairShards := make([]pinwithmeta, 0)
+	for _, pinn := range pinsOfFile {
+		fmt.Printf("Pin %s:\n", pinn.Name)
+		if ii == 0 {
+			f1 = strings.Split(pinn.Name, "(")[1]
+			f2 = strings.Split(f1, ")")[0]
+			or, _ = strconv.Atoi(strings.Split(f2, ",")[0])
+			par, _ = strconv.Atoi(strings.Split(f2, ",")[1])
+			fmt.Printf("Original is %d and parity is %d \n", or, par)
+			ii++
+		}
+		pinnShardNum, _, err := getShardNumber(pinn.Name)
+		if err != nil {
+			fmt.Println("Error:", err)
+			continue
+		}
+		if pinnShardNum <= or {
+			pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
+			repairShards = append(repairShards, pinnn)
+		}
+
+	}
+	for _, repairShard := range repairShards {
+		fmt.Printf("Repair shard of index : %d \n", repairShard.index)
+	}
+	// Sort repairShard by Index in ascending order
+	sortRepairShardsByIndex(repairShards)
+	for _, repairShard := range repairShards {
+		fmt.Printf("Repair shard of index : %d \n", repairShard.index)
+	}
+	// Do the retrieval depending on the strategy
+	ipfs := globalClient.IPFS(ctx)
+	reader, err := ipfs.Cat(repairShards[0].pin.Cid.String())
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer reader.Close()
+
+	// Read the entire file into memory
+	bytess, err := io.ReadAll(reader)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//bytess, _ := ipfs.BlockGet(shard.cids[i])
+	fmt.Printf("Ask for : %s with length : %d \n", repairShards[0].pin.Name, len(bytess))
 	return
 }
