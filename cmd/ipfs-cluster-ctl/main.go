@@ -733,8 +733,8 @@ Read a file from the system.
 				}
 				defer f.Close()
 
-				//RetrieveOriginal(ctx, pinsOfFile, *f,filesize)
-				RetrieveWithStreaming(ctx, pinsOfFile, *f, filesize)
+				//RetrieveOriginal(ctx, pinsOfFile, *f, filesize)
+				RetrieveRW(ctx, pinsOfFile, *f, filesize)
 				return nil
 			},
 		},
@@ -1736,12 +1736,11 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File, f
 	}
 	return
 }
-
-func RetrieveWithStreaming(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesize uint64) {
+func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesize uint64) {
 	ii := 0
 	var f1, f2 string
 	var or, par int
-	//var written uint64
+	var written uint64
 	repairShards := make([]pinwithmeta, 0)
 	for _, pinn := range pinsOfFile {
 		fmt.Printf("Pin %s:\n", pinn.Name)
@@ -1774,18 +1773,86 @@ func RetrieveWithStreaming(ctx context.Context, pinsOfFile []api.Pin, file os.Fi
 	}
 	// Do the retrieval depending on the strategy
 	ipfs := globalClient.IPFS(ctx)
-	reader, err := ipfs.Cat(repairShards[0].pin.Cid.String())
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer reader.Close()
+	var muu sync.Mutex
+	var wgg sync.WaitGroup
+	wgg.Add(or+par)
+	ret := 0
+	for i, pinwm := range repairShards {
+		go func(pinwm pinwithmeta, i int) {
+			cidss := RetrieveCids(ctx, pinwm)
+			muu.Lock()
+			if ret < or + par {
+				ret++
+				for j, _ := range cidss {
+					repairShards[i].cids = append(repairShards[i].cids, cidss[j].cid)
+				}
+				wgg.Done()
+			} else {
+				for j, _ := range cidss {
+					repairShards[i].cids = append(repairShards[i].cids, cidss[j].cid)
+				}
+			}
+			muu.Unlock()
 
-	// Read the entire file into memory
-	bytess, err := io.ReadAll(reader)
-	if err != nil {
-		log.Fatal(err)
+		}(pinwm, i)
 	}
-	//bytess, _ := ipfs.BlockGet(shard.cids[i])
-	fmt.Printf("Ask for : %s with length : %d \n", repairShards[0].pin.Name, len(bytess))
+	wgg.Wait()
+	shards := make([][]byte,or+par)
+	k := 0
+	times := len(repairShards[k].cids)
+	//open gourotines to retrieve data in parallel
+	wg := new(sync.WaitGroup)
+	mu := new(sync.Mutex)
+	for i := 0; i < times; i++ {
+		retrieved := 0
+		wg.Add(or)
+		for _, shard := range repairShards {
+			if len(shard.cids) > 0 {
+				go func(i int, shard pinwithmeta) {
+
+					cidStr := shard.cids[i]
+					reader, err := ipfs.Cat(cidStr)
+					if err != nil {
+						log.Fatal(err)
+					}
+					defer reader.Close()
+
+					// Read the entire file into memory
+					bytess, err := io.ReadAll(reader)
+					if err != nil {
+						log.Fatal(err)
+					}
+					//bytess, _ := ipfs.BlockGet(shard.cids[i])
+					fmt.Printf("Ask for : %s with length : %d \n", shard.cids[i], len(bytess))
+					mu.Lock()
+					if retrieved < or {
+						retrieved++
+						shards[(shard.index-1)%(or+par)] = append(shards[(shard.index-1)%(or+par)],bytess...)
+						mu.Unlock()
+						wg.Done()
+					} else {
+						mu.Unlock()
+					}
+				}(i, shard)
+			}
+		}
+		wg.Wait()
+		//twrite := make([]byte, 0)
+	}
+	
+	//reconstruction phase add code
+	
+	for i, shard := range shards {
+		if i<or {
+			if written+uint64(len(shard)) <= filesize {
+				file.Write(shard)
+				written += uint64(len(shard))
+			} else {
+				towrite := shard[0 : filesize-written]
+				file.Write(towrite)
+				return
+			}
+		}
+	}
 	return
 }
