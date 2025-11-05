@@ -1757,7 +1757,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 			fmt.Println("Error:", err)
 			continue
 		}
-		if pinnShardNum <= or + par {
+		if pinnShardNum <= or+par {
 			pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
 			repairShards = append(repairShards, pinnn)
 		}
@@ -1823,7 +1823,6 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 						log.Fatal(err)
 					}
 					//bytess, _ := ipfs.BlockGet(shard.cids[i])
-					fmt.Printf("Ask for : %s with length : %d \n", shard.cids[i], len(bytess))
 					mu.Lock()
 					if retrieved < or {
 						retrieved++
@@ -1838,6 +1837,9 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 		}
 		wg.Wait()
 		//twrite := make([]byte, 0)
+	}
+	for i,shard := range shards{
+		fmt.Printf("Shard %d of length %d \n", i, len(shard))
 	}
 
 	//reconstruction phase add code
