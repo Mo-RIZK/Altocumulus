@@ -1797,15 +1797,15 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 		}(pinwm, i)
 	}
 	wgg.Wait()
-	shards := make([][]byte,or)
+	shards := make(map[int][]byte)
 	retrieved := 0
 	mu := new(sync.Mutex)
 	wg := new(sync.WaitGroup)
 	wg.Add(or)
 	for _, shard := range repairShards {
 		go func(shard pinwithmeta) {
-			sharddata := make([]byte,0)
-			for _,cid := range shard.cids{
+			sharddata := make([]byte, 0)
+			for _, cid := range shard.cids {
 				reader, err := ipfs.Cat(cid)
 				if err != nil {
 					log.Fatal(err)
@@ -1817,19 +1817,19 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 				if err != nil {
 					log.Fatal(err)
 				}
-				sharddata = append(sharddata,bytess...)
+				sharddata = append(sharddata, bytess...)
 			}
 			mu.Lock()
-			if retrieved < or{
-				shards[(shard.index-1)%(or+par)] = append(shards[(shard.index-1)%(or+par)], sharddata...)
+			if retrieved < or {
+				shards[(shard.index-1)%(or+par)] = sharddata
 				wg.Done()
 			}
 			mu.Unlock()
-			return 
+			return
 		}(shard)
 	}
 	wg.Wait()
-	
+
 	//repair if retrieved parity data
 	for i, shard := range shards {
 		fmt.Printf("Shard %d of length %d \n", i, len(shard))
@@ -1837,8 +1837,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 
 	//reconstruction phase add code
 
-	for i, shard := range shards {
-		if i < or {
+	for _, shard := range shards {
 			if written+uint64(len(shard)) <= filesize {
 				file.Write(shard)
 				written += uint64(len(shard))
@@ -1847,7 +1846,6 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 				file.Write(towrite)
 				return
 			}
-		}
 	}
 	return
 }
