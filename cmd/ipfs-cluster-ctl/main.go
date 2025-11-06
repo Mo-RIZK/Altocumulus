@@ -735,7 +735,10 @@ Read a file from the system.
 				defer f.Close()
 
 				//RetrieveOriginal(ctx, pinsOfFile, *f, filesize)
-				RetrieveRW(ctx, pinsOfFile, *f, filesize)
+				internal, download, recontruction := RetrieveRW(ctx, pinsOfFile, *f, filesize)
+				fmt.Printf("New log reconstruction and verification time is : %s\n", recontruction.String())
+				fmt.Printf("Time taken to get the internal nodes on the level before the last one: %s\n", internal.String())
+				fmt.Printf("New log download time is : %s\n", download.String())
 				return nil
 			},
 		},
@@ -1737,11 +1740,13 @@ func RetrieveOriginal(ctx context.Context, pinsOfFile []api.Pin, file os.File, f
 	}
 	return
 }
-func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesize uint64) {
+func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesize uint64) (time.Duration, time.Duration, time.Duration) {
 	ii := 0
 	var f1, f2 string
 	var or, par int
 	var written uint64
+	var timeinternal, downloadtime, reconstructiontime time.Duration
+	start1 := time.Now()
 	repairShards := make([]pinwithmeta, 0)
 	for _, pinn := range pinsOfFile {
 		fmt.Printf("Pin %s:\n", pinn.Name)
@@ -1770,6 +1775,8 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 	for _, repairShard := range repairShards {
 		fmt.Printf("Repair shard of index : %d \n", repairShard.index)
 	}
+	timeinternal = time.Since(start1)
+	start2 := time.Now()
 	// Do the retrieval depending on the strategy
 	ipfs := globalClient.IPFS(ctx)
 	shards := make(map[int][][]byte)
@@ -1814,10 +1821,11 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 	for i, shard := range shards {
 		fmt.Printf("Shard %d of length %d \n", i, len(shard))
 	}
-
+	downloadtime = time.Since(start2)
 	towriteshards := make([][]byte, or)
 	//reconstruction phase add code
 	if reconstruct {
+		start3 := time.Now()
 		fmt.Printf("reconstruction done!!!! \n")
 		nbchunks := 0
 		enc, _ := reedsolomon.New(or, par)
@@ -1839,6 +1847,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 				}
 			}
 		}
+		reconstructiontime = time.Since(start3)
 		for _, sh := range towriteshards {
 			if written+uint64(len(sh)) <= filesize {
 				file.Write(sh)
@@ -1846,10 +1855,11 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 			} else {
 				towrite := sh[0 : filesize-written]
 				file.Write(towrite)
-				return
+				return timeinternal, downloadtime, reconstructiontime
 			}
 		}
 	} else {
+		reconstructiontime = 0
 		fmt.Printf("original data retrieved !!!! \n")
 		keys := make([]int, 0, len(shards))
 		for k := range shards {
@@ -1868,10 +1878,10 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 				} else {
 					towrite := chunk[0 : filesize-written]
 					file.Write(towrite)
-					return
+					return timeinternal, downloadtime, reconstructiontime
 				}
 			}
 		}
-		return
 	}
+	return timeinternal, downloadtime, reconstructiontime
 }
