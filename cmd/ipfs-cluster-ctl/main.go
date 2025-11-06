@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/klauspost/reedsolomon"
 	"io"
 	"log"
 	"os"
@@ -1757,8 +1758,8 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 			fmt.Println("Error:", err)
 			continue
 		}
-			pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
-			repairShards = append(repairShards, pinnn)
+		pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
+		repairShards = append(repairShards, pinnn)
 
 	}
 	for _, repairShard := range repairShards {
@@ -1771,15 +1772,16 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 	}
 	// Do the retrieval depending on the strategy
 	ipfs := globalClient.IPFS(ctx)
-	shards := make(map[int][]byte)
+	shards := make(map[int][][]byte)
 	var muu sync.Mutex
 	var wgg sync.WaitGroup
 	wgg.Add(or)
+	reconstruct := false
 	ret := 0
 	for i, pinwm := range repairShards {
 		go func(pinwm pinwithmeta, i int) {
 			cidss := RetrieveCids(ctx, pinwm)
-			sharddata := make([]byte, 0)
+			sharddata := make([][]byte, 0)
 			for _, cid := range cidss {
 				reader, err := ipfs.Cat(cid.cid)
 				if err != nil {
@@ -1791,11 +1793,14 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 				if err != nil {
 					log.Fatal(err)
 				}
-				sharddata = append(sharddata, bytess...)
+				sharddata = append(sharddata, bytess)
 				reader.Close()
 			}
 			muu.Lock()
 			if ret < or {
+				if !reconstruct && (pinwm.index-1)%(or+par) >= or {
+					reconstruct = true
+				}
 				ret++
 				shards[(pinwm.index-1)%(or+par)] = sharddata
 				wgg.Done()
@@ -1810,26 +1815,61 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 		fmt.Printf("Shard %d of length %d \n", i, len(shard))
 	}
 
+	towriteshards := make([][]byte, or)
 	//reconstruction phase add code
-
-	keys := make([]int, 0, len(shards))
-	for k := range shards {
-		keys = append(keys, k)
-	}
-
-	// 2. Sort keys from lowest to highest
-	sort.Ints(keys)
-
-	// 3. Concatenate values in order
-	for _, k := range keys {
-		if written+uint64(len(shards[k])) <= filesize {
-			file.Write(shards[k])
-			written += uint64(len(shards[k]))
-		} else {
-			towrite := shards[k][0 : filesize-written]
-			file.Write(towrite)
-			return
+	if reconstruct {
+		nbchunks := 0
+		enc, _ := reedsolomon.New(or, par)
+		for _, shard := range shards {
+			nbchunks += len(shard)
+			break
 		}
+		var reconstructchunks [][]byte
+		for i := 0; i < nbchunks; i++ {
+			reconstructchunks = make([][]byte, or+par)
+			for index, shard := range shards {
+				reconstructchunks[index] = shard[i]
+			}
+			//do the reconstruction
+			enc.Reconstruct(reconstructchunks)
+			for j, chunk := range reconstructchunks {
+				if j < or {
+					towriteshards[j] = append(towriteshards[j], chunk...)
+				}
+			}
+		}
+		for _, sh := range towriteshards {
+			if written+uint64(len(sh)) <= filesize {
+				file.Write(sh)
+				written += uint64(len(sh))
+			} else {
+				towrite := sh[0 : filesize-written]
+				file.Write(towrite)
+				return
+			}
+		}
+	} else {
+		keys := make([]int, 0, len(shards))
+		for k := range shards {
+			keys = append(keys, k)
+		}
+
+		// 2. Sort keys from lowest to highest
+		sort.Ints(keys)
+
+		// 3. Concatenate values in order
+		for _, k := range keys {
+			for _,chunk := range shards[k]{
+				if written+uint64(len(chunk)) <= filesize {
+					file.Write(chunk)
+					written += uint64(len(chunk))
+				} else {
+					towrite := chunk[0 : filesize-written]
+					file.Write(towrite)
+					return
+				}
+			}
+		}
+		return
 	}
-	return
 }
