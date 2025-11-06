@@ -1818,6 +1818,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 	towriteshards := make([][]byte, or)
 	//reconstruction phase add code
 	if reconstruct {
+		fmt.Printf("reconstruction done!!!! \n")
 		nbchunks := 0
 		enc, _ := reedsolomon.New(or, par)
 		for _, shard := range shards {
@@ -1849,6 +1850,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 			}
 		}
 	} else {
+		fmt.Printf("original data retrieved !!!! \n")
 		keys := make([]int, 0, len(shards))
 		for k := range shards {
 			keys = append(keys, k)
@@ -1859,7 +1861,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 
 		// 3. Concatenate values in order
 		for _, k := range keys {
-			for _,chunk := range shards[k]{
+			for _, chunk := range shards[k] {
 				if written+uint64(len(chunk)) <= filesize {
 					file.Write(chunk)
 					written += uint64(len(chunk))
