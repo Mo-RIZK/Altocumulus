@@ -1757,10 +1757,8 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 			fmt.Println("Error:", err)
 			continue
 		}
-		if pinnShardNum <= or {
 			pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
 			repairShards = append(repairShards, pinnn)
-		}
 
 	}
 	for _, repairShard := range repairShards {
@@ -1773,6 +1771,7 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 	}
 	// Do the retrieval depending on the strategy
 	ipfs := globalClient.IPFS(ctx)
+	shards := make(map[int][]byte)
 	var muu sync.Mutex
 	var wgg sync.WaitGroup
 	wgg.Add(or)
@@ -1780,33 +1779,9 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 	for i, pinwm := range repairShards {
 		go func(pinwm pinwithmeta, i int) {
 			cidss := RetrieveCids(ctx, pinwm)
-			muu.Lock()
-			if ret < or {
-				ret++
-				for j, _ := range cidss {
-					repairShards[i].cids = append(repairShards[i].cids, cidss[j].cid)
-				}
-				wgg.Done()
-			} else {
-				for j, _ := range cidss {
-					repairShards[i].cids = append(repairShards[i].cids, cidss[j].cid)
-				}
-			}
-			muu.Unlock()
-
-		}(pinwm, i)
-	}
-	wgg.Wait()
-	shards := make(map[int][]byte)
-	retrieved := 0
-	mu := new(sync.Mutex)
-	wg := new(sync.WaitGroup)
-	wg.Add(or)
-	for _, shard := range repairShards {
-		go func(shard pinwithmeta) {
 			sharddata := make([]byte, 0)
-			for _, cid := range shard.cids {
-				reader, err := ipfs.Cat(cid)
+			for _, cid := range cidss {
+				reader, err := ipfs.Cat(cid.cid)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -1819,18 +1794,17 @@ func RetrieveRW(ctx context.Context, pinsOfFile []api.Pin, file os.File, filesiz
 				sharddata = append(sharddata, bytess...)
 				reader.Close()
 			}
-			mu.Lock()
-			if retrieved < or {
-				shards[(shard.index-1)%(or+par)] = sharddata
-				wg.Done()
-				retrieved++
+			muu.Lock()
+			if ret < or {
+				ret++
+				shards[(pinwm.index-1)%(or+par)] = sharddata
+				wgg.Done()
 			}
-			mu.Unlock()
-			return
-		}(shard)
-	}
-	wg.Wait()
+			muu.Unlock()
 
+		}(pinwm, i)
+	}
+	wgg.Wait()
 	//repair if retrieved parity data
 	for i, shard := range shards {
 		fmt.Printf("Shard %d of length %d \n", i, len(shard))
