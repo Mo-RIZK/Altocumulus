@@ -583,7 +583,7 @@ func AddShardsToDB(
 			stripeLength = shardSize - offset
 		}
 
-		for shardIndex := 0; shardIndex < totalShards; shardIndex++ {
+		for shardIndex := dataShards; shardIndex < totalShards; shardIndex++ {
 			// Read the chunk from this shard
 			dataread := make([]byte, stripeLength)
 			copy(dataread, shards[shardIndex][offset:offset+stripeLength])
