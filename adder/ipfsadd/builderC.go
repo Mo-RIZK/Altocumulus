@@ -258,7 +258,7 @@ func fillNodeRecC(db *DagBuilderHelper, node *FSNodeOverDag, depth int, nodes []
 			}
 		}
 
-		err = node.AddChild(childNode, childFileSize, db)
+		err = node.AddChildC(childNode, childFileSize, db,nodes)
 		if err != nil {
 			return nil, 0, nil, nil, err
 		}
