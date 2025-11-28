@@ -148,7 +148,7 @@ func PrepareEncode(reader io.Reader, shardsize uint64, or int, par int) []byte {
 	}
 
 	shards := make([][]byte, or+par)
-
+setCount := 0 // counter for number of shard sets
 	for {
 		// --- Step 1: Read data into first `or` shards ---
 		allEmpty := true
@@ -188,8 +188,9 @@ func PrepareEncode(reader io.Reader, shardsize uint64, or int, par int) []byte {
 		for i := 0; i < or+par; i++ {
 			data = append(data, shards[i]...)
 		}
+		setCount ++
 	}
-
+	fmt.Printf("Encoded shard set #%d \n", setCount)
 	return data
 }
 
