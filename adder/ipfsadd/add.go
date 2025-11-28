@@ -125,12 +125,72 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 			return nd, nil
 		} else {
 			// related work implementation, it is striped but with different pipeline
-			nd := adder.addECC(chnk, reader)
+			//nd := adder.addECC(chnk, reader)
+			//contigeous implementation
+			encoded := PrepareEncode(reader, adder.ShardSize, adder.Original, adder.Parity)
+			newReader := bytes.NewReader(encoded)
+			chnk2, errr := chunker.FromString(newReader, adder.Chunker)
+			if errr != nil {
+				return nil, err
+			}
+			nd := adder.addRep(chnk2)
 			return nd, nil
+		}
+	}
+}
 
+func PrepareEncode(reader io.Reader, shardsize uint64, or int, par int) []byte {
+	data := make([]byte, 0)
+
+	enc, err := reedsolomon.New(or, par)
+	if err != nil {
+		return data
+	}
+
+	shards := make([][]byte, or+par)
+
+	for {
+		// --- Step 1: Read data into first `or` shards ---
+		allEmpty := true
+		for i := 0; i < or; i++ {
+			shards[i] = make([]byte, shardsize)
+			n, err := io.ReadFull(reader, shards[i])
+			if err == io.ErrUnexpectedEOF || err == io.EOF {
+				// partial read → pad the rest
+				for j := n; j < int(shardsize); j++ {
+					shards[i][j] = 0
+				}
+			} else if err != nil {
+				return data
+			}
+
+			if n > 0 {
+				allEmpty = false
+			}
 		}
 
+		// If the reader had no more data at all, break
+		if allEmpty {
+			break
+		}
+
+		// --- Step 2: Encode parity shards ---
+		for p := 0; p < par; p++ {
+			shards[or+p] = make([]byte, shardsize)
+		}
+
+		err = enc.Encode(shards)
+		if err != nil {
+			return data
+		}
+
+		// --- Step 3: Append all shards to output ---
+		for i := 0; i < or+par; i++ {
+			data = append(data, shards[i]...)
+		}
 	}
+
+	return data
 }
 
 func GenerateParityShards(shards [][]byte, dataShards, parityShards int, shardSize, chunkSize int) error {
