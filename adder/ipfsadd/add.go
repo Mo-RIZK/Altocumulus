@@ -178,11 +178,14 @@ setCount := 0 // counter for number of shard sets
 		for p := 0; p < par; p++ {
 			shards[or+p] = make([]byte, shardsize)
 		}
+start := time.Now()
 
-		err = enc.Encode(shards)
-		if err != nil {
+err = enc.Encode(shards)
+if err != nil {
 			return data
 		}
+elapsed := time.Since(start)
+fmt.Printf("Encoding contiguous took: %v\n", elapsed)
 
 		// --- Step 3: Append all shards to output ---
 		for i := 0; i < or+par; i++ {
