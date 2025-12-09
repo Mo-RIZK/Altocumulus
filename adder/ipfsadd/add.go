@@ -122,15 +122,15 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 		nd := adder.addRep(chnk)
 		return nd, nil
 	} else {
-		if adder.Striped {
-			nd := adder.addEC(chnk)
-			return nd, nil
-		} else {
-			if adder.Cont && adder.Striped {
-				// Related work
+		if adder.Cont && adder.Striped{
+			// Related work
 				// align data -> encode in a specific way -> send to destination
 				nd := adder.addECC(chnk, reader)
 				return nd, nil
+		} else {
+			 if adder.Striped{
+				nd := adder.addEC(chnk)
+			return nd, nil
 			} else {
 				if adder.Cont {
 					// related work implementation, it is striped but with different pipeline
