@@ -43,7 +43,7 @@ const progressReaderIncrement = 1024 * 256
 //var liveCacheSize = uint64(256 << 10)
 
 // NewAdder Returns a new Adder used for a file add operation.
-func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, Original int, Parity int, striped bool, shardsize uint64) (*Adder, error) {
+func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, Original int, Parity int, striped bool, cont bool, shardsize uint64) (*Adder, error) {
 	// Cluster: we don't use pinner nor GCLocker.
 	return &Adder{
 		ctx:        ctx,
@@ -56,6 +56,7 @@ func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, 
 		Parity:     Parity,
 		Striped:    striped,
 		ShardSize:  shardsize,
+		Cont:       cont,
 	}, nil
 }
 
@@ -79,6 +80,7 @@ type Adder struct {
 	Original  int
 	Parity    int
 	Striped   bool
+	Cont      bool
 	ShardSize uint64
 	// Cluster: ipfs does a hack in commands/add.go to set the filenames
 	// in emitted events correctly. We carry a root folder name (or a
@@ -124,22 +126,128 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 			nd := adder.addEC(chnk)
 			return nd, nil
 		} else {
-			// related work implementation, it is striped but with different pipeline
-			//nd := adder.addECC(chnk, reader)
-			//contigeous implementation
-			encoded := PrepareEncode(reader, adder.ShardSize, adder.Original, adder.Parity)
-			newReader := bytes.NewReader(encoded)
-			chnk2, errr := chunker.FromString(newReader, adder.Chunker)
-			if errr != nil {
-				return nil, err
+			if adder.Cont && adder.Striped {
+				// Related work
+				// align data -> encode in a specific way -> send to destination
+				return nil, nil
+			} else {
+				if adder.Cont {
+					// related work implementation, it is striped but with different pipeline
+					//nd := adder.addECC(chnk, reader)
+					//contigeous implementation
+					encoded := PrepareEncode(reader, adder.ShardSize, adder.Original, adder.Parity)
+					newReader := bytes.NewReader(encoded)
+					chnk2, errr := chunker.FromString(newReader, adder.Chunker)
+					if errr != nil {
+						return nil, err
+					}
+					nd := adder.addRep(chnk2)
+					return nd, nil
+				} else {
+					// SSDBM impl
+					encoded := PrepareEncodeSSDBM(reader, adder.ShardSize, adder.Original, adder.Parity)
+					newReader := bytes.NewReader(encoded)
+					chnk2, errr := chunker.FromString(newReader, adder.Chunker)
+					if errr != nil {
+						return nil, err
+					}
+					nd := adder.addRep(chnk2)
+					return nd, nil
+				}
 			}
-			nd := adder.addRep(chnk2)
-			return nd, nil
 		}
 	}
 }
 
+func PrepareEncodeSSDBM(reader io.Reader, shardsize uint64, or int, par int) []byte {
+	fmt.Fprintf(os.Stdout, "SSDBMMMMMMMMMMMMMMMMMMM")
+	const chunkSize = 262144 // 256 KiB
+
+	data := make([]byte, 0)
+
+	enc, err := reedsolomon.New(or, par)
+	if err != nil {
+		return data
+	}
+
+	totalShards := or + par
+
+	// Create or+par shards (each shard has shardsize bytes)
+	shards := make([][]byte, totalShards)
+	for i := 0; i < totalShards; i++ {
+		shards[i] = make([]byte, shardsize)
+	}
+
+	// Current write offset inside each shard
+	writeOffset := uint64(0)
+
+	for {
+		// ---- Step 1: Read 'or' chunks of chunkSize ----
+		inputChunks := make([][]byte, or)
+		allEmpty := true
+
+		for i := 0; i < or; i++ {
+			inputChunks[i] = make([]byte, chunkSize)
+			n, err := io.ReadFull(reader, inputChunks[i])
+
+			if err == io.ErrUnexpectedEOF || err == io.EOF {
+				// Pad the remaining part of this chunk
+				for j := n; j < chunkSize; j++ {
+					inputChunks[i][j] = 0
+				}
+			} else if err != nil {
+				return data
+			}
+
+			if n > 0 {
+				allEmpty = false
+			}
+		}
+
+		// No more data at all → stop
+		if allEmpty {
+			break
+		}
+
+		// ---- Step 2: Prepare parity chunks ----
+		encChunks := make([][]byte, totalShards)
+
+		for i := 0; i < or; i++ {
+			encChunks[i] = inputChunks[i]
+		}
+		for i := 0; i < par; i++ {
+			encChunks[or+i] = make([]byte, chunkSize)
+		}
+
+		// ---- Step 3: Encode to generate parity chunks ----
+		if err := enc.Encode(encChunks); err != nil {
+			return data
+		}
+
+		// ---- Step 4: Write each encoded chunk into the shards ----
+		for i := 0; i < totalShards; i++ {
+			if writeOffset+chunkSize > shardsize {
+				// Shard full → stop completely
+				goto END
+			}
+			copy(shards[i][writeOffset:writeOffset+chunkSize], encChunks[i])
+		}
+
+		writeOffset += chunkSize
+	}
+
+END:
+
+	// ---- Step 5: Append all shards to output ----
+	for i := 0; i < totalShards; i++ {
+		data = append(data, shards[i]...)
+	}
+
+	return data
+}
+
 func PrepareEncode(reader io.Reader, shardsize uint64, or int, par int) []byte {
+	fmt.Fprintf(os.Stdout, "Conttttttttttttt")
 	data := make([]byte, 0)
 
 	enc, err := reedsolomon.New(or, par)
@@ -148,7 +256,7 @@ func PrepareEncode(reader io.Reader, shardsize uint64, or int, par int) []byte {
 	}
 
 	shards := make([][]byte, or+par)
-setCount := 0 // counter for number of shard sets
+
 	for {
 		// --- Step 1: Read data into first `or` shards ---
 		allEmpty := true
@@ -178,22 +286,18 @@ setCount := 0 // counter for number of shard sets
 		for p := 0; p < par; p++ {
 			shards[or+p] = make([]byte, shardsize)
 		}
-start := time.Now()
 
-err = enc.Encode(shards)
-if err != nil {
+		err = enc.Encode(shards)
+		if err != nil {
 			return data
 		}
-elapsed := time.Since(start)
-fmt.Printf("Encoding contiguous took: %v\n", elapsed)
 
 		// --- Step 3: Append all shards to output ---
 		for i := 0; i < or+par; i++ {
 			data = append(data, shards[i]...)
 		}
-		setCount ++
 	}
-	fmt.Printf("Encoded shard set #%d \n", setCount)
+
 	return data
 }
 
