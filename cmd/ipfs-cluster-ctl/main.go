@@ -488,12 +488,12 @@ content.
 				seq := c.Bool("seq")
 				original := c.Int("or")
 				parity := c.Int("par")
-				if c_ec && s_ec {
-					checkErr("", errors.New("impossible to launch multiple layouts together"))
-				}
-				if s_ec && seq {
-					checkErr("", errors.New("impossible to launch striped data layout with sequential adds"))
-				}
+				//if c_ec && s_ec {
+					//checkErr("", errors.New("impossible to launch multiple layouts together"))
+				//}
+				//if s_ec && seq {
+					//checkErr("", errors.New("impossible to launch striped data layout with sequential adds"))
+				//}
 				name := c.String("name")
 				if shard && name == "" {
 					randName, err := uuid.NewRandom()
