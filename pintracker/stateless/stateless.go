@@ -17,6 +17,7 @@ import (
 	"github.com/klauspost/reedsolomon"
 	"github.com/multiformats/go-multihash"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -812,6 +813,7 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 	mod := numpin % (or + par)
 	before := (numpin - 1) % (or + par)
 	after := (or + par - mod) % (or + par)
+	Local := true
 	//fmt.Printf("taking shards between %d and %d \n", numpin-before, numpin+after)
 	for pinn := range pinCh {
 		if strings.Contains(pinn.Name, "-shard-") {
@@ -824,6 +826,9 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 			if pinnShardNum >= numpin-before && pinnShardNum <= numpin+after && pinnShardNum != numpin && name == namee {
 				// This shard is within the range, proceed with retrieval logic
 				//fmt.Printf("Retrieving shard %d: %s with index: %d \n", pinnShardNum, pinn.Name, pinnShardNum%(c.or+c.par))
+				if slices.Contains(pinn.Allocations, spt.peerID) {
+					Local = false
+				}
 				pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
 				repairShards = append(repairShards, pinnn)
 			}
@@ -860,6 +865,10 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s \n", time.Now().Sub(ssss).String())
 	//Local
 	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions, spt.peerID)
+	if !Local {
+		shh, _ = sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
+	}
+
 	//MFS
 	//shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
 	enc, _ := reedsolomon.New(or, par)
@@ -1061,6 +1070,14 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 	}
 	return timedownloadchunks, timetorepairchunksonly, wait2
 }
+func contains(slice []string, id string) bool {
+	for _, v := range slice {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
 
 func (spt *Tracker) repinUsingRSrelatedWork(op *optracker.Operation) (time.Duration, time.Duration, time.Duration) {
 	repairShards := make([]pinwithmeta, 0)
@@ -1154,7 +1171,7 @@ func (spt *Tracker) repinUsingRSrelatedWork(op *optracker.Operation) (time.Durat
 		}(shard)
 	}
 	wgg.Wait()
-	
+
 	downloadtime := time.Since(start1)
 	start2 := time.Now()
 	nbchunks := 0
@@ -1201,7 +1218,7 @@ func (spt *Tracker) repinUsingRSrelatedWork(op *optracker.Operation) (time.Durat
 	if errr != nil {
 		return 0, 0, 0
 	}
-	return downloadtime,reconstructtime,waittime
+	return downloadtime, reconstructtime, waittime
 }
 
 func (spt *Tracker) getData(ctx context.Context, Cid string) []byte {
