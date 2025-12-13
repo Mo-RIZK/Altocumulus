@@ -142,6 +142,7 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 					if errr != nil {
 						return nil, err
 					}
+					time.Sleep(2 * time.Second)
 					nd := adder.addRep(chnk2)
 					return nd, nil
 				} else {
@@ -152,6 +153,7 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 					if errr != nil {
 						return nil, err
 					}
+					time.Sleep(2 * time.Second)
 					nd := adder.addRep(chnk2)
 					return nd, nil
 				}
