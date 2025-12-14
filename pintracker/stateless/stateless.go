@@ -864,15 +864,9 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 	wgg.Wait()
 	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s and localllllll is %t \n", time.Now().Sub(ssss).String(),Local)
 	//Local
-	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions, spt.peerID)
-	if !Local {
-		fmt.Printf("!!!!!!!!!!! entered localllllllll falseeeee \n")
-		shh, _ = sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
-	}
-
-	//MFS
-	//shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
-	enc, _ := reedsolomon.New(or, par)
+	if Local{
+		shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions, spt.peerID)
+		enc, _ := reedsolomon.New(or, par)
 	k := 0
 	for {
 		if len(repairShards[k].cids) == 0 {
@@ -1070,6 +1064,211 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 		return 0, 0, 0
 	}
 	return timedownloadchunks, timetorepairchunksonly, wait2
+	} else{
+		shh, _ = sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
+		enc, _ := reedsolomon.New(or, par)
+	k := 0
+	for {
+		if len(repairShards[k].cids) == 0 {
+			k++
+		} else {
+			break
+		}
+	}
+	times := len(repairShards[k].cids)
+	//open gourotines to retrieve data in parallel
+	wg := new(sync.WaitGroup)
+	mu := new(sync.Mutex)
+	toskip := true
+	timerlaunched := false
+	Indexes := make([]int, 0)
+	ctxx, cancell := context.WithCancel(context.Background())
+	for i := 0; i < times; i++ {
+		retrieved := 0
+		sttt := time.Now()
+		reconstructshards := make([][]byte, or+par)
+		nbShardsMeta := 0
+		readfrom := make([]pinwithmeta, 0)
+		for _, shard := range repairShards {
+			if len(shard.cids) > 0 {
+				nbShardsMeta++
+				readfrom = append(readfrom, shard)
+			}
+		}
+		if nbShardsMeta > or {
+			//we want to apply the switching every 1 sec
+			if !timerlaunched {
+				//start the timer that will be responsible of notifying switching
+				go startTimerNew5(ctxx, &toskip)
+				timerlaunched = true
+			}
+			if toskip {
+				Indexes = make([]int, 0)
+				wg.Add(or)
+				ctxx, cancel := context.WithCancel(context.Background())
+				for _, shard := range readfrom {
+					if len(shard.cids) > 0 {
+						go func(i int, shard pinwithmeta) {
+							sss := time.Now()
+							bytess := spt.getData(ctxx, shard.cids[i])
+							nnn := time.Since(sss)
+							fmt.Printf("REPAIR GOT HERE FOR shard %d : %s \n", shard.index, nnn.String())
+							mu.Lock()
+							if retrieved < or {
+								retrieved++
+								reconstructshards[(shard.index-1)%(or+par)] = bytess
+								Indexes = append(Indexes, shard.index)
+								mu.Unlock()
+								wg.Done()
+								if retrieved == or {
+									cancel()
+								}
+							} else {
+								cancel()
+								mu.Unlock()
+							}
+
+						}(i, shard)
+					}
+				}
+				wg.Wait()
+				fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee \n")
+				// Find where to allocate this file
+				stt := time.Now()
+				timedownloadchunks += stt.Sub(sttt)
+				enc.Reconstruct(reconstructshards)
+				enn := time.Since(stt)
+				timetorepairchunksonly += enn
+				//rawnode, _ := merkledag.NewRawNodeWPrefix(reconstructshards[tosend], prefix)
+				nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
+				nodee.SetFileData(reconstructshards[tosend])
+				rawnode, _ := nodee.Commit()
+				//zid l blacklist heyye list li other pins kamen fiha
+				shh.SendBlock(spt.ctx, rawnode)
+				size := uint64(len(rawnode.RawData()))
+				shh.AddLink(ctx, rawnode.Cid(), size)
+				toskip = false
+			} else {
+				readfiltered := make([]pinwithmeta, 0)
+				for _, shard := range readfrom {
+					for _, index := range Indexes {
+						if shard.index == index {
+							readfiltered = append(readfiltered, shard)
+						}
+					}
+				}
+				wg.Add(or)
+				ctxx, cancel := context.WithCancel(context.Background())
+				for _, shard := range readfiltered {
+					if len(shard.cids) > 0 {
+						go func(i int, shard pinwithmeta) {
+							sss := time.Now()
+							bytess := spt.getData(ctxx, shard.cids[i])
+							nnn := time.Since(sss)
+							fmt.Printf("REPAIR GOT HERE FOR shard %d : %s \n", shard.index, nnn.String())
+							mu.Lock()
+							if retrieved < or {
+								retrieved++
+								reconstructshards[(shard.index-1)%(or+par)] = bytess
+								mu.Unlock()
+								wg.Done()
+								if retrieved == or {
+									cancel()
+								}
+							} else {
+								cancel()
+								mu.Unlock()
+							}
+
+						}(i, shard)
+					}
+				}
+				wg.Wait()
+				fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee \n")
+				// Find where to allocate this file
+				stt := time.Now()
+				timedownloadchunks += stt.Sub(sttt)
+				enc.Reconstruct(reconstructshards)
+				enn := time.Since(stt)
+				timetorepairchunksonly += enn
+				//rawnode, _ := merkledag.NewRawNodeWPrefix(reconstructshards[tosend], prefix)
+				nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
+				nodee.SetFileData(reconstructshards[tosend])
+				rawnode, _ := nodee.Commit()
+				//zid l blacklist heyye list li other pins kamen fiha
+				shh.SendBlock(spt.ctx, rawnode)
+				size := uint64(len(rawnode.RawData()))
+				shh.AddLink(ctx, rawnode.Cid(), size)
+			}
+
+		} else {
+			//ask for the six out of six because at least we have six shards metadata
+			wg.Add(or)
+			ctxx, cancel := context.WithCancel(context.Background())
+			for _, shard := range readfrom {
+				if len(shard.cids) > 0 {
+					go func(i int, shard pinwithmeta) {
+						sss := time.Now()
+						bytess := spt.getData(ctxx, shard.cids[i])
+						nnn := time.Since(sss)
+						fmt.Printf("REPAIR GOT HERE FOR shard %d : %s \n", shard.index, nnn.String())
+						mu.Lock()
+						if retrieved < or {
+							retrieved++
+							reconstructshards[(shard.index-1)%(or+par)] = bytess
+							mu.Unlock()
+							wg.Done()
+							if retrieved == or {
+								cancel()
+							}
+						} else {
+							cancel()
+							mu.Unlock()
+						}
+
+					}(i, shard)
+				}
+			}
+			wg.Wait()
+			fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee \n")
+			// Find where to allocate this file
+			stt := time.Now()
+			timedownloadchunks += stt.Sub(sttt)
+			enc.Reconstruct(reconstructshards)
+			enn := time.Since(stt)
+			timetorepairchunksonly += enn
+			//rawnode, _ := merkledag.NewRawNodeWPrefix(reconstructshards[tosend], prefix)
+			nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
+			nodee.SetFileData(reconstructshards[tosend])
+			rawnode, _ := nodee.Commit()
+			//zid l blacklist heyye list li other pins kamen fiha
+			shh.SendBlock(spt.ctx, rawnode)
+			size := uint64(len(rawnode.RawData()))
+			shh.AddLink(ctx, rawnode.Cid(), size)
+		}
+	}
+	wait1 := time.Now()
+	shh.FlushNew(spt.ctx)
+	wait2 := time.Since(wait1)
+	cancell()
+
+	errr := spt.rpcClient.CallContext(
+		ctx,
+		"",
+		"IPFSConnector",
+		"Pin",
+		pin,
+		&struct{}{},
+	)
+	if errr != nil {
+		return 0, 0, 0
+	}
+	return timedownloadchunks, timetorepairchunksonly, wait2
+	}
+
+	//MFS
+	//shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
+	
 }
 func contains(slice []string, id string) bool {
 	for _, v := range slice {
