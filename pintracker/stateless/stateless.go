@@ -1065,7 +1065,7 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 	}
 	return timedownloadchunks, timetorepairchunksonly, wait2
 	} else{
-		shh, _ = sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
+		shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
 		enc, _ := reedsolomon.New(or, par)
 	k := 0
 	for {
