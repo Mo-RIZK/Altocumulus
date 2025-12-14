@@ -1248,9 +1248,20 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 		}
 	}
 	wait1 := time.Now()
-	shh.Flush(spt.ctx)
+	shh.FlushNew(spt.ctx)
 	wait2 := time.Since(wait1)
 	cancell()
+		errr := spt.rpcClient.CallContext(
+		ctx,
+		"",
+		"IPFSConnector",
+		"Pin",
+		pin,
+		&struct{}{},
+	)
+	if errr != nil {
+		return 0, 0, 0
+	}
 	return timedownloadchunks, timetorepairchunksonly, wait2
 	}
 
