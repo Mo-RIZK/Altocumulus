@@ -862,10 +862,11 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 		}(pinwm, i)
 	}
 	wgg.Wait()
-	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s \n", time.Now().Sub(ssss).String())
+	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s and localllllll is %t \n", time.Now().Sub(ssss).String(),Local)
 	//Local
 	shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions, spt.peerID)
 	if !Local {
+		fmt.Printf("!!!!!!!!!!! entered localllllllll falseeeee \n")
 		shh, _ = sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
 	}
 
