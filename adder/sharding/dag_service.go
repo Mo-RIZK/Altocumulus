@@ -350,7 +350,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 			//save the internal nodes
 			//FIXME: This will grow in memory
 			fmt.Fprintf(os.Stdout, "Internal node save in memory %s cid : %s\n", time.Now().Format("15:04:05.000"), n.Cid().String())
-			dgs.internalnodes = append(dgs.internalnodes, n)
+			//dgs.internalnodes = append(dgs.internalnodes, n)
 			return nil
 		}
 	}
