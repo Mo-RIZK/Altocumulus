@@ -175,7 +175,6 @@ func Layout(db *DagBuilderHelper, or int, par int, size int) (ipld.Node, error) 
 	// has reached its maximum capacity of `db.Maxlinks()` per node)
 	// extend it by making it a sub-DAG of a bigger DAG with `depth+1`.
 	for depth := 1; !db.Done() || len(parity) > 0 || len(last) > 0 || first == 1; depth++ {
-		fmt.Fprintf(os.Stdout, "Entered top \n")
 		// Add the old `root` as a child of the `newRoot`.
 		//fmt.Fprintf(os.Stdout, "kam parity fi : %d kam toEncode fi : %d kam nodenb saro : %d kam last fi : %d \n", parity, len(toEncode), nodenb, len(last))
 		newRoot := db.NewFSNodeOverDag(ft.TFile)
@@ -252,7 +251,6 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 		node = db.NewFSNodeOverDag(ft.TFile)
 	}
 
-	fmt.Fprintf(os.Stdout, "Entered bottttt \n")
 	// Child node created on every iteration to add to parent `node`.
 	// It can be a leaf node or another internal node.
 	var childNode ipld.Node
@@ -269,7 +267,6 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 			if len(last) == 0 {
 				if len(ToEncode) == or {
 					//encode the data and clear to Encode
-					fmt.Fprintf(os.Stdout, "Encode %s\n", time.Now().Format("15:04:05.000"))
 					parity, timetakn = encodeTest(ToEncode, enc, or, timetakn)
 					ToEncode = [][]byte{}
 				}
@@ -280,11 +277,9 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 						return nil, 0, nil, nil, nil, 0, 0, err
 					}
 					if db.Done() {
-						fmt.Fprintf(os.Stdout, " DDDDOOOOOOONNNNNEEEEEEEEEE \n")
 						lastsize := childFileSize
 						//manna n3mel padding w n3abbi l to encode w n3mel encode w nkammel
 						start := time.Now()
-						fmt.Fprintf(os.Stdout, " PPPPPAAAAAAADDDDDDDDDD \n")
 						for uint64(len(data)) < db.leafsize {
 							data = append(data, 0)
 						}
@@ -295,7 +290,6 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 						childNode = db.ProcessFileStore(childNode, childFileSize)
 						ToEncode = append(ToEncode, data)
 						startt := time.Now()
-						fmt.Fprintf(os.Stdout, "Padding %s\n", time.Now().Format("15:04:05.000"))
 						for len(ToEncode) < or {
 							pad := make([]byte, db.leafsize)
 							ToEncode = append(ToEncode, pad)
@@ -303,7 +297,6 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 						}
 						endd := time.Now()
 						timetaknpad += endd.Sub(startt)
-						fmt.Fprintf(os.Stdout, "Encode %s\n", time.Now().Format("15:04:05.000"))
 						parity, timetakn = encodeTest(ToEncode, enc, or, timetakn)
 						last = append(last, parity...)
 						parity = [][]byte{}
@@ -334,6 +327,7 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 				return nil, 0, nil, nil, nil, 0, 0, err
 			}
 		}
+		fmt.Fprintf(os.Stdout, "Node CID is %s:\n",childNode.Cid().String())
 		if pp != 0 {
 			err = node.AddPChild(childNode, childFileSize, db)
 			if err != nil {
