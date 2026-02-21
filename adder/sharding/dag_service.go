@@ -342,7 +342,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 
 	fmt.Fprintf(os.Stdout, "NODEEEEEEEEEEEEEEEEEE CIDDDDDDDD %s of  SIIIIIIZEEEEEEEEEE %d passed and actuallllll iszeeee: %d \n", n.Cid(), size, size2)
 
-	switch _ := n.(type) {
+	switch n.(type) {
 	case *merkledag.RawNode:
 		fmt.Println("This is a raw leaf node with size")
 	case *merkledag.ProtoNode:
