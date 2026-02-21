@@ -7,7 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ipfs/boxo/ipld/merkledag"
+	"github.com/ipfs/boxo/ipld/unixfs"
 	"os"
 	"sync"
 
@@ -339,12 +339,15 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	size := uint64(len(n.RawData()))
-	switch n.(type) {
-	case *merkledag.RawNode:
-		fmt.Println("This is a raw leaf node with size")
-	case *merkledag.ProtoNode:
-		fmt.Println("This is a protobuf UnixFS node")
+
+	fsNode, err := unixfs.FSNodeFromBytes(n.RawData())
+	if err != nil {
+		panic(err)
 	}
+
+	dataSize := len(fsNode.Data())
+	fmt.Fprintf(os.Stdout, "Data size isssssssssssssssssssssssssssssss: %d \n", dataSize)
+
 
 	if dgs.internal == 0 {
 		dgs.internal = size
