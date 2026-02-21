@@ -339,9 +339,12 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 
 	size := uint64(len(n.RawData()))
 
-	blk, _ := n.Stat()
-	size2 := blk.BlockSize
-	fmt.Fprintf(os.Stdout, "Data size isssssssssssssssssssssssssssssss: %d \n", size2)
+	if len(n.Links())>0{
+		fmt.Fprintf(os.Stdout, "Inner nodeeeeeeeeeeeeeeeeeeeeeeeee with sizeeeeeeee %d \n",size)
+	} else {
+		fmt.Fprintf(os.Stdout, "LLEEEEEEAAAAAAAAFFFFFFFFFFF nodeeeeeeeeeeeeeeeeeeeeeeeee with sizeeeeeeee %d \n",size)
+	}
+	
 
 	if dgs.internal == 0 {
 		dgs.internal = size
