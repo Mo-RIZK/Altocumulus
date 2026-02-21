@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ipfs/boxo/ipld/unixfs"
 	"os"
 	"sync"
 
@@ -340,14 +339,9 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 
 	size := uint64(len(n.RawData()))
 
-	fsNode, err := unixfs.FSNodeFromBytes(n.RawData())
-	if err != nil {
-		panic(err)
-	}
-
-	dataSize := len(fsNode.Data())
-	fmt.Fprintf(os.Stdout, "Data size isssssssssssssssssssssssssssssss: %d \n", dataSize)
-
+	blk, _ := n.Stat()
+	size2 := blk.BlockSize
+	fmt.Fprintf(os.Stdout, "Data size isssssssssssssssssssssssssssssss: %d \n", size2)
 
 	if dgs.internal == 0 {
 		dgs.internal = size
