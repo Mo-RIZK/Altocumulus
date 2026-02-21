@@ -337,10 +337,6 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		fmt.Fprintf(os.Stdout, "ALLOCATING PART %s \n", end.Sub(start).String())
 	}
 
-		fmt.Fprintf(os.Stdout,"ingesting block %s in shard %d (%s)", n.Cid(), len(dgs.shards), dgs.addParams.Name)
-
-	fmt.Fprintf(os.Stdout, "Information : %s\n", n.String())
-
 	size := uint64(len(n.RawData()))
 	if dgs.internal == 0 {
 		dgs.internal = size
@@ -358,8 +354,9 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	if len(dgs.nodeparallel) == dgs.addParams.O+dgs.addParams.P {
 		//send nodes concurrently
 		for _, node := range dgs.nodeparallel {
-			fmt.Fprintf(os.Stdout, "Sending %s\n", time.Now().Format("15:04:05.000"))
 			sizee := uint64(len(node.RawData()))
+			fmt.Fprintf(os.Stdout, "NODEEEEEEEEEEEEEEEEEE CIDDDDDDDD %s of  SIIIIIIZEEEEEEEEEE %d \n", node.Cid(), sizee)
+			fmt.Fprintf(os.Stdout, "SHAAAAAAARRRRRRRRDDDDDDDDDDDDD %s of  SIIIIIIZEEEEEEEEEE %d \n", shardd[dgs.current].pinOptions.Name, shardd[dgs.current].Size())
 			if shardd[dgs.current].Size()+sizee < shardd[dgs.current].Limit() {
 				shardd[dgs.current].AddLink(ctx, node.Cid(), sizee)
 				dgs.wg.Add(1)
@@ -369,6 +366,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 				}(dgs.currentShard, dgs.current, node)
 				dgs.current = (dgs.current + 1) % (dgs.addParams.O + dgs.addParams.P)
 			} else {
+				fmt.Fprintf(os.Stdout, "FLUSSSSSSSSSSHHHHHHHHHHHHHHHHHHHHHHHHHHHH !!!!!!!!!1\n")
 				_, err := dgs.flushCurrentShards(ctx)
 				if err != nil {
 					return err
