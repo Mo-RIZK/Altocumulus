@@ -96,7 +96,7 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 		shards:    make(map[string]cid.Cid),
 		startTime: time.Now(),
 
-		internal:      opts.Csize,
+		internal:      0,
 		internalnodes: make([]ipld.Node, 0),
 		wait:          false,
 		current:       0,
