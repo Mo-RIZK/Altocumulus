@@ -337,7 +337,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		fmt.Fprintf(os.Stdout, "ALLOCATING PART %s \n", end.Sub(start).String())
 	}
 
-	logger.Debugf("ingesting block %s in shard %d (%s)", n.Cid(), len(dgs.shards), dgs.addParams.Name)
+		fmt.Fprintf(os.Stdout,"ingesting block %s in shard %d (%s)", n.Cid(), len(dgs.shards), dgs.addParams.Name)
 
 	fmt.Fprintf(os.Stdout, "Information : %s\n", n.String())
 
