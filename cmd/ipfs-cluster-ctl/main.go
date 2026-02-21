@@ -549,9 +549,9 @@ content.
 				p.Local = c.Bool("local")
 				p.Layout = c.String("layout")
 				p.Chunker = c.String("chunker")
-				//sizeStr := strings.Split(c.String("chunker"), "-")[1]
-				//Csize, _ := strconv.Atoi(sizeStr)
-				//p.Csize = Csize
+				sizeStr := strings.Split(c.String("chunker"), "-")[1]
+				Csize, _ := strconv.Atoi(sizeStr)
+				p.Csize = Csize
 				p.RawLeaves = c.Bool("raw-leaves")
 				p.Hidden = c.Bool("hidden")
 				p.Wrap = c.Bool("wrap-with-directory") || len(paths) > 1
