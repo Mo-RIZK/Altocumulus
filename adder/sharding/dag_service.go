@@ -339,9 +339,6 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	size := uint64(len(n.RawData()))
-
-	fmt.Fprintf(os.Stdout, "NODEEEEEEEEEEEEEEEEEE CIDDDDDDDD %s of  SIIIIIIZEEEEEEEEEE %d passed and actuallllll iszeeee: %d \n", n.Cid(), size, size2)
-
 	switch n.(type) {
 	case *merkledag.RawNode:
 		fmt.Println("This is a raw leaf node with size")
