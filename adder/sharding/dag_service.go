@@ -19,8 +19,6 @@ import (
 	cid "github.com/ipfs/go-cid"
 	ipld "github.com/ipfs/go-ipld-format"
 	logging "github.com/ipfs/go-log/v2"
-	"github.com/ipfs/go-merkledag"
-	ft "github.com/ipfs/go-unixfs"
 	rpc "github.com/libp2p/go-libp2p-gorpc"
 	peer "github.com/libp2p/go-libp2p/core/peer"
 )
@@ -96,7 +94,7 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 		shards:    make(map[string]cid.Cid),
 		startTime: time.Now(),
 
-		internal:      0,
+		internal:      opts.Csize,
 		internalnodes: make([]ipld.Node, 0),
 		wait:          false,
 		current:       0,
@@ -340,13 +338,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	size := uint64(len(n.RawData()))
-	size2, err := IngestBlock(ctx, n)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Actual file payload size: %d bytes\n", size2)
-	if uint64(dgs.internal) != size {
+	if uint64(dgs.internal) > size {
 		//save the internal nodes
 		//FIXME: This will grow in memory
 		fmt.Fprintf(os.Stdout, "Internal node save in memory %s cid : %s\n", time.Now().Format("15:04:05.000"), n.Cid().String())
@@ -386,38 +378,6 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		return nil
 	}
 
-}
-
-// IngestBlock analyzes a single IPLD node and returns the size of actual file data.
-func IngestBlock(ctx context.Context, n ipld.Node) (uint64, error) {
-	// Step 1: cast to ProtoNode (Cluster uses dag.ProtoNode)
-	pNode, _ := n.(*merkledag.ProtoNode)
-
-	// Step 2: try to parse UnixFS from ProtoNode data
-	fsNode, err := ft.FSNodeFromBytes(pNode.Data())
-	if err != nil {
-		// Not a valid UnixFS node → fallback to raw ProtoNode size
-		fmt.Printf("Non-UnixFS node, raw ProtoNode size: %d bytes\n", len(pNode.Data()))
-		return uint64(len(pNode.Data())), nil
-	}
-
-	// Step 3: check node type
-	switch fsNode.Type() {
-	case ft.TFile:
-		// Leaf file → return exact payload size
-		actualDataSize := fsNode.FileSize()
-		fmt.Printf("UnixFS file leaf, actual payload size: %d bytes\n", actualDataSize)
-		return actualDataSize, nil
-
-	case ft.TDirectory, ft.THAMTShard:
-		// Directory or sharded dir → 0 actual file data
-		fmt.Printf("UnixFS directory/shard, no payload, type: %v\n", fsNode.Type())
-		return 0, nil
-
-	default:
-		fmt.Printf("Other UnixFS type %v, raw size: %d\n", fsNode.Type(), len(fsNode.Data()))
-		return uint64(len(fsNode.Data())), nil
-	}
 }
 
 // ingest the last n+k blocks
