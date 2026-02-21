@@ -340,7 +340,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	size := uint64(len(n.RawData()))
-	size2, err := IngestBlock(ctx,n)
+	size2, err := IngestBlock(ctx, n)
 	if err != nil {
 		return err
 	}
@@ -391,12 +391,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 // IngestBlock analyzes a single IPLD node and returns the size of actual file data.
 func IngestBlock(ctx context.Context, n ipld.Node) (uint64, error) {
 	// Step 1: cast to ProtoNode (Cluster uses dag.ProtoNode)
-	pNode, ok := n.(*merkledag.ProtoNode)
-	if !ok {
-		// Not a ProtoNode → return raw size
-		fmt.Printf("Non-ProtoNode block, raw size: %d bytes\n", len(n.RawData()))
-		return uint64(len(n.RawData())), nil
-	}
+	pNode, _ := n.(*merkledag.ProtoNode)
 
 	// Step 2: try to parse UnixFS from ProtoNode data
 	fsNode, err := ft.FSNodeFromBytes(pNode.Data())
