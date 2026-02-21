@@ -19,6 +19,8 @@ import (
 	cid "github.com/ipfs/go-cid"
 	ipld "github.com/ipfs/go-ipld-format"
 	logging "github.com/ipfs/go-log/v2"
+	"github.com/ipfs/go-merkledag"
+	ft "github.com/ipfs/go-unixfs"
 	rpc "github.com/libp2p/go-libp2p-gorpc"
 	peer "github.com/libp2p/go-libp2p/core/peer"
 )
@@ -55,7 +57,7 @@ type DAGService struct {
 	totalSize uint64
 
 	//in case of Erasure coding
-	internal      uint64
+	internal      int
 	internalnodes []ipld.Node
 	wg            sync.WaitGroup
 	wait          bool
@@ -94,7 +96,7 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 		shards:    make(map[string]cid.Cid),
 		startTime: time.Now(),
 
-		internal:      0,
+		internal:      opts.Csize,
 		internalnodes: make([]ipld.Node, 0),
 		wait:          false,
 		current:       0,
@@ -338,25 +340,18 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	size := uint64(len(n.RawData()))
-
-	if len(n.Links())>0{
-		fmt.Fprintf(os.Stdout, "Inner nodeeeeeeeeeeeeeeeeeeeeeeeee with sizeeeeeeee %d \n",size)
-	} else {
-		fmt.Fprintf(os.Stdout, "LLEEEEEEAAAAAAAAFFFFFFFFFFF nodeeeeeeeeeeeeeeeeeeeeeeeee with sizeeeeeeee %d \n",size)
+	size2, err := getActualDataSize(n)
+	if err != nil {
+		return err
 	}
-	
 
-	if dgs.internal == 0 {
-		dgs.internal = size
-		dgs.try = n
-	} else {
-		if dgs.internal != size {
-			//save the internal nodes
-			//FIXME: This will grow in memory
-			fmt.Fprintf(os.Stdout, "Internal node save in memory %s cid : %s\n", time.Now().Format("15:04:05.000"), n.Cid().String())
-			//dgs.internalnodes = append(dgs.internalnodes, n)
-			return nil
-		}
+	fmt.Printf("Actual file payload size: %d bytes\n", size2)
+	if uint64(dgs.internal) != size {
+		//save the internal nodes
+		//FIXME: This will grow in memory
+		fmt.Fprintf(os.Stdout, "Internal node save in memory %s cid : %s\n", time.Now().Format("15:04:05.000"), n.Cid().String())
+		//dgs.internalnodes = append(dgs.internalnodes, n)
+		return nil
 	}
 
 	if len(dgs.nodeparallel) == dgs.addParams.O+dgs.addParams.P {
@@ -391,6 +386,30 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		return nil
 	}
 
+}
+
+func getActualDataSize(n ipld.Node) (int, error) {
+	// Convert to ProtoNode (Cluster usually uses dag.ProtoNode)
+	pNode, ok := n.(*merkledag.ProtoNode)
+	if !ok {
+		// Not a ProtoNode, maybe raw block
+		return len(n.RawData()), nil
+	}
+
+	// Try to parse UnixFS
+	fsNode, err := ft.FSNodeFromBytes(pNode.Data())
+	if err != nil {
+		// Not UnixFS → fallback to raw size
+		return len(pNode.Data()), nil
+	}
+
+	// If it's a file leaf, fsNode.Data() contains the actual file bytes
+	if fsNode.Type() == ft.TFile {
+		return len(fsNode.Data()), nil
+	}
+
+	// Directories or others → 0 bytes of actual file data
+	return 0, nil
 }
 
 // ingest the last n+k blocks
