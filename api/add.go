@@ -50,6 +50,7 @@ type AddParams struct {
 	O         int
 	P         int
 	Seq       bool
+	Csize     int
 
 	StreamChannels bool
 	Format         string // selects with adder
@@ -72,6 +73,7 @@ func DefaultAddParams() AddParams {
 		Seq:    false,
 		O:      1,
 		P:      1,
+		Csize:  262144,
 
 		StreamChannels: true,
 
@@ -191,6 +193,10 @@ func AddParamsFromQuery(query url.Values) (AddParams, error) {
 		return params, err
 	}
 
+	err = parseIntParam(query, "Csize", &params.Csize)
+	if err != nil {
+		return params, err
+	}
 	err = parseBoolParam(query, "progress", &params.Progress)
 	if err != nil {
 		return params, err
@@ -261,6 +267,7 @@ func (p AddParams) ToQueryString() (string, error) {
 	query.Set("s_ec", fmt.Sprintf("%t", p.Sec))
 	query.Set("or", fmt.Sprintf("%d", p.O))
 	query.Set("par", fmt.Sprintf("%d", p.P))
+	query.Set("Csize", fmt.Sprintf("%d", p.Csize))
 	query.Set("local", fmt.Sprintf("%t", p.Local))
 	query.Set("recursive", fmt.Sprintf("%t", p.Recursive))
 	query.Set("layout", p.Layout)
@@ -299,6 +306,7 @@ func (p AddParams) Equals(p2 AddParams) bool {
 		p.Sec == p2.Sec &&
 		p.Seq == p2.Seq &&
 		p.O == p2.O &&
-		p.P == p2.P
+		p.P == p2.P &&
+		p.Csize == p2.Csize
 
 }
