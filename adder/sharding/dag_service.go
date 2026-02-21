@@ -340,7 +340,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 	}
 
 	size := uint64(len(n.RawData()))
-	size2, err := getActualDataSize(n)
+	size2, err := IngestBlock(ctx,n)
 	if err != nil {
 		return err
 	}
@@ -388,28 +388,41 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 
 }
 
-func getActualDataSize(n ipld.Node) (int, error) {
-	// Convert to ProtoNode (Cluster usually uses dag.ProtoNode)
+// IngestBlock analyzes a single IPLD node and returns the size of actual file data.
+func IngestBlock(ctx context.Context, n ipld.Node) (uint64, error) {
+	// Step 1: cast to ProtoNode (Cluster uses dag.ProtoNode)
 	pNode, ok := n.(*merkledag.ProtoNode)
 	if !ok {
-		// Not a ProtoNode, maybe raw block
-		return len(n.RawData()), nil
+		// Not a ProtoNode → return raw size
+		fmt.Printf("Non-ProtoNode block, raw size: %d bytes\n", len(n.RawData()))
+		return uint64(len(n.RawData())), nil
 	}
 
-	// Try to parse UnixFS
+	// Step 2: try to parse UnixFS from ProtoNode data
 	fsNode, err := ft.FSNodeFromBytes(pNode.Data())
 	if err != nil {
-		// Not UnixFS → fallback to raw size
-		return len(pNode.Data()), nil
+		// Not a valid UnixFS node → fallback to raw ProtoNode size
+		fmt.Printf("Non-UnixFS node, raw ProtoNode size: %d bytes\n", len(pNode.Data()))
+		return uint64(len(pNode.Data())), nil
 	}
 
-	// If it's a file leaf, fsNode.Data() contains the actual file bytes
-	if fsNode.Type() == ft.TFile {
-		return len(fsNode.Data()), nil
-	}
+	// Step 3: check node type
+	switch fsNode.Type() {
+	case ft.TFile:
+		// Leaf file → return exact payload size
+		actualDataSize := fsNode.FileSize()
+		fmt.Printf("UnixFS file leaf, actual payload size: %d bytes\n", actualDataSize)
+		return actualDataSize, nil
 
-	// Directories or others → 0 bytes of actual file data
-	return 0, nil
+	case ft.TDirectory, ft.THAMTShard:
+		// Directory or sharded dir → 0 actual file data
+		fmt.Printf("UnixFS directory/shard, no payload, type: %v\n", fsNode.Type())
+		return 0, nil
+
+	default:
+		fmt.Printf("Other UnixFS type %v, raw size: %d\n", fsNode.Type(), len(fsNode.Data()))
+		return uint64(len(fsNode.Data())), nil
+	}
 }
 
 // ingest the last n+k blocks
