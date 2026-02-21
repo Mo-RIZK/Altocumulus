@@ -43,7 +43,7 @@ const progressReaderIncrement = 1024 * 256
 //var liveCacheSize = uint64(256 << 10)
 
 // NewAdder Returns a new Adder used for a file add operation.
-func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, Original int, Parity int, striped bool, cont bool, shardsize uint64) (*Adder, error) {
+func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, Original int, Parity int, striped bool, cont bool, shardsize uint64, Csize int) (*Adder, error) {
 	// Cluster: we don't use pinner nor GCLocker.
 	return &Adder{
 		ctx:        ctx,
@@ -57,6 +57,7 @@ func NewAdder(ctx context.Context, ds ipld.DAGService, allocs func() []peer.ID, 
 		Striped:    striped,
 		ShardSize:  shardsize,
 		Cont:       cont,
+		Csize:      Csize,
 	}, nil
 }
 
@@ -82,6 +83,7 @@ type Adder struct {
 	Striped   bool
 	Cont      bool
 	ShardSize uint64
+	Csize     int
 	// Cluster: ipfs does a hack in commands/add.go to set the filenames
 	// in emitted events correctly. We carry a root folder name (or a
 	// filename in the case of single files here and emit those events
@@ -122,15 +124,15 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 		nd := adder.addRep(chnk)
 		return nd, nil
 	} else {
-		if adder.Cont && adder.Striped{
+		if adder.Cont && adder.Striped {
 			// Related work
-				// align data -> encode in a specific way -> send to destination
-				nd := adder.addECC(chnk, reader)
-				return nd, nil
-		} else {
-			 if adder.Striped{
-				nd := adder.addEC(chnk)
+			// align data -> encode in a specific way -> send to destination
+			nd := adder.addECC(chnk, reader)
 			return nd, nil
+		} else {
+			if adder.Striped {
+				nd := adder.addEC(chnk)
+				return nd, nil
 			} else {
 				if adder.Cont {
 					// related work implementation, it is striped but with different pipeline
@@ -660,10 +662,8 @@ func (adder *Adder) addEC(chnk chunker.Splitter) ipld.Node {
 		return nil
 	}
 	var nd ipld.Node
-	sizeStr := strings.Split(adder.Chunker, "-")[1]
-	size, _ := strconv.Atoi(sizeStr)
 	if adder.Striped {
-		nd, err = Layout(db, adder.Original, adder.Parity, size)
+		nd, err = Layout(db, adder.Original, adder.Parity, adder.Csize)
 		if err != nil {
 			return nil
 		}
