@@ -99,6 +99,39 @@ func NewShards(globalCtx context.Context, ctx context.Context, rpc *rpc.Client, 
 	}, nil
 }
 
+func NewShardsBlack(globalCtx context.Context, ctx context.Context, rpc *rpc.Client, black []peer.ID, opts api.PinOptions) (*shard, error) {
+	allocs, err := adder.BlockAllocateWithBlack(ctx, rpc, black, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	if opts.ReplicationFactorMin > 0 && len(allocs) == 0 {
+		// This would mean that the empty cid is part of the shared state somehow.
+		panic("allocations for new shard cannot be empty without error")
+	}
+
+	if opts.ReplicationFactorMin < 0 {
+		logger.Warn("Shard is set to replicate everywhere ,which doesn't make sense for sharding")
+	}
+
+	// TODO (hector): get latest metrics for allocations, adjust sizeLimit
+	// to minimum. This can be done later.
+
+	blocks := make(chan api.NodeWithMeta, 256)
+
+	return &shard{
+		ctx:         globalCtx,
+		rpc:         rpc,
+		allocations: allocs,
+		pinOptions:  opts,
+		bs:          adder.NewBlockStreamer(globalCtx, rpc, allocs, blocks),
+		blocks:      blocks,
+		dagNode:     make(map[string]cid.Cid),
+		currentSize: 0,
+		sizeLimit:   opts.ShardSize,
+	}, nil
+}
+
 // AddLink tries to add a new block to this shard if it's not full.
 // Returns true if the block was added
 func (sh *shard) AddLink(ctx context.Context, c cid.Cid, s uint64) {
@@ -159,7 +192,7 @@ func (sh *shard) Flush(ctx context.Context, shardN int, prev cid.Cid) (cid.Cid, 
 	//startt := time.Now()
 	//fmt.Fprintf(os.Stdout, "SEND SHARD DAG %d", len(nodes))
 	for _, n := range nodes {
-		fmt.Fprintf(os.Stdout, "SHARD NODE SIZE IS: %d \n",uint64(len(n.RawData())) )
+		fmt.Fprintf(os.Stdout, "SHARD NODE SIZE IS: %d \n", uint64(len(n.RawData())))
 		err = sh.sendBlock(ctx, n)
 		if err != nil {
 			close(sh.blocks)
