@@ -1070,6 +1070,10 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 				blacklist = append(blacklist, per)
 			}
 		}
+		if pin.PinOptions.Metadata == nil {
+			pin.PinOptions.Metadata = make(map[string]string)
+		}
+
 		pin.PinOptions.Metadata["Black"] = ""
 		for _, bl := range blacklist {
 			fmt.Printf("BBBBLLLLL : %s \n", bl.String())
