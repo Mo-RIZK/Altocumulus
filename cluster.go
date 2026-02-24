@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"mime/multipart"
 	"os"
-	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -722,114 +720,18 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 		if !strings.Contains(pin.Name, "Repair") {
 			pin.Name = pin.Name + "Repair"
 		}
-		black := c.Alloc(ctx,pin)
-		if len(black) == 0{
-			pin.Allocations = append(pin.Allocations,c.id)
-			_, ok, err := c.pin(ctx, pin, []peer.ID{p})
-			if ok && err == nil {
-				logger.Infof("repinned %s out of %s", pin.Cid, p)
-			}
-			return 
-		}
-		black = append(black,p)
-		_, ok, err := c.pin(ctx, pin, black)
+		pin.Allocations = append(pin.Allocations, c.id)
+		_, ok, err := c.pinEC(ctx, pin, []peer.ID{p})
 		if ok && err == nil {
 			logger.Infof("repinned %s out of %s", pin.Cid, p)
 		}
-		return 
-		
+		return
 	}
 	_, ok, err := c.pin(ctx, pin, []peer.ID{p})
 	if ok && err == nil {
 		logger.Infof("repinned %s out of %s", pin.Cid, p)
 	}
 
-}
-
-
-
-func (c *Cluster) Alloc(ctx context.Context, pin api.Pin) []peer.ID {
-	cState, err := c.consensus.State(ctx)
-	pinCh := make(chan api.Pin, 1024)
-	go func() {
-		err = cState.List(c.ctx, pinCh)
-		if err != nil {
-			logger.Warn(err)
-		}
-	}()
-	
-	p := pin.Allocations
-	f1 := strings.Split(pin.Name, "(")[1]
-	f2 := strings.Split(f1, ")")[0]
-	or, _ := strconv.Atoi(strings.Split(f2, ",")[0])
-	par, _ := strconv.Atoi(strings.Split(f2, ",")[1])
-	logger.Debugf("repinning %s from peer %s", pin.Cid, p)
-
-	fmt.Fprintf(os.Stdout, "getShardNumber of pin named : %s", pin.Name)
-	numpin, name, err := getShardNumber(pin.Name)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return nil
-	}
-	fmt.Printf("number of the shard to repair is : %d \n", numpin)
-	mod := numpin % (or + par)
-	before := (numpin - 1) % (or + par)
-	after := (or + par - mod) % (or + par)
-	Local := true
-	Blacklist := []peer.ID{}
-	for pinn := range pinCh {
-		if strings.Contains(pinn.Name, "-shard-") {
-			pinnShardNum, namee, err := getShardNumber(pinn.Name)
-			if err != nil {
-				fmt.Println("Error:", err)
-				continue
-			}
-			//fmt.Printf("Current shard number : %d\n", pinnShardNum)
-			if pinnShardNum >= numpin-before && pinnShardNum <= numpin+after && pinnShardNum != numpin && name == namee {
-				// This shard is within the range, proceed with retrieval logic
-				//fmt.Printf("Retrieving shard %d: %s with index: %d \n", pinnShardNum, pinn.Name, pinnShardNum%(c.or+c.par))
-				if slices.Contains(pinn.Allocations, c.id) {
-					Local = false
-				}
-				Blacklist = append(Blacklist,pinn.Allocations...)
-			}
-		}
-	}
-	if Local{
-		return []peer.ID{}
-	} else{
-		return Blacklist
-	}
-}
-
-
-func getShardNumber(pinName string) (int, string, error) {
-	// Assuming the format of pin.Name() is something like "xxx-shard-i"
-	parts := strings.Split(pinName, "-shard-")
-	if len(parts) < 2 {
-		return -1, "", fmt.Errorf("invalid shard format 1")
-	}
-	// Convert shard number (i) to integer
-	num1 := strings.Split(pinName, ")-")
-	if len(num1) < 2 {
-		return -1, "", fmt.Errorf("invalid shard format 2")
-	}
-	num11 := num1[1]
-	if strings.Contains(pinName, "Rep") {
-		num2 := strings.Split(num11, "Rep")
-		if len(num2) < 2 {
-			return -1, "", fmt.Errorf("invalid shard format 3")
-		}
-		num, err := strconv.Atoi(num2[0])
-		name := parts[0]
-		fmt.Fprintf(os.Stdout, "getShardNumber : name is %s and number is : %d \n", name, num)
-		return num, name, err
-	} else {
-		num, err := strconv.Atoi(num11)
-		name := parts[0]
-		fmt.Fprintf(os.Stdout, "getShardNumber : name is %s and number is : %d \n", name, num)
-		return num, name, err
-	}
 }
 
 // run launches some go-routines which live throughout the cluster's life
@@ -1773,6 +1675,82 @@ func (c *Cluster) pin(
 	return pin, true, c.consensus.LogPin(ctx, pin)
 }
 
+func (c *Cluster) pinEC(
+	ctx context.Context,
+	pin api.Pin,
+	blacklist []peer.ID,
+) (api.Pin, bool, error) {
+	ctx, span := trace.StartSpan(ctx, "cluster/pin")
+	defer span.End()
+
+	if c.config.FollowerMode {
+		return api.Pin{}, false, errFollowerMode
+	}
+
+	if !pin.Cid.Defined() {
+		return pin, false, errors.New("bad pin object")
+	}
+
+	// Handle pin updates when the option is set
+	if update := pin.PinUpdate; update.Defined() && !update.Equals(pin.Cid) {
+		pin, err := c.PinUpdate(ctx, update, pin.Cid, pin.PinOptions)
+		return pin, true, err
+	}
+
+	existing, err := c.PinGet(ctx, pin.Cid)
+	if err != nil && err != state.ErrNotFound {
+		return pin, false, err
+	}
+
+	pin, err = c.setupPin(ctx, pin, existing)
+	if err != nil {
+		return pin, false, err
+	}
+
+	// Set the Pin timestamp to now(). This is not an user-controllable
+	// "option".
+	pin.Timestamp = time.Now()
+
+	if pin.Type == api.MetaType {
+		return pin, true, c.consensus.LogPin(ctx, pin)
+	}
+
+	// Usually allocations are unset when pinning normally, however, the
+	// allocations may have been preset by the adder in which case they
+	// need to be respected. Whenever allocations are set. We don't
+	// re-allocate. repinFromPeer() unsets allocations for this reason.
+	// allocate() will check which peers are currently allocated
+	// and try to respect them.
+	if len(pin.Allocations) == 0 {
+		// If replication factor is -1, this will return empty
+		// allocations.
+		allocs, err := c.allocate(
+			ctx,
+			pin.Cid,
+			existing,
+			pin.ReplicationFactorMin,
+			pin.ReplicationFactorMax,
+			blacklist,
+			pin.UserAllocations,
+		)
+		if err != nil {
+			return pin, false, err
+		}
+		pin.Allocations = allocs
+	}
+
+	// If this is true, replication factor should be -1.
+	if len(pin.Allocations) == 0 {
+		logger.Infof("pinning %s everywhere:", pin.Cid)
+	} else {
+		logger.Infof("pinning %s on %s:", pin.Cid, pin.Allocations)
+	}
+
+	tr := c.consensus.LogPin(ctx, pin)
+	c.Unpin(ctx, pin.Cid)
+	return pin, true, tr
+}
+
 // Unpin removes a previously pinned Cid from Cluster. It returns
 // the global state Pin object as it was stored before removal, or
 // an error if it was not possible to update the global state.
@@ -2462,4 +2440,3 @@ func (c *Cluster) RepoGCLocal(ctx context.Context) (api.RepoGC, error) {
 	resp.Peername = c.config.Peername
 	return resp, nil
 }
-
