@@ -408,15 +408,16 @@ func (rpcapi *ClusterRPCAPI) BlockAllocateWithBlack(ctx context.Context, in api.
 	if err != nil {
 		return err
 	}
-
+	black := in.UserAllocations
+	in.UserAllocations = nil
 	allocs, err := rpcapi.c.allocate(
 		ctx,
 		in.Cid,
 		existing,
 		-1,
 		-1,
-		in.UserAllocations, // blacklist
-		nil,                // prio list
+		black, // blacklist
+		nil,   // prio list
 	)
 
 	if err != nil {
