@@ -1065,12 +1065,15 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 		}
 		return timedownloadchunks, timetorepairchunksonly, wait2
 	} else {
-		for _,pi := range repairShards{
-			for _,per := range pi.pin.Allocations{
-				blacklist = append(blacklist,per)
+		for _, pi := range repairShards {
+			for _, per := range pi.pin.Allocations {
+				blacklist = append(blacklist, per)
 			}
 		}
-		shh, _ := sharding.NewShardsBlack(spt.ctx, spt.ctx, spt.rpcClient,blacklist, pin.PinOptions)
+		for _,bl := range blacklist{
+			fmt.Printf("BBBBLLLLL : %s \n",bl.String())
+		}
+		shh, _ := sharding.NewShardsBlack(spt.ctx, spt.ctx, spt.rpcClient, blacklist, pin.PinOptions)
 		enc, _ := reedsolomon.New(or, par)
 		k := 0
 		for {
@@ -1253,7 +1256,7 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 			}
 		}
 		wait1 := time.Now()
-		shh.FlushForStateless(spt.ctx,pin)
+		shh.FlushForStateless(spt.ctx, pin)
 		wait2 := time.Since(wait1)
 		cancell()
 		return timedownloadchunks, timetorepairchunksonly, wait2
