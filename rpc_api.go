@@ -3,6 +3,7 @@ package ipfscluster
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/ipfs-cluster/ipfs-cluster/api"
 	"github.com/ipfs-cluster/ipfs-cluster/state"
@@ -347,6 +348,24 @@ func (rpcapi *ClusterRPCAPI) BlockAllocate(ctx context.Context, in api.Pin, out 
 	}
 	// Allocating for a existing pin. Usually the adder calls this with
 	// cid.Undef.
+	black := []peer.ID{}
+	if val, ok := in.PinOptions.Metadata["Black"]; ok && val != "" {
+		ids := strings.Split(val, ",")
+		for _, id := range ids {
+			id = strings.TrimSpace(id) // remove extra spaces
+			if id == "" {
+				continue
+			}
+			// parse string into peer.ID
+			pid, err := peer.Decode(id)
+			if err != nil {
+				// handle invalid peer ID if needed
+				continue
+			}
+			black = append(black, pid)
+		}
+		delete(in.PinOptions.Metadata, "Black")
+	}
 	existing, err := rpcapi.c.PinGet(ctx, in.Cid)
 	if err != nil && err != state.ErrNotFound {
 		return err
@@ -377,7 +396,7 @@ func (rpcapi *ClusterRPCAPI) BlockAllocate(ctx context.Context, in api.Pin, out 
 		existing,
 		in.ReplicationFactorMin,
 		in.ReplicationFactorMax,
-		[]peer.ID{},        // blacklist
+		black,              // blacklist
 		in.UserAllocations, // prio list
 	)
 
