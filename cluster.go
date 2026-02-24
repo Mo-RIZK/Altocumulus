@@ -1747,7 +1747,7 @@ func (c *Cluster) pinEC(
 	}
 
 	tr := c.consensus.LogPin(ctx, pin)
-	c.Unpin(ctx, pin.Cid)
+	c.consensus.LogUnpin(ctx, pin)
 	return pin, true, tr
 }
 
