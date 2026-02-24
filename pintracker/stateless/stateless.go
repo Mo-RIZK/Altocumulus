@@ -1070,10 +1070,12 @@ func (spt *Tracker) repinUsingRSWithSwitching(op *optracker.Operation) (time.Dur
 				blacklist = append(blacklist, per)
 			}
 		}
-		for _,bl := range blacklist{
-			fmt.Printf("BBBBLLLLL : %s \n",bl.String())
+		for _, bl := range blacklist {
+			fmt.Printf("BBBBLLLLL : %s \n", bl.String())
+			pin.PinOptions.Metadata["Black"] = pin.PinOptions.Metadata["Black"] + "," + bl.String()
 		}
-		shh, _ := sharding.NewShardsBlack(spt.ctx, spt.ctx, spt.rpcClient, blacklist, pin.PinOptions)
+
+		shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
 		enc, _ := reedsolomon.New(or, par)
 		k := 0
 		for {
