@@ -345,7 +345,6 @@ func (rpcapi *ClusterRPCAPI) BlockAllocate(ctx context.Context, in api.Pin, out 
 	if rpcapi.c.config.FollowerMode {
 		return errFollowerMode
 	}
-
 	// Allocating for a existing pin. Usually the adder calls this with
 	// cid.Undef.
 	existing, err := rpcapi.c.PinGet(ctx, in.Cid)
@@ -408,16 +407,14 @@ func (rpcapi *ClusterRPCAPI) BlockAllocateWithBlack(ctx context.Context, in api.
 	if err != nil {
 		return err
 	}
-	black := in.UserAllocations
-	in.UserAllocations = nil
 	allocs, err := rpcapi.c.allocate(
 		ctx,
 		in.Cid,
 		existing,
 		-1,
 		-1,
-		black, // blacklist
-		nil,   // prio list
+		in.UserAllocations, // blacklist
+		nil,                // prio list
 	)
 
 	if err != nil {
