@@ -71,7 +71,7 @@ type ECRepairS struct {
 }
 
 // New creates a new StatelessPinTracker.
-func NewECrep(cfg *Config, pid peer.ID, cons Consensus, connector IPFSConnector) *ECRepairS {
+func NewECrep(cfg *Config, pid peer.ID, cons Consensus, connector IPFSConnector, rpc *rpc.Client) *ECRepairS {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	spt := &ECRepairS{
@@ -83,6 +83,7 @@ func NewECrep(cfg *Config, pid peer.ID, cons Consensus, connector IPFSConnector)
 		//priorityPinCh: make(chan *optracker.Operation, cfg.MaxPinQueueSize),
 		//pinCh:         make(chan *optracker.Operation, cfg.MaxPinQueueSize),
 		//unpinCh:       make(chan *optracker.Operation, cfg.MaxPinQueueSize),
+		rpcClient: rpc,
 		RepairCh:  make(chan *api.Pin, DefaultMaxPinQueueSize),
 		cons:      cons,
 		connector: connector,

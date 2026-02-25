@@ -221,7 +221,7 @@ func NewCluster(
 		c.run()
 	}()
 
-	ecrep := NewECrep(cfg, host.ID(), c.consensus, c.ipfs)
+	ecrep := NewECrep(cfg, host.ID(), c.consensus, c.ipfs, c.rpcClient)
 	c.RepairJobs = ecrep
 	return c, nil
 }
