@@ -246,9 +246,10 @@ require (
 	lukechampine.com/blake3 v1.4.0 // indirect
 )
 
-replace github.com/ipfs/go-ipld-format v0.6.0 => github.com/Mo-RIZK/go-ipld-format 7c68fd5e35ab133dbfc6a7f9e38f5647d708206f
+replace github.com/ipfs/go-ipld-format v0.6.0 => github.com/Mo-RIZK/go-ipld-format v0.0.0-20260206105547-7c68fd5e35ab
 
 replace github.com/ipfs/boxo v0.29.1 => github.com/Mo-RIZK/boxo v0.0.0-20250728095910-d2e5ddd2368b
+
 go 1.24
 
 toolchain go1.24.0
