@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/ipfs-cluster/ipfs-cluster/ECRepair/Scheduler"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -382,6 +383,7 @@ func runCmd(c *cli.Context) error {
 	}
 
 	tracker := stateless.New(cfgs.Statelesstracker, host.ID(), cfgs.Cluster.Peername, crdtcons.State, connector)
+	ecrepair := Scheduler.New(cfgs.ECRepairScheduler, host.ID(), cfgs.Cluster.Peername, crdtcons.State, connector)
 
 	mon, err := pubsubmon.New(ctx, cfgs.Pubsubmon, pubsub, nil)
 	if err != nil {
@@ -424,6 +426,7 @@ func runCmd(c *cli.Context) error {
 		[]ipfscluster.API{rest},
 		connector,
 		tracker,
+		ecrepair,
 		mon,
 		alloc,
 		informers,

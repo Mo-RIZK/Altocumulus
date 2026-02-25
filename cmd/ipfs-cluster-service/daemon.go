@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/ipfs-cluster/ipfs-cluster/ECRepair/Scheduler"
 	"strings"
 	"time"
 
@@ -231,6 +232,7 @@ func createCluster(
 	}
 
 	tracker := stateless.New(cfgs.Statelesstracker, host.ID(), cfgs.Cluster.Peername, cons.State, connector)
+	ecrepair := Scheduler.New(cfgs.ECRepairScheduler, host.ID(), cfgs.Cluster.Peername, cons.State, connector)
 	logger.Debug("stateless pintracker loaded")
 
 	mon, err := pubsubmon.New(ctx, cfgs.Pubsubmon, pubsub, peersF)
@@ -250,6 +252,7 @@ func createCluster(
 		apis,
 		connector,
 		tracker,
+		ecrepair,
 		mon,
 		alloc,
 		informers,

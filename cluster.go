@@ -75,6 +75,7 @@ type Cluster struct {
 	ipfs      IPFSConnector
 	tracker   PinTracker
 	monitor   PeerMonitor
+	ecrepair  ECRepair
 	allocator PinAllocator
 	informers []Informer
 	tracer    Tracer
@@ -116,6 +117,7 @@ func NewCluster(
 	apis []API,
 	ipfs IPFSConnector,
 	tracker PinTracker,
+	ecrepair ECRepair,
 	monitor PeerMonitor,
 	allocator PinAllocator,
 	informers []Informer,
@@ -168,6 +170,7 @@ func NewCluster(
 		apis:              apis,
 		ipfs:              ipfs,
 		tracker:           tracker,
+		ecrepair:          ecrepair,
 		monitor:           monitor,
 		allocator:         allocator,
 		informers:         informers,

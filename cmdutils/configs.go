@@ -2,6 +2,7 @@ package cmdutils
 
 import (
 	"fmt"
+	"github.com/ipfs-cluster/ipfs-cluster/ECRepair/Scheduler"
 	"os"
 	"path/filepath"
 
@@ -31,26 +32,27 @@ import (
 
 // Configs carries config types used by a Cluster Peer.
 type Configs struct {
-	Cluster          *ipfscluster.Config
-	Restapi          *rest.Config
-	Pinsvcapi        *pinsvcapi.Config
-	Ipfsproxy        *ipfsproxy.Config
-	Ipfshttp         *ipfshttp.Config
-	Raft             *raft.Config
-	Crdt             *crdt.Config
-	Statelesstracker *stateless.Config
-	Pubsubmon        *pubsubmon.Config
-	BalancedAlloc    *balanced.Config
-	DiskInf          *disk.Config
-	NumpinInf        *numpin.Config
-	TagsInf          *tags.Config
-	PinQueueInf      *pinqueue.Config
-	Metrics          *observations.MetricsConfig
-	Tracing          *observations.TracingConfig
-	Badger           *badger.Config
-	Badger3          *badger3.Config
-	LevelDB          *leveldb.Config
-	Pebble           *pebble.Config
+	Cluster           *ipfscluster.Config
+	Restapi           *rest.Config
+	Pinsvcapi         *pinsvcapi.Config
+	Ipfsproxy         *ipfsproxy.Config
+	Ipfshttp          *ipfshttp.Config
+	Raft              *raft.Config
+	Crdt              *crdt.Config
+	Statelesstracker  *stateless.Config
+	ECRepairScheduler *Scheduler.Config
+	Pubsubmon         *pubsubmon.Config
+	BalancedAlloc     *balanced.Config
+	DiskInf           *disk.Config
+	NumpinInf         *numpin.Config
+	TagsInf           *tags.Config
+	PinQueueInf       *pinqueue.Config
+	Metrics           *observations.MetricsConfig
+	Tracing           *observations.TracingConfig
+	Badger            *badger.Config
+	Badger3           *badger3.Config
+	LevelDB           *leveldb.Config
+	Pebble            *pebble.Config
 }
 
 // ConfigHelper helps managing the configuration and identity files with the
