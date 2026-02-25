@@ -723,11 +723,7 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 		if !strings.Contains(pin.Name, "Repair") {
 			pin.Name = pin.Name + "Repair"
 		}
-		pin.Allocations = append(pin.Allocations, c.id)
-		_, ok, err := c.pinEC(ctx, pin, []peer.ID{p})
-		if ok && err == nil {
-			logger.Infof("repinned %s out of %s", pin.Cid, p)
-		}
+		c.ecrepair.Enqueue(ctx, &pin)
 		return
 	}
 	_, ok, err := c.pin(ctx, pin, []peer.ID{p})
@@ -1676,82 +1672,6 @@ func (c *Cluster) pin(
 	}
 
 	return pin, true, c.consensus.LogPin(ctx, pin)
-}
-
-func (c *Cluster) pinEC(
-	ctx context.Context,
-	pin api.Pin,
-	blacklist []peer.ID,
-) (api.Pin, bool, error) {
-	ctx, span := trace.StartSpan(ctx, "cluster/pin")
-	defer span.End()
-
-	if c.config.FollowerMode {
-		return api.Pin{}, false, errFollowerMode
-	}
-
-	if !pin.Cid.Defined() {
-		return pin, false, errors.New("bad pin object")
-	}
-
-	// Handle pin updates when the option is set
-	if update := pin.PinUpdate; update.Defined() && !update.Equals(pin.Cid) {
-		pin, err := c.PinUpdate(ctx, update, pin.Cid, pin.PinOptions)
-		return pin, true, err
-	}
-
-	existing, err := c.PinGet(ctx, pin.Cid)
-	if err != nil && err != state.ErrNotFound {
-		return pin, false, err
-	}
-
-	pin, err = c.setupPin(ctx, pin, existing)
-	if err != nil {
-		return pin, false, err
-	}
-
-	// Set the Pin timestamp to now(). This is not an user-controllable
-	// "option".
-	pin.Timestamp = time.Now()
-
-	if pin.Type == api.MetaType {
-		return pin, true, c.consensus.LogPin(ctx, pin)
-	}
-
-	// Usually allocations are unset when pinning normally, however, the
-	// allocations may have been preset by the adder in which case they
-	// need to be respected. Whenever allocations are set. We don't
-	// re-allocate. repinFromPeer() unsets allocations for this reason.
-	// allocate() will check which peers are currently allocated
-	// and try to respect them.
-	if len(pin.Allocations) == 0 {
-		// If replication factor is -1, this will return empty
-		// allocations.
-		allocs, err := c.allocate(
-			ctx,
-			pin.Cid,
-			existing,
-			pin.ReplicationFactorMin,
-			pin.ReplicationFactorMax,
-			blacklist,
-			pin.UserAllocations,
-		)
-		if err != nil {
-			return pin, false, err
-		}
-		pin.Allocations = allocs
-	}
-
-	// If this is true, replication factor should be -1.
-	if len(pin.Allocations) == 0 {
-		logger.Infof("pinning %s everywhere:", pin.Cid)
-	} else {
-		logger.Infof("pinning %s on %s:", pin.Cid, pin.Allocations)
-	}
-
-	tr := c.consensus.LogPin(ctx, pin)
-	c.consensus.LogUnpin(ctx, pin)
-	return pin, true, tr
 }
 
 // Unpin removes a previously pinned Cid from Cluster. It returns
