@@ -259,6 +259,7 @@ func (ch *ConfigHelper) init() {
 	man.RegisterComponent(config.API, cfgs.Ipfsproxy)
 	man.RegisterComponent(config.IPFSConn, cfgs.Ipfshttp)
 	man.RegisterComponent(config.PinTracker, cfgs.Statelesstracker)
+	man.RegisterComponent(config.ECRepair, cfgs.ECRepairScheduler)
 	man.RegisterComponent(config.Monitor, cfgs.Pubsubmon)
 	man.RegisterComponent(config.Allocator, cfgs.BalancedAlloc)
 	man.RegisterComponent(config.Informer, cfgs.DiskInf)

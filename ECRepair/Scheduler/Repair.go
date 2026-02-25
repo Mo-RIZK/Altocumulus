@@ -73,7 +73,6 @@ type ECRepairS struct {
 // New creates a new StatelessPinTracker.
 func New(cfg *Config, pid peer.ID, peerName string, getState func(ctx context.Context) (state.ReadOnly, error), connector *ipfshttp.Connector) *ECRepairS {
 	ctx, cancel := context.WithCancel(context.Background())
-	cfg.Default()
 
 	spt := &ECRepairS{
 		config:   cfg,

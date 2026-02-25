@@ -72,6 +72,7 @@ const (
 	IPFSConn
 	State
 	PinTracker
+	ECRepair
 	Monitor
 	Allocator
 	Informer
