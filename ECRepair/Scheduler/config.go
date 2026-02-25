@@ -10,13 +10,13 @@ import (
 	"github.com/ipfs-cluster/ipfs-cluster/config"
 )
 
-const configKey = "scheduler"
-const envConfigKey = "cluster_EC_scheduler"
+const configKey = "stateless"
+const envConfigKey = "cluster_stateless"
 
 // Default values for this Config.
 const (
 	DefaultMaxPinQueueSize       = 1000000
-	DefaultConcurrentRepairs     = 20
+	DefaultConcurrentPins        = 20
 	DefaultPriorityPinMaxAge     = 24 * time.Hour
 	DefaultPriorityPinMaxRetries = 5
 )
@@ -57,7 +57,7 @@ func (cfg *Config) ConfigKey() string {
 // Default sets the fields of this Config to sensible values.
 func (cfg *Config) Default() error {
 	cfg.MaxPinQueueSize = DefaultMaxPinQueueSize
-	cfg.ConcurrentPins = DefaultConcurrentRepairs
+	cfg.ConcurrentPins = DefaultConcurrentPins
 	cfg.PriorityPinMaxAge = DefaultPriorityPinMaxAge
 	cfg.PriorityPinMaxRetries = DefaultPriorityPinMaxRetries
 	return nil
@@ -80,19 +80,19 @@ func (cfg *Config) ApplyEnvVars() error {
 // at least in appearance.
 func (cfg *Config) Validate() error {
 	if cfg.MaxPinQueueSize <= 0 {
-		return errors.New("ECscheduler.max_pin_queue_size too low")
+		return errors.New("statelesstracker.max_pin_queue_size too low")
 	}
 
 	if cfg.ConcurrentPins <= 0 {
-		return errors.New("ECscheduler.concurrent_pins is too low")
+		return errors.New("statelesstracker.concurrent_pins is too low")
 	}
 
 	if cfg.PriorityPinMaxAge <= 0 {
-		return errors.New("ECscheduler.priority_pin_max_age is too low")
+		return errors.New("statelesstracker.priority_pin_max_age is too low")
 	}
 
 	if cfg.PriorityPinMaxRetries <= 0 {
-		return errors.New("ECscheduler.priority_pin_max_retries is too low")
+		return errors.New("statelesstracker.priority_pin_max_retries is too low")
 	}
 
 	return nil
@@ -104,7 +104,7 @@ func (cfg *Config) LoadJSON(raw []byte) error {
 	jcfg := &jsonConfig{}
 	err := json.Unmarshal(raw, jcfg)
 	if err != nil {
-		logger.Error("Error unmarshaling ECRepair config")
+		logger.Error("Error unmarshaling statelesstracker config")
 		return err
 	}
 
