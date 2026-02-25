@@ -89,7 +89,7 @@ func NewECrep(cfg *Config, pid peer.ID, cons Consensus, connector IPFSConnector)
 	}
 
 	for i := 0; i < DefaultConcurrentPins; i++ {
-		go spt.opWorker(spt.RepairCh)
+		//go spt.opWorker(spt.RepairCh)
 	}
 	return spt
 }
