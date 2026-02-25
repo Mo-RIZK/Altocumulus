@@ -75,7 +75,6 @@ type Cluster struct {
 	ipfs      IPFSConnector
 	tracker   PinTracker
 	monitor   PeerMonitor
-	ecrepair  ECRepair
 	allocator PinAllocator
 	informers []Informer
 	tracer    Tracer
@@ -98,6 +97,7 @@ type Cluster struct {
 
 	curPingVal pingValue
 	repairing  []peer.ID
+	RepairJobs *ECRepairS
 }
 
 // NewCluster builds a new IPFS Cluster peer. It initializes a LibP2P host,
@@ -117,7 +117,6 @@ func NewCluster(
 	apis []API,
 	ipfs IPFSConnector,
 	tracker PinTracker,
-	ecrepair ECRepair,
 	monitor PeerMonitor,
 	allocator PinAllocator,
 	informers []Informer,
@@ -170,7 +169,6 @@ func NewCluster(
 		apis:              apis,
 		ipfs:              ipfs,
 		tracker:           tracker,
-		ecrepair:          ecrepair,
 		monitor:           monitor,
 		allocator:         allocator,
 		informers:         informers,
@@ -223,6 +221,8 @@ func NewCluster(
 		c.run()
 	}()
 
+	ecrep := NewECrep(cfg, host.ID(), c.consensus, c.ipfs)
+	c.RepairJobs = ecrep
 	return c, nil
 }
 
@@ -720,10 +720,7 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 	// note that pin() should not result in different allocations
 	// if we are not under the replication-factor min.
 	if strings.Contains(pin.Name, "EC") {
-		if !strings.Contains(pin.Name, "Repair") {
-			pin.Name = pin.Name + "Repair"
-		}
-		c.ecrepair.Enqueue(ctx, &pin)
+		c.RepairJobs.Enqueue(ctx, &pin)
 		return
 	}
 	_, ok, err := c.pin(ctx, pin, []peer.ID{p})

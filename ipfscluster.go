@@ -142,10 +142,6 @@ type PinTracker interface {
 	PinQueueSize(context.Context) (int64, error)
 }
 
-type ECRepair interface {
-	Enqueue(ctx context.Context, c *api.Pin) error
-}
-
 // Informer provides Metric information from a peer. The metrics produced by
 // informers are then passed to a PinAllocator which will use them to
 // determine where to pin content. The metric is agnostic to the rest of
