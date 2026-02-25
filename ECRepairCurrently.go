@@ -89,7 +89,7 @@ func NewECrep(cfg *Config, pid peer.ID, cons Consensus, connector IPFSConnector)
 	}
 
 	for i := 0; i < DefaultConcurrentPins; i++ {
-		//go spt.opWorker(spt.RepairCh)
+		go spt.opWorker(spt.RepairCh)
 	}
 	return spt
 }
@@ -118,21 +118,19 @@ func (spt *ECRepairS) getIPFSID(ctx context.Context) api.IPFSID {
 // receives a pin Function (pin or unpin) and channels.  Used for both pinning
 // and unpinning.
 func (spt *ECRepairS) opWorker(RepairCh chan *api.Pin) {
-
 	var op *api.Pin
 	for {
-		// Process the priority channel first.
+		// Process the channel
 		select {
 		case op = <-RepairCh:
-			goto APPLY_OP
+			if op == nil {
+				// Skip nil pins to prevent panic
+				continue
+			}
+			spt.pin(op)
 		case <-spt.ctx.Done():
 			return
-		default:
 		}
-
-		// apply operations that came from some channel
-	APPLY_OP:
-		spt.pin(op)
 	}
 }
 
