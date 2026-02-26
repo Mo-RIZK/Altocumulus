@@ -708,7 +708,17 @@ func (dgs *DAGService) flushCurrentShards(ctx context.Context) (cid.Cid, error) 
 		pin.Name = fmt.Sprintf("%s-shard-EC(%d,%d)-%d", shardd[(shardN-1)%(dgs.original+dgs.parity)].pinOptions.Name, dgs.original, dgs.parity, shardN)
 		// this sets allocations as priority allocation
 		pin.Allocations = shardd[(shardN-1)%(dgs.original+dgs.parity)].allocations
-
+		BlocksConc := ""
+		first := 1
+		for _, cid := range shardd[(shardN-1)%(dgs.original+dgs.parity)].blocksCIDs {
+			if first == 1 {
+				BlocksConc = cid.String()
+				first++
+			} else {
+				BlocksConc = BlocksConc + "," + cid.String()
+			}
+		}
+		pin.Metadata["Cids"] = BlocksConc
 		pin.Type = api.ShardType
 		ref := api.NewCid(dgs.previousShard)
 		pin.Reference = &ref

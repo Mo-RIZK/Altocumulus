@@ -223,17 +223,6 @@ func (sh *shard) Flush(ctx context.Context, shardN int, prev cid.Cid) (cid.Cid, 
 	// this sets allocations as priority allocation
 	pin.Allocations = sh.allocations
 	pin.Type = api.ShardType
-	BlocksConc := ""
-	first := 1
-	for _, cid := range sh.blocksCIDs {
-		if first == 1 {
-			BlocksConc = cid.String()
-			first++
-		} else {
-			BlocksConc = BlocksConc + "," + cid.String()
-		}
-	}
-	pin.Metadata["Cids"] = BlocksConc
 	ref := api.NewCid(prev)
 	pin.Reference = &ref
 	pin.MaxDepth = 1
