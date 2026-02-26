@@ -69,16 +69,15 @@ type DAGService struct {
 	lastCid       cid.Cid
 	mu            sync.Mutex
 	// Current shard being built
-	currentShardrep    *shard
-	together           int
-	intgor             []int
-	nodegor            []ipld.Node
-	shardgor           []*shard
-	lengthsgor         []int
-	try                ipld.Node
-	topin              []every
-	seq                bool
-	shards_every_where []ipld.Node
+	currentShardrep *shard
+	together        int
+	intgor          []int
+	nodegor         []ipld.Node
+	shardgor        []*shard
+	lengthsgor      []int
+	try             ipld.Node
+	topin           []every
+	seq             bool
 }
 
 // New returns a new ClusterDAGService, which uses the given rpc client to perform
@@ -95,26 +94,25 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 		shards:    make(map[string]cid.Cid),
 		startTime: time.Now(),
 
-		internal:           opts.Csize,
-		internalnodes:      make([]ipld.Node, 0),
-		shards_every_where: make([]ipld.Node, 0),
-		wait:               false,
-		current:            0,
-		nodeparallel:       make([]ipld.Node, 0, opts.O+opts.P),
-		currentShard:       make([]*shard, opts.O+opts.P),
-		howmany:            0,
-		flushtimes:         0,
-		original:           opts.O,
-		parity:             opts.P,
-		shardrep:           make(map[string]cid.Cid),
-		together:           0,
-		nodegor:            make([]ipld.Node, 0, opts.O+opts.P),
-		intgor:             make([]int, 0, opts.O+opts.P),
-		lengthsgor:         make([]int, 0, opts.O+opts.P),
-		shardgor:           make([]*shard, 0, opts.O+opts.P),
-		try:                nil,
-		topin:              make([]every, 0),
-		seq:                opts.Seq,
+		internal:      opts.Csize,
+		internalnodes: make([]ipld.Node, 0),
+		wait:          false,
+		current:       0,
+		nodeparallel:  make([]ipld.Node, 0, opts.O+opts.P),
+		currentShard:  make([]*shard, opts.O+opts.P),
+		howmany:       0,
+		flushtimes:    0,
+		original:      opts.O,
+		parity:        opts.P,
+		shardrep:      make(map[string]cid.Cid),
+		together:      0,
+		nodegor:       make([]ipld.Node, 0, opts.O+opts.P),
+		intgor:        make([]int, 0, opts.O+opts.P),
+		lengthsgor:    make([]int, 0, opts.O+opts.P),
+		shardgor:      make([]*shard, 0, opts.O+opts.P),
+		try:           nil,
+		topin:         make([]every, 0),
+		seq:           opts.Seq,
 	}
 }
 
@@ -209,14 +207,6 @@ func (dgs *DAGService) Finalize(ctx context.Context, dataRoot api.Cid) (api.Cid,
 			}
 		}
 
-		for _, n := range dgs.shards_every_where {
-			select {
-			case <-ctx.Done():
-				logger.Error(ctx.Err())
-				return //abort
-			case blocks <- adder.IpldNodeToNodeWithMeta(n):
-			}
-		}
 	}()
 
 	// Stream these blocks and wait until we are done.
@@ -230,28 +220,6 @@ func (dgs *DAGService) Finalize(ctx context.Context, dataRoot api.Cid) (api.Cid,
 		pinn := api.PinWithOpts(api.NewCid(n.Cid()), dgs.addParams.PinOptions)
 		pinn.ReplicationFactorMin = -1
 		pinn.ReplicationFactorMax = -1
-		pinn.MaxDepth = 0
-		errr := adder.Pin(ctx, dgs.rpcClient, pinn)
-		if errr != nil {
-			return dataRoot, errr
-		}
-	}
-
-	if err := bs.Err(); err != nil {
-		return dataRoot, err
-	}
-
-	// Stream these blocks and wait until we are done.
-	bse := adder.NewBlockStreamer(ctx, dgs.rpcClient, []peer.ID{""}, blocks)
-	select {
-	case <-ctx.Done():
-		return dataRoot, ctx.Err()
-	case <-bse.Done():
-	}
-	for _, n := range dgs.shards_every_where {
-		pinn := api.PinWithOpts(api.NewCid(n.Cid()), dgs.addParams.PinOptions)
-		pinn.ReplicationFactorMin = 2
-		pinn.ReplicationFactorMax = 2
 		pinn.MaxDepth = 0
 		errr := adder.Pin(ctx, dgs.rpcClient, pinn)
 		if errr != nil {
@@ -721,7 +689,6 @@ func (dgs *DAGService) flushCurrentShards(ctx context.Context) (cid.Cid, error) 
 				return
 			}
 			mu.Lock()
-			dgs.shards_every_where = append(dgs.shards_every_where, nodes...)
 			black := make([]peer.ID, 0)
 			black = append(black, shardd[(shardN-1)%(dgs.original+dgs.parity)].allocations...)
 			ee := every{black: black, nodes: nodes}
@@ -746,6 +713,7 @@ func (dgs *DAGService) flushCurrentShards(ctx context.Context) (cid.Cid, error) 
 		ref := api.NewCid(dgs.previousShard)
 		pin.Reference = &ref
 		pin.MaxDepth = 1
+		//////////////////////////////////pin.Metadata["Cids"]=pin.Metadata["Cids"] + ""
 		pin.ShardSize = shardd[(shardN-1)%(dgs.original+dgs.parity)].Size()                                               // use current size, not the limit
 		if lennodes[(shardN-1)%(dgs.original+dgs.parity)] > len(shardd[(shardN-1)%(dgs.original+dgs.parity)].dagNode)+1 { // using an indirect graph
 			pin.MaxDepth = 2
