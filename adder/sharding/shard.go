@@ -34,6 +34,7 @@ type shard struct {
 	dagNode     map[string]cid.Cid
 	currentSize uint64
 	sizeLimit   uint64
+	blocksCIDs  []cid.Cid
 }
 
 func NewShard(globalCtx context.Context, ctx context.Context, rpc *rpc.Client, opts api.PinOptions, alloc peer.ID) (*shard, error) {
@@ -63,6 +64,7 @@ func NewShard(globalCtx context.Context, ctx context.Context, rpc *rpc.Client, o
 		dagNode:     make(map[string]cid.Cid),
 		currentSize: 0,
 		sizeLimit:   opts.ShardSize,
+		blocksCIDs:  make([]cid.Cid, 0),
 	}, nil
 }
 
@@ -152,6 +154,7 @@ func (sh *shard) Allocations() []peer.ID {
 }
 
 func (sh *shard) sendBlock(ctx context.Context, n ipld.Node) error {
+	sh.blocksCIDs = append(sh.blocksCIDs, n.Cid())
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -160,6 +163,7 @@ func (sh *shard) sendBlock(ctx context.Context, n ipld.Node) error {
 	}
 }
 func (sh *shard) SendBlock(ctx context.Context, n ipld.Node) error {
+	sh.blocksCIDs = append(sh.blocksCIDs, n.Cid())
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -219,6 +223,17 @@ func (sh *shard) Flush(ctx context.Context, shardN int, prev cid.Cid) (cid.Cid, 
 	// this sets allocations as priority allocation
 	pin.Allocations = sh.allocations
 	pin.Type = api.ShardType
+	BlocksConc := ""
+	first := 1
+	for _, cid := range sh.blocksCIDs {
+		if first == 1 {
+			BlocksConc = cid.String()
+			first++
+		} else {
+			BlocksConc = BlocksConc + "," + cid.String()
+		}
+	}
+	pin.Metadata["Cids"] = BlocksConc
 	ref := api.NewCid(prev)
 	pin.Reference = &ref
 	pin.MaxDepth = 1
