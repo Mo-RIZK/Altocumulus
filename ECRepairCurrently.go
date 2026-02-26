@@ -137,6 +137,12 @@ func (spt *ECRepairS) opWorker(RepairCh chan *api.Pin) {
 
 func (spt *ECRepairS) pin(op *api.Pin) error {
 	fmt.Fprintf(os.Stdout, "Date start inside the pintracker repair %s : %s \n", op.Name, time.Now().Format("2006-01-02 15:04:05.000"))
+	CIDs := op.Metadata["CIDs"]
+	for _, CID := range CIDs {
+		fmt.Fprintf(os.Stdout, "MMMMMMMEEEEETTTTTTTAAAAAAAA : %s\n", CID)
+
+	}
+
 	download, repair, waittosend := spt.repinUsingRSWithSwitching(op)
 	//download, repair, waittosend := spt.repinUsingRSrelatedWork(op)
 	fmt.Fprintf(os.Stdout, "Time Taken to download chunks is : %s and to repair chunks is : %s and additional time to wait to complete sending the shard : %s \n", download.String(), repair.String(), waittosend.String())
