@@ -137,7 +137,7 @@ func (spt *ECRepairS) opWorker(RepairCh chan *api.Pin) {
 
 func (spt *ECRepairS) pin(op *api.Pin) error {
 	fmt.Fprintf(os.Stdout, "Date start inside the pintracker repair %s : %s \n", op.Name, time.Now().Format("2006-01-02 15:04:05.000"))
-	CIDs := op.Metadata["CIDs"]
+	CIDs := op.Metadata["Cids"]
 	for _, CID := range CIDs {
 		fmt.Fprintf(os.Stdout, "MMMMMMMEEEEETTTTTTTAAAAAAAA : %s\n", CID)
 
