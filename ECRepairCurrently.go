@@ -742,20 +742,22 @@ type DataChunk struct {
 }
 
 // Enqueue puts a new operation on the queue, unless ongoing exists.
-func (spt *ECRepairS) Enqueue(c *api.Pin, out *struct{}) error {
-	fmt.Fprintf(os.Stdout, "EEEEEEEEEEEEENNNNNNNNNNNNNNNNNNNN %s \n", c.Cid.Cid.String())
+func (spt *ECRepairS) Enqueue(c *api.Pin, out *bool) error {
+	fmt.Fprintf(os.Stdout, "Enqueuedddddddddddddddddd: %s\n", c.Cid.Cid.String())
 	ch := spt.RepairCh
 	select {
 	case ch <- c:
+		*out = true
+		return nil
 	default:
+		*out = false
 		return ErrFullQueue
 	}
-	return nil
 }
 
 // SetClient makes the StatelessPinTracker ready to perform RPC requests to
 // other components.
-func (spt *ECRepairS) SetClient(c *rpc.Client) {
+func (spt *ECRepairS) setClient(c *rpc.Client) {
 	spt.rpcClient = c
 	close(spt.rpcReady)
 }
