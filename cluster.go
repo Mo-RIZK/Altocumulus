@@ -558,6 +558,7 @@ func (c *Cluster) alertsHandler() {
 							}
 						} else {
 							if distance.isClosest(pin.Cid) {
+								fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 111111111111111\n")
 								ppp := c.similarities(c.ctx, pin)
 								fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s by the peeerrr : %s \n", ppp.String(), c.id.String())
 								var out bool
@@ -2381,6 +2382,7 @@ func (c *Cluster) RepoGCLocal(ctx context.Context) (api.RepoGC, error) {
 }
 
 func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
 	cidString, ok := pin.Metadata["Cids"]
 	if !ok || cidString == "" {
 		// If no CIDs, just return any peer
@@ -2400,7 +2402,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 
 	// Map to track how many CIDs each peer has
 	peerSim := make(map[peer.ID]int)
-
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 33333333333333333\n")
 	// For every CID, check every peer
 	for _, cidStr := range CIDs {
 
@@ -2412,7 +2414,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 
 		for _, p := range peers {
 			var exists bool
-
+			fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 4444444444444444444\n")
 			err := c.rpcClient.CallContext(
 				ctx,
 				p,
@@ -2427,6 +2429,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 				peerSim[p]++
 			}
 		}
+		fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 555555555555555555555555\n")
 	}
 
 	// Find the peer with the most similarities
