@@ -3,9 +3,11 @@ package ipfscluster
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/ipfs-cluster/ipfs-cluster/api"
 	"github.com/ipfs-cluster/ipfs-cluster/state"
 	"github.com/ipfs-cluster/ipfs-cluster/version"
+	"os"
 	"strings"
 
 	rpc "github.com/libp2p/go-libp2p-gorpc"
@@ -196,6 +198,7 @@ func (rpcapi *ClusterRPCAPI) Unpin(ctx context.Context, in api.Pin, out *api.Pin
 
 // Enqueue exposes Cluster.Enqueue over RPC
 func (rpcapi *ClusterRPCAPI) Enqueue(ctx context.Context, in api.Pin, out *struct{}) error {
+	fmt.Fprintf(os.Stdout, "HHHHHHHHHHOOOOOOOOOOOOO")
 	return rpcapi.c.Enqueue(ctx, in)
 }
 
