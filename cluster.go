@@ -227,6 +227,7 @@ func NewCluster(
 	if errr != nil {
 		return nil, errr
 	}
+	c.rpcServer.RegisterName("ECRepairS", ecrep)
 	return c, nil
 }
 
