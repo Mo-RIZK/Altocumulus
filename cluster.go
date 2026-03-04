@@ -557,7 +557,8 @@ func (c *Cluster) alertsHandler() {
 								c.repinFromPeer(c.ctx, alrt.Peer, pin)
 							} else {
 								if distance.isClosest(pin.Cid) {
-									c.similarities(c.ctx, pin)
+									ppp := c.similarities(c.ctx, pin)
+									fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s \n", ppp.String())
 								}
 							}
 						}

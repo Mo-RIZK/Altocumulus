@@ -1462,6 +1462,7 @@ func (ipfs *Connector) postCtx(ctx context.Context, path string, contentType str
 }
 
 func (ipfs *Connector) HasBlock(ctx context.Context, c cid.Cid, out *bool) error {
+
 	ctx, span := trace.StartSpan(ctx, "ipfsconn/ipfshttp/HasBlock")
 	defer span.End()
 
