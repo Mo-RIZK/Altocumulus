@@ -555,11 +555,11 @@ func (c *Cluster) alertsHandler() {
 							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
 							if repair {
 								c.repinFromPeer(c.ctx, alrt.Peer, pin)
-							} else {
-								if distance.isClosest(pin.Cid) {
-									ppp := c.similarities(c.ctx, pin)
-									fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s \n", ppp.String())
-								}
+							}
+						} else {
+							if distance.isClosest(pin.Cid) {
+								ppp := c.similarities(c.ctx, pin)
+								fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s \n", ppp.String())
 							}
 						}
 
