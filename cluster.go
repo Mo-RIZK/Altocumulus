@@ -2403,7 +2403,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 
 	// For every CID, check every peer
 	for _, cidStr := range CIDs {
-		fmt.Printf("CCCCCCCCCCIIIIIDDDDDDDDDDDD %s", cidStr)
+
 		cidStr = strings.TrimSpace(cidStr)
 		cidObj, err := api.DecodeCid(cidStr)
 		if err != nil {
