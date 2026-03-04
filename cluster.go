@@ -2438,7 +2438,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 			bestPeer = p
 		}
 	}
-
+	fmt.Printf("MAAAAAAXXXXXXXXXXXXX similarities is %d with the peerrrrrr %s \n", maxSim, bestPeer)
 	// If all peers have 0 similarities, this still returns the first peer
 	return bestPeer
 }
