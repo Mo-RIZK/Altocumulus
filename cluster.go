@@ -745,7 +745,7 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 	if strings.Contains(pin.Name, "EC") {
 		//check for the best peer
 		var out struct{}
-		c.RepairJobs.Enqueue(ctx, &pin, &out)
+		c.RepairJobs.Enqueue(&pin, &out)
 		return
 	}
 	_, ok, err := c.pin(ctx, pin, []peer.ID{p})
