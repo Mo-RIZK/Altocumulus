@@ -195,6 +195,15 @@ func (rpcapi *ClusterRPCAPI) Unpin(ctx context.Context, in api.Pin, out *api.Pin
 	return nil
 }
 
+// Enqueue repair runs Cluster.Unpin().
+func (rpcapi *ClusterRPCAPI) Enqueue(ctx context.Context, in api.Pin, out *struct{}) error {
+	errr := rpcapi.c.Enqueue(ctx, in)
+	if errr != nil {
+		return errr
+	}
+	return nil
+}
+
 // PinPath resolves path into a cid and runs Cluster.Pin().
 func (rpcapi *ClusterRPCAPI) PinPath(ctx context.Context, in api.PinPath, out *api.Pin) error {
 	pin, err := rpcapi.c.PinPath(ctx, in.Path, in.PinOptions)

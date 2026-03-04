@@ -742,15 +742,15 @@ type DataChunk struct {
 }
 
 // Enqueue puts a new operation on the queue, unless ongoing exists.
-func (spt *ECRepairS) Enqueue(c *api.Pin, out *bool) error {
-	fmt.Fprintf(os.Stdout, "Enqueuedddddddddddddddddd: %s\n", c.Cid.Cid.String())
-	ch := spt.RepairCh
+func (spt *ECRepairS) Enqueue(ctx context.Context, c api.Pin) error {
+	fmt.Fprintf(os.Stdout, "Enqueuing pin: %s\n", c.Cid.Cid.String())
+
 	select {
-	case ch <- c:
-		*out = true
+	case spt.RepairCh <- &c:
+		// Successfully enqueued
 		return nil
 	default:
-		*out = false
+		// Queue is full
 		return ErrFullQueue
 	}
 }

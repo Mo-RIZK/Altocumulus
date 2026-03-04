@@ -740,8 +740,7 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 	// if we are not under the replication-factor min.
 	if strings.Contains(pin.Name, "EC") {
 		//check for the best peer
-		var out bool
-		c.RepairJobs.Enqueue(&pin, &out)
+		c.RepairJobs.Enqueue(c.ctx, pin)
 		return
 	}
 	_, ok, err := c.pin(ctx, pin, []peer.ID{p})
@@ -2443,4 +2442,12 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 
 	// If all peers have 0 similarities, this still returns the first peer
 	return bestPeer
+}
+
+func (c *Cluster) Enqueue(ctx context.Context, cid api.Pin) error {
+	err := c.RepairJobs.Enqueue(ctx, cid)
+	if err != nil {
+		return err
+	}
+	return nil
 }
