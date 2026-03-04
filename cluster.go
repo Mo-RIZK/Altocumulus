@@ -534,6 +534,7 @@ func (c *Cluster) alertsHandler() {
 				logger.Warn(err)
 				return
 			}
+			sim := 1
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			fmt.Fprintf(os.Stdout, "Collecting the ip addresses of all nodes took : %s \n", bet.String())
@@ -549,11 +550,18 @@ func (c *Cluster) alertsHandler() {
 			for pin := range pinCh {
 				if containsPeer(pin.Allocations, alrt.Peer) {
 					if strings.Contains(pin.Name, "EC") {
-						var repair bool
-						repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
-						if repair {
-							c.repinFromPeer(c.ctx, alrt.Peer, pin)
+						if sim == 0 {
+							var repair bool
+							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
+							if repair {
+								c.repinFromPeer(c.ctx, alrt.Peer, pin)
+							} else {
+								if distance.isClosest(pin.Cid) {
+									c.similarities(c.ctx, pin)
+								}
+							}
 						}
+
 					} else {
 						if distance.isClosest(pin.Cid) {
 							c.repinFromPeer(c.ctx, alrt.Peer, pin)
@@ -720,6 +728,7 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 	// note that pin() should not result in different allocations
 	// if we are not under the replication-factor min.
 	if strings.Contains(pin.Name, "EC") {
+		//check for the best peer
 		c.RepairJobs.Enqueue(ctx, &pin)
 		return
 	}
@@ -2359,4 +2368,67 @@ func (c *Cluster) RepoGCLocal(ctx context.Context) (api.RepoGC, error) {
 	resp.Peer = c.id
 	resp.Peername = c.config.Peername
 	return resp, nil
+}
+
+func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
+	cidString, ok := pin.Metadata["Cids"]
+	if !ok || cidString == "" {
+		// If no CIDs, just return any peer
+		peers, _ := c.consensus.Peers(ctx)
+		if len(peers) > 0 {
+			return peers[0]
+		}
+		return "" // fallback
+	}
+
+	CIDs := strings.Split(cidString, ",")
+
+	peers, err := c.consensus.Peers(ctx)
+	if err != nil || len(peers) == 0 {
+		return "" // fallback
+	}
+
+	// Map to track how many CIDs each peer has
+	peerSim := make(map[peer.ID]int)
+
+	// For every CID, check every peer
+	for _, cidStr := range CIDs {
+		cidStr = strings.TrimSpace(cidStr)
+		cidObj, err := api.DecodeCid(cidStr)
+		if err != nil {
+			continue
+		}
+
+		for _, p := range peers {
+			var exists bool
+
+			err := c.rpcClient.CallContext(
+				ctx,
+				p,
+				"IPFSConnector",
+				"HasBlock", // now using the new HasBlock RPC
+				cidObj,
+				&exists,
+			)
+
+			if err == nil && exists {
+				// Peer has this block → increment similarity
+				peerSim[p]++
+			}
+		}
+	}
+
+	// Find the peer with the most similarities
+	maxSim := -1
+	var bestPeer peer.ID
+	for _, p := range peers {
+		count := peerSim[p]
+		if count > maxSim {
+			maxSim = count
+			bestPeer = p
+		}
+	}
+
+	// If all peers have 0 similarities, this still returns the first peer
+	return bestPeer
 }

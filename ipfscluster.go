@@ -108,6 +108,7 @@ type IPFSConnector interface {
 	NodeGet(ctx context.Context, cid cid.Cid) (string, error)
 	ChunkGet(ctx context.Context, cid cid.Cid) ([]byte, error)
 	PingOtherPeer(context.Context, api.IPFSID) (string, error)
+	HasBlock(ctx context.Context, c cid.Cid, out *bool) error
 }
 
 // Peered represents a component which needs to be aware of the peers

@@ -141,7 +141,6 @@ func (spt *ECRepairS) pin(op *api.Pin) error {
 	//              TODO: USE this in the new repair with respect to similarities.
 	//
 	//CIDs := op.Metadata["Cids"]
-
 	download, repair, waittosend := spt.repinUsingRSWithSwitching(op)
 	//download, repair, waittosend := spt.repinUsingRSrelatedWork(op)
 	fmt.Fprintf(os.Stdout, "Time Taken to download chunks is : %s and to repair chunks is : %s and additional time to wait to complete sending the shard : %s \n", download.String(), repair.String(), waittosend.String())

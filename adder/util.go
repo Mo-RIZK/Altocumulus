@@ -10,8 +10,8 @@ import (
 
 	cid "github.com/ipfs/go-cid"
 	ipld "github.com/ipfs/go-ipld-format"
-	peer "github.com/libp2p/go-libp2p/core/peer"
 	rpc "github.com/libp2p/go-libp2p-gorpc"
+	peer "github.com/libp2p/go-libp2p/core/peer"
 )
 
 // ErrBlockAdder is returned when adding a to multiple destinations
@@ -129,6 +129,7 @@ func BlockAllocate(ctx context.Context, rpc *rpc.Client, pinOpts api.PinOptions)
 	)
 	return allocsStr, err
 }
+
 // BlockAllocate helps allocating blocks to peers.
 func BlockAllocateWithBlack(ctx context.Context, rpc *rpc.Client, black []peer.ID, pinOpts api.PinOptions) ([]peer.ID, error) {
 	// Find where to allocate this file
@@ -154,7 +155,7 @@ func Pin(ctx context.Context, rpc *rpc.Client, pin api.Pin) error {
 	var pinResp api.Pin
 	return rpc.CallContext(
 		ctx,
-		"", // use ourself to pin
+		"", // use yourself to pin
 		"Cluster",
 		"Pin",
 		pin,
