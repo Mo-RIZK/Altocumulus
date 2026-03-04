@@ -744,6 +744,7 @@ type DataChunk struct {
 // Enqueue puts a new operation on the queue, unless ongoing exists.
 func (spt *ECRepairS) Enqueue(ctx context.Context, c *api.Pin, out *struct{}) error {
 	ctx, span := trace.StartSpan(ctx, "tracker/stateless/enqueue")
+	fmt.Fprintf(os.Stdout, "EEEEEEEEEEEEENNNNNNNNNNNNNNNNNNNN %s \n", c.Cid.Cid.String())
 	defer span.End()
 
 	ch := spt.RepairCh
