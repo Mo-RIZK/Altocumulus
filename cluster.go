@@ -563,11 +563,11 @@ func (c *Cluster) alertsHandler() {
 								var out bool
 								c.rpcClient.CallContext(
 									c.ctx,
-									ppp,         // the peer you selected with `similarities()`
-									"ECRepairS", // type name of the registered component
-									"Enqueue",   // method name
-									&pin,        // input argument
-									&out,        // output
+									ppp,                      // the peer you selected with `similarities()`
+									"Cluster",                // type name of the registered component
+									"BlockAllocateWithBlack", // method name
+									&pin,                     // input argument
+									&out,                     // output
 								)
 							}
 						}
