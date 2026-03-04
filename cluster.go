@@ -223,11 +223,7 @@ func NewCluster(
 
 	ecrep := NewECrep(cfg, host.ID(), c.consensus, c.ipfs, c.rpcClient)
 	c.RepairJobs = ecrep
-	errr := c.rpcServer.Register(ecrep)
-	if errr != nil {
-		return nil, errr
-	}
-	c.rpcServer.RegisterName("ECRepairS", ecrep)
+	c.rpcServer.RegisterName("ECRepairS", c.RepairJobs)
 	return c, nil
 }
 
