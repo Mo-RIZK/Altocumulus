@@ -565,7 +565,7 @@ func (c *Cluster) alertsHandler() {
 							if distance.isClosest(pin.Cid) {
 								ppp := c.similarities(c.ctx, pin)
 								fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s by the peeerrr : %s \n", ppp.String(), c.id.String())
-								var out struct{}
+								var out bool
 								c.rpcClient.CallContext(
 									c.ctx,
 									ppp,         // the peer you selected with `similarities()`
@@ -744,7 +744,7 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 	// if we are not under the replication-factor min.
 	if strings.Contains(pin.Name, "EC") {
 		//check for the best peer
-		var out struct{}
+		var out bool
 		c.RepairJobs.Enqueue(&pin, &out)
 		return
 	}
