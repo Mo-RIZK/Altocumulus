@@ -245,7 +245,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	fmt.Printf("STEEEEEEEEEPPPPPPPPPP RRRRRRRRRREEEEEEETTTTTTTTT with length of repair shards is : %d \n", len(repairShards))
 	for i, pinwm := range repairShards {
 		go func(pinwm pinwithmeta, i int) {
-			cidss := spt.RetrieveCids(pinwm)
+			cidss := spt.retrieveCids(pinwm)
 			muu.Lock()
 			if ret < or {
 				ret++
@@ -689,14 +689,14 @@ func (spt *ECRepairS) getData(ctx context.Context, Cid string) []byte {
 	return nnn
 }
 
-func (spt *ECRepairS) RetrieveCids(pinwm pinwithmeta) []Chunk {
+func (spt *ECRepairS) retrieveCids(pinwm pinwithmeta) []Chunk {
 	s, _ := spt.connector.NodeGet(spt.ctx, pinwm.pin.Cid.Cid)
 	cids := doTheProcess(s)
 	return cids
 }
 
 func doTheProcess(nn string) []Chunk {
-	parsedData, _ := ConvertStringToJSON(nn)
+	parsedData, _ := convertStringToJSON(nn)
 	cidss := make([]Chunk, 0)
 	for key, value := range parsedData {
 		// if the get node format do not contain data then we will be passing through the nodes inside each shard
@@ -719,7 +719,7 @@ func doTheProcess(nn string) []Chunk {
 }
 
 // ConvertStringToJSON parses the input string and converts it to JSON.
-func ConvertStringToJSON(input string) (Data, error) {
+func convertStringToJSON(input string) (Data, error) {
 	// Define a variable to hold the parsed JSON data
 	var result Data
 
