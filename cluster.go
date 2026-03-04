@@ -563,7 +563,7 @@ func (c *Cluster) alertsHandler() {
 						} else {
 							if distance.isClosest(pin.Cid) {
 								ppp := c.similarities(c.ctx, pin)
-								fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s \n", ppp.String())
+								fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s by the peeerrr : %s \n", ppp.String(), c.id.String())
 								var out struct{}
 								c.rpcClient.CallContext(
 									c.ctx,
