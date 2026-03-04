@@ -3,11 +3,10 @@ package ipfscluster
 import (
 	"context"
 	"errors"
-	"strings"
-
 	"github.com/ipfs-cluster/ipfs-cluster/api"
 	"github.com/ipfs-cluster/ipfs-cluster/state"
 	"github.com/ipfs-cluster/ipfs-cluster/version"
+	"strings"
 
 	rpc "github.com/libp2p/go-libp2p-gorpc"
 	peer "github.com/libp2p/go-libp2p/core/peer"
@@ -196,13 +195,13 @@ func (rpcapi *ClusterRPCAPI) Unpin(ctx context.Context, in api.Pin, out *api.Pin
 }
 
 // Enqueue repair runs Cluster.Unpin().
-func (rpcapi *ClusterRPCAPI) Enqueue(ctx context.Context, in api.Pin, out *struct{}) error {
+/*func (rpcapi *ClusterRPCAPI) Enqueue(ctx context.Context, in api.Pin, out *struct{}) error {
 	errr := rpcapi.c.enqueue(ctx, in)
 	if errr != nil {
 		return errr
 	}
 	return nil
-}
+}*/
 
 // PinPath resolves path into a cid and runs Cluster.Pin().
 func (rpcapi *ClusterRPCAPI) PinPath(ctx context.Context, in api.PinPath, out *api.Pin) error {
@@ -420,36 +419,7 @@ func (rpcapi *ClusterRPCAPI) BlockAllocate(ctx context.Context, in api.Pin, out 
 // BlockAllocate returns allocations for blocks. This is used in the adders.
 // It's different from pin allocations when ReplicationFactor < 0.
 func (rpcapi *ClusterRPCAPI) BlockAllocateWithBlack(ctx context.Context, in api.Pin, out *[]peer.ID) error {
-	if rpcapi.c.config.FollowerMode {
-		return errFollowerMode
-	}
-
-	// Allocating for a existing pin. Usually the adder calls this with
-	// cid.Undef.
-	existing, err := rpcapi.c.PinGet(ctx, in.Cid)
-	if err != nil && err != state.ErrNotFound {
-		return err
-	}
-
-	in, err = rpcapi.c.setupPin(ctx, in, existing)
-	if err != nil {
-		return err
-	}
-	allocs, err := rpcapi.c.allocate(
-		ctx,
-		in.Cid,
-		existing,
-		-1,
-		-1,
-		in.UserAllocations, // blacklist
-		nil,                // prio list
-	)
-
-	if err != nil {
-		return err
-	}
-
-	*out = allocs
+	rpcapi.c.enqueue(ctx, in)
 	return nil
 }
 
