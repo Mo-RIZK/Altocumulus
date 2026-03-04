@@ -743,7 +743,8 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 	// if we are not under the replication-factor min.
 	if strings.Contains(pin.Name, "EC") {
 		//check for the best peer
-		c.RepairJobs.Enqueue(ctx, &pin)
+		var out struct{}
+		c.RepairJobs.Enqueue(ctx, &pin, &out)
 		return
 	}
 	_, ok, err := c.pin(ctx, pin, []peer.ID{p})
