@@ -61,6 +61,7 @@ var DefaultRPCPolicy = map[string]RPCEndpointType{
 	"IPFSConnector.Resolve":     RPCClosed,
 	"IPFSConnector.SwarmPeers":  RPCTrusted, // Called in ConnectGraph
 	"IPFSConnector.Unpin":       RPCClosed,
+	"IPFSConnector.HasBlock":    RPCTrusted,
 
 	// Consensus methods
 	"Consensus.AddPeer":  RPCTrusted, // Called by Raft/redirect to leader

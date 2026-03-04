@@ -7,6 +7,7 @@ import (
 	"github.com/ipfs-cluster/ipfs-cluster/api"
 	"github.com/ipfs-cluster/ipfs-cluster/state"
 	"github.com/ipfs-cluster/ipfs-cluster/version"
+	"github.com/ipfs/go-cid"
 	"os"
 	"strings"
 
@@ -585,6 +586,11 @@ func (rpcapi *IPFSConnectorRPCAPI) PinLs(ctx context.Context, in <-chan []string
 		}
 		return rpcapi.ipfs.PinLs(ctx, pinTypes, out)
 	}
+}
+
+func (rpcapi *IPFSConnectorRPCAPI) HasBlock(ctx context.Context, in cid.Cid, out *struct{}) error {
+	var outt *bool
+	return rpcapi.ipfs.HasBlock(ctx, in, outt)
 }
 
 // ConfigKey runs IPFSConnector.ConfigKey().
