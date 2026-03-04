@@ -742,18 +742,15 @@ type DataChunk struct {
 }
 
 // Enqueue puts a new operation on the queue, unless ongoing exists.
-func (spt *ECRepairS) Enqueue(ctx context.Context, c *api.Pin) error {
+func (spt *ECRepairS) Enqueue(ctx context.Context, c *api.Pin, out *struct{}) error {
 	ctx, span := trace.StartSpan(ctx, "tracker/stateless/enqueue")
 	defer span.End()
 
 	ch := spt.RepairCh
-
 	select {
 	case ch <- c:
 	default:
-		err := ErrFullQueue
-		logger.Error(err.Error())
-		return err
+		return ErrFullQueue
 	}
 	return nil
 }
