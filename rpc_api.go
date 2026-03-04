@@ -197,7 +197,7 @@ func (rpcapi *ClusterRPCAPI) Unpin(ctx context.Context, in api.Pin, out *api.Pin
 
 // Enqueue repair runs Cluster.Unpin().
 func (rpcapi *ClusterRPCAPI) Enqueue(ctx context.Context, in api.Pin, out *struct{}) error {
-	errr := rpcapi.c.Enqueue(ctx, in)
+	errr := rpcapi.c.enqueue(ctx, in)
 	if errr != nil {
 		return errr
 	}

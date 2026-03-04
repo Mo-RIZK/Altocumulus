@@ -2443,7 +2443,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 	return bestPeer
 }
 
-func (c *Cluster) Enqueue(ctx context.Context, cid api.Pin) error {
+func (c *Cluster) enqueue(ctx context.Context, cid api.Pin) error {
 	err := c.RepairJobs.Enqueue(ctx, cid)
 	if err != nil {
 		return err
