@@ -223,6 +223,10 @@ func NewCluster(
 
 	ecrep := NewECrep(cfg, host.ID(), c.consensus, c.ipfs, c.rpcClient)
 	c.RepairJobs = ecrep
+	errr := c.rpcServer.Register(ecrep)
+	if errr != nil {
+		return nil, errr
+	}
 	return c, nil
 }
 
@@ -560,6 +564,15 @@ func (c *Cluster) alertsHandler() {
 							if distance.isClosest(pin.Cid) {
 								ppp := c.similarities(c.ctx, pin)
 								fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s \n", ppp.String())
+								var out struct{}
+								c.rpcClient.CallContext(
+									c.ctx,
+									ppp,         // the peer you selected with `similarities()`
+									"ECRepairS", // type name of the registered component
+									"Enqueue",   // method name
+									&pin,        // input argument
+									&out,        // output
+								)
 							}
 						}
 
