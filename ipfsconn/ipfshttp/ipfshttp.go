@@ -1228,23 +1228,25 @@ func (ipfs *Connector) NodeGet(ctx context.Context, c cid.Cid) (string, error) {
 // the ipfs daemon, reads the full body of the response and
 // returns it after checking for errors.
 func (ipfs *Connector) postCtxNew(ctx context.Context, path string, contentType string, postBody io.Reader) (string, error) {
+	fmt.Printf("In posttttt newwwwwwww \n")
 	rdr, err := ipfs.postCtxStreamResponse(ctx, path, contentType, postBody)
 	if err != nil {
 		return "", err
 	}
 	defer rdr.Close()
-
+	fmt.Printf("stepppppp reader \n")
 	body, err := io.ReadAll(rdr)
 	if err != nil {
 		logger.Errorf("error reading response body: %s", err)
 		return "", err
 	}
-
+	fmt.Printf("stepppppp readddd \n")
 	formattedJSON, err := prettyPrintJSON(body)
 	if err != nil {
 		log.Printf("Failed to format response as JSON: %v", err)
 		fmt.Println("Raw Response: ", string(body)) // Fallback to raw string
 	}
+	fmt.Printf("stepppppp pretttyyyy \n")
 
 	return formattedJSON, nil
 }
@@ -1474,6 +1476,7 @@ func (ipfs *Connector) HasBlock(ctx context.Context, c cid.Cid, out *bool) error
 	url := "block/stat?arg=" + c.String()
 
 	// Call postCtxNew and capture the response
+
 	resp, err := ipfs.postCtxNew(ctx, url, "", nil)
 	if err != nil {
 		fmt.Printf("HTTP request failed: %v\n", err)
