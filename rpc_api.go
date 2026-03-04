@@ -3,9 +3,11 @@ package ipfscluster
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/ipfs-cluster/ipfs-cluster/api"
 	"github.com/ipfs-cluster/ipfs-cluster/state"
 	"github.com/ipfs-cluster/ipfs-cluster/version"
+	"os"
 	"strings"
 
 	rpc "github.com/libp2p/go-libp2p-gorpc"
@@ -419,6 +421,7 @@ func (rpcapi *ClusterRPCAPI) BlockAllocate(ctx context.Context, in api.Pin, out 
 // BlockAllocate returns allocations for blocks. This is used in the adders.
 // It's different from pin allocations when ReplicationFactor < 0.
 func (rpcapi *ClusterRPCAPI) BlockAllocateWithBlack(ctx context.Context, in api.Pin, out *[]peer.ID) error {
+	fmt.Fprintf(os.Stdout, "HHHHOOOOOOOOOOO \n")
 	rpcapi.c.enqueue(ctx, in)
 	return nil
 }
