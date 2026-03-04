@@ -1462,7 +1462,8 @@ func (ipfs *Connector) postCtx(ctx context.Context, path string, contentType str
 }
 
 func (ipfs *Connector) HasBlock(ctx context.Context, c cid.Cid, out *bool) error {
-	fmt.Printf("HHHHHHAAAAAAASSSSSSSSS")
+	fmt.Printf("HHHHHHAAAAAAASSSSSSSSS\n") // debug to see if it's called
+
 	ctx, span := trace.StartSpan(ctx, "ipfsconn/ipfshttp/HasBlock")
 	defer span.End()
 
@@ -1476,8 +1477,8 @@ func (ipfs *Connector) HasBlock(ctx context.Context, c cid.Cid, out *bool) error
 	// Perform the request
 	_, err := ipfs.postCtxNew(ctx, url, "", nil)
 	if err != nil {
-		*out = false
-		return nil // treat errors as "block not present"
+		*out = false // mark as not present if request fails
+		return nil   // do not treat it as an RPC error
 	}
 
 	// If HTTP request succeeds, the block exists

@@ -588,9 +588,8 @@ func (rpcapi *IPFSConnectorRPCAPI) PinLs(ctx context.Context, in <-chan []string
 	}
 }
 
-func (rpcapi *IPFSConnectorRPCAPI) HasBlock(ctx context.Context, in cid.Cid, out *struct{}) error {
-	var outt *bool
-	return rpcapi.ipfs.HasBlock(ctx, in, outt)
+func (rpcapi *IPFSConnectorRPCAPI) HasBlock(ctx context.Context, in cid.Cid, out *bool) error {
+	return rpcapi.ipfs.HasBlock(ctx, in, out)
 }
 
 // ConfigKey runs IPFSConnector.ConfigKey().
