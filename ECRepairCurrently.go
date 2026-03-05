@@ -269,6 +269,10 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	//Local
 	if Local {
 		shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions, spt.peerID)
+		for _, pid := range shh.Allocations() {
+			fmt.Printf("Allocationssssssssssssss are: %s \n", pid.String())
+		}
+
 		enc, _ := reedsolomon.New(or, par)
 		k := 0
 		for {
