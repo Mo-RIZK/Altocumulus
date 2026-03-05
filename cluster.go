@@ -2393,7 +2393,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 		return "" // fallback
 	}
 
-	CIDs := strings.Split(cidString, ",")
+	//CIDs := strings.Split(cidString, ",")
 
 	peers, err := c.consensus.Peers(ctx)
 	if err != nil || len(peers) == 0 {
@@ -2404,27 +2404,27 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 	peerSim := make(map[peer.ID]int)
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 33333333333333333\n")
 	// For every CID, check every peer
-	for _, cidStr := range CIDs {
+	/*for _, cidStr := range CIDs {
 
-		cidStr = strings.TrimSpace(cidStr)
-		cidObj, err := api.DecodeCid(cidStr)
-		if err != nil {
-			continue
-		}
+	cidStr = strings.TrimSpace(cidStr)
+	cidObj, err := api.DecodeCid(cidStr)
+	if err != nil {
+		continue
+	}
 
-		for _, p := range peers {
-			//var exists bool
-			fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 444444444444444\n")
-			rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-			/*err := c.rpcClient.CallContext(
-				rpcCtx,
-				p,
-				"IPFSConnector",
-				"HasBlock", // now using the new HasBlock RPC
-				cidObj,
-				&exists,
-			)*/
-			var blockData []byte // this will hold the block content
+	for _, p := range peers {
+		//var exists bool
+		fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 444444444444444\n")
+		rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		/*err := c.rpcClient.CallContext(
+			rpcCtx,
+			p,
+			"IPFSConnector",
+			"HasBlock", // now using the new HasBlock RPC
+			cidObj,
+			&exists,
+		)*/
+	/*var blockData []byte // this will hold the block content
 			err := c.rpcClient.CallContext(
 				rpcCtx,          // context
 				p,               // the peer you want to call
@@ -2446,7 +2446,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 			//	peerSim[p]++
 			//}
 		}
-	}
+	}*/
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 55555555555555555\n")
 	// Find the peer with the most similarities
 	maxSim := -1
