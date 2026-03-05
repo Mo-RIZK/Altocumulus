@@ -562,7 +562,7 @@ func (c *Cluster) alertsHandler() {
 								ppp := c.similarities(c.ctx, pin)
 								fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s by the peeerrr : %s \n", ppp.String(), c.id.String())
 								var out bool
-								if ppp != c.id {
+								if ppp == c.id {
 									c.Enqueue(c.ctx, pin)
 								} else {
 									c.rpcClient.CallContext(
