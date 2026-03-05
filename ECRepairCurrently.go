@@ -183,6 +183,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	par, _ := strconv.Atoi(strings.Split(f2, ",")[1])
 	logger.Debugf("repinning %s from peer %s", pin.Cid, p)
 	blacklist := make([]peer.ID, 0)
+	blacklist = append(blacklist, pin.Allocations[0])
 	//blacklist = append(blacklist, pin.Allocations...)-
 	prefix, err := merkledag.PrefixForCidVersion(0)
 	if err != nil {
