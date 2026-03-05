@@ -2414,24 +2414,25 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 
 		for _, p := range peers {
 			var exists bool
-			fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 4444444444444444444\n")
+			fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 444444444444444\n")
+			rpcCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 			err := c.rpcClient.CallContext(
-				ctx,
+				rpcCtx,
 				p,
 				"IPFSConnector",
 				"HasBlock", // now using the new HasBlock RPC
 				cidObj,
 				&exists,
 			)
+			cancel()
 
 			if err == nil && exists {
 				// Peer has this block → increment similarity
 				peerSim[p]++
 			}
 		}
-		fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 555555555555555555555555\n")
 	}
-
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 55555555555555555\n")
 	// Find the peer with the most similarities
 	maxSim := -1
 	var bestPeer peer.ID

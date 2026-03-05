@@ -1469,47 +1469,23 @@ func (ipfs *Connector) HasBlock(ctx context.Context, c cid.Cid, out *bool) error
 		return fmt.Errorf("HasBlock: output pointer is nil")
 	}
 
-	// Build the URL for the IPFS API
-	url := fmt.Sprintf("block/stat?arg=%s", c.String())
-	fullURL := ipfs.apiURL() + "/" + url
-	fmt.Printf("Checking IPFS block via URL: %s\n", fullURL)
+	fmt.Printf("Checking block %s\n", c.String())
 
-	// Timeout for the request
 	ctx, cancel := context.WithTimeout(ctx, ipfs.config.IPFSRequestTimeout)
 	defer cancel()
 
-	// Perform POST request to IPFS daemon
-	rdr, err := ipfs.postCtxStreamResponse(ctx, url, "", nil)
+	url := "block/stat?arg=" + c.String()
+
+	// Call postCtxNew and capture the response
+
+	resp, err := ipfs.postCtxNew(ctx, url, "", nil)
 	if err != nil {
-		fmt.Printf("Error fetching block stat: %s\n", err)
+		fmt.Printf("HTTP request failed: %v\n", err)
 		*out = false
-		return nil // Treat errors as "block not present"
-	}
-	defer rdr.Close()
-
-	// Read the response body
-	body, err := io.ReadAll(rdr)
-	if err != nil {
-		fmt.Printf("Error reading response body: %s\n", err)
-		*out = false
-		return nil
+		return nil // treat errors as "block not present"
 	}
 
-	// Print raw response for debugging
-	fmt.Printf("IPFS /block/stat response: %s\n", string(body))
-
-	// Parse JSON to confirm block exists
-	var resp struct {
-		Key  string `json:"Key"`
-		Size int64  `json:"Size"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		fmt.Printf("JSON parse error: %s\n", err)
-		*out = false
-		return nil
-	}
-
-	// If we got here, the block exists
+	fmt.Printf("HTTP response: %s\n", string(resp))
 	*out = true
 	return nil
 }
