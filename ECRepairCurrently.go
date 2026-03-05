@@ -482,7 +482,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 			"",
 			"IPFSConnector",
 			"Pin",
-			pin,
+			*pin,
 			&struct{}{},
 		)
 		//if err != nil {
