@@ -465,21 +465,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 
 		}
 		wait1 := time.Now()
-		shh.FlushNew(spt.ctx)
+		shh.FlushForStateless(spt.ctx, *pin)
 		wait2 := time.Since(wait1)
 		cancell()
-
-		errr := spt.rpcClient.CallContext(
-			ctx,
-			"",
-			"IPFSConnector",
-			"Pin",
-			pin,
-			&struct{}{},
-		)
-		if errr != nil {
-			return 0, 0, 0
-		}
 		return timedownloadchunks, timetorepairchunksonly, wait2
 	} else {
 		for _, pi := range repairShards {
