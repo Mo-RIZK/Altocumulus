@@ -288,7 +288,8 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		ctxx, cancell := context.WithCancel(context.Background())
 		for i := 0; i < times; i++ {
 			cc, _ := cid.Decode(CIDs[times])
-			if !spt.locally(ctx, cc) {
+			bytes, locally := spt.locally(ctx, cc)
+			if !locally {
 				retrieved := 0
 				sttt := time.Now()
 				reconstructshards := make([][]byte, or+par)
@@ -452,9 +453,8 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 					shh.AddLink(ctx, rawnode.Cid(), size)
 				}
 			} else {
-				bytess := spt.getData(ctxx, CIDs[times])
 				nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
-				nodee.SetFileData(bytess)
+				nodee.SetFileData(bytes)
 				rawnode, _ := nodee.Commit()
 				//zid l blacklist heyye list li other pins kamen fiha
 				shh.SendBlock(spt.ctx, rawnode)
@@ -516,7 +516,8 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		ctxx, cancell := context.WithCancel(context.Background())
 		for i := 0; i < times; i++ {
 			cc, _ := cid.Decode(CIDs[times])
-			if !spt.locally(ctx, cc) {
+			bytes, locally := spt.locally(ctx, cc)
+			if !locally {
 				retrieved := 0
 				sttt := time.Now()
 				reconstructshards := make([][]byte, or+par)
@@ -680,9 +681,8 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 					shh.AddLink(ctx, rawnode.Cid(), size)
 				}
 			} else {
-				bytess := spt.getData(ctxx, CIDs[times])
 				nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
-				nodee.SetFileData(bytess)
+				nodee.SetFileData(bytes)
 				rawnode, _ := nodee.Commit()
 				//zid l blacklist heyye list li other pins kamen fiha
 				shh.SendBlock(spt.ctx, rawnode)
@@ -702,19 +702,17 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 
 }
 
-func (spt *ECRepairS) locally(ctx context.Context, Cid cid.Cid) bool {
-	var has bool
-	err := spt.connector.HasBlock(ctx, Cid, &has)
+func (spt *ECRepairS) locally(ctx context.Context, Cid cid.Cid) ([]byte, bool) {
+	ci := api.Cid{Cid: Cid}
+	rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	bytes, err := spt.connector.BlockGet(rpcCtx, ci)
 	if err != nil {
 		// handle RPC / connection error
-		return false
+		cancel()
+		return nil, false
 	}
-
-	if has {
-		return true
-	} else {
-		return false
-	}
+	cancel()
+	return bytes, true
 }
 func contains(slice []string, id string) bool {
 	for _, v := range slice {
