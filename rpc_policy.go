@@ -39,7 +39,6 @@ var DefaultRPCPolicy = map[string]RPCEndpointType{
 	"Cluster.Unpin":                  RPCClosed,
 	"Cluster.UnpinPath":              RPCClosed,
 	"Cluster.Version":                RPCOpen,
-	"Cluster.Enqueue":                RPCTrusted,
 
 	// PinTracker methods
 	"PinTracker.PinQueueSize": RPCClosed,
