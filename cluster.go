@@ -2413,23 +2413,37 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 		}
 
 		for _, p := range peers {
-			var exists bool
+			//var exists bool
 			fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 444444444444444\n")
-			rpcCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-			err := c.rpcClient.CallContext(
+			rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+			/*err := c.rpcClient.CallContext(
 				rpcCtx,
 				p,
 				"IPFSConnector",
 				"HasBlock", // now using the new HasBlock RPC
 				cidObj,
 				&exists,
+			)*/
+			var blockData []byte // this will hold the block content
+			err := c.rpcClient.CallContext(
+				rpcCtx,          // context
+				p,               // the peer you want to call
+				"IPFSConnector", // RPC service name
+				"BlockGet",      // RPC method name
+				cidObj,          // input argument (api.Cid)
+				&blockData,      // output argument (pointer to []byte)
 			)
-			cancel()
-
-			if err == nil && exists {
-				// Peer has this block → increment similarity
+			if err != nil {
+				fmt.Printf("RPC call failed: %v\n", err)
+			} else {
 				peerSim[p]++
 			}
+			cancel()
+
+			//if err == nil && exists {
+			// Peer has this block → increment similarity
+			//	peerSim[p]++
+			//}
 		}
 	}
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 55555555555555555\n")
