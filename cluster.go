@@ -2437,6 +2437,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 				fmt.Printf("RPC call failed: %v\n", err)
 			} else {
 				peerSim[p]++
+				fmt.Printf("Foundddd on peer : %s and the peer simialairites became : %d \n", p.String(), peerSim[p])
 			}
 			cancel()
 
