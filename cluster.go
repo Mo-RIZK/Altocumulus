@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ipfs/go-cid"
 	"mime/multipart"
 	"os"
 	"strings"
@@ -2391,6 +2392,7 @@ func (c *Cluster) RepoGCLocal(ctx context.Context) (api.RepoGC, error) {
 
 func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
+
 	cidString, ok := pin.Metadata["Cids"]
 	if !ok || cidString == "" {
 		// If no CIDs, just return any peer
@@ -2408,14 +2410,20 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 		return "" // fallback
 	}
 
-	// Map to track how many CIDs each peer has
 	peerSim := make(map[peer.ID]int)
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 33333333333333333\n")
-	// For every CID, check every peer
-	for _, cidStr := range CIDs {
 
+	for _, cidStr := range CIDs {
 		cidStr = strings.TrimSpace(cidStr)
-		cidObj, err := api.DecodeCid(cidStr)
+
+		// Convert from string → api.Cid → cid.Cid for RPC
+		apiCid, err := api.DecodeCid(cidStr)
+		if err != nil {
+			continue
+		}
+
+		// Decode api.Cid to cid.Cid for RPC
+		cidObj, err := cid.Decode(apiCid.String())
 		if err != nil {
 			continue
 		}
@@ -2424,17 +2432,18 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 			fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 444444444444444\n")
 
 			rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-			defer cancel() // or cancel() at end of loop
 
 			var exists bool
 			err := c.rpcClient.CallContext(
 				rpcCtx,          // context
 				p,               // the peer to call
 				"IPFSConnector", // RPC service name
-				"BlockLocalHas", // RPC method name (corrected)
-				cidObj,          // input argument (api.Cid)
+				"BlockLocalHas", // RPC method name
+				cidObj,          // input argument (cid.Cid)
 				&exists,         // output argument (pointer to bool)
 			)
+			cancel() // cancel context immediately after call
+
 			if err != nil {
 				fmt.Printf("RPC call failed for peer %s: %v\n", p.String(), err)
 				continue
@@ -2446,20 +2455,22 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 			}
 		}
 	}
+
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 55555555555555555\n")
+
 	// Find the peer with the most similarities
 	maxSim := -1
 	var bestPeer peer.ID
 	for _, p := range peers {
 		count := peerSim[p]
-		fmt.Fprintf(os.Stdout, "Peeeeeerrrrrrrrrr %s have %d similarities\n", p.String(), count)
+		fmt.Fprintf(os.Stdout, "Peer %s has %d similarities\n", p.String(), count)
 		if count > maxSim {
 			maxSim = count
 			bestPeer = p
 		}
 	}
-	fmt.Printf("MAAAAAAXXXXXXXXXXXXX similarities is %d with the peerrrrrr %s \n", maxSim, bestPeer)
-	// If all peers have 0 similarities, this still returns the first peer
+
+	fmt.Printf("MAX similarities: %d with peer %s\n", maxSim, bestPeer)
 	return bestPeer
 }
 
