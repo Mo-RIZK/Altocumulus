@@ -382,9 +382,17 @@ func (rpcapi *ClusterRPCAPI) BlockAllocate(ctx context.Context, in api.Pin, out 
 		}
 		delete(in.PinOptions.Metadata, "Black")
 	}
+
+	for _, b := range black {
+		fmt.Printf("BBBBLLLLL ALLLL: %s \n", b.String())
+	}
 	existing, err := rpcapi.c.PinGet(ctx, in.Cid)
 	if err != nil && err != state.ErrNotFound {
 		return err
+	}
+
+	if err == nil {
+		fmt.Printf("EXISTTTTT ALLLL: %s \n", existing.Allocations[0].String())
 	}
 
 	in, err = rpcapi.c.setupPin(ctx, in, existing)
