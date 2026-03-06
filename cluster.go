@@ -1647,7 +1647,6 @@ func (c *Cluster) pin(
 	if err != nil && err != state.ErrNotFound {
 		return pin, false, err
 	}
-
 	pin, err = c.setupPin(ctx, pin, existing)
 	if err != nil {
 		return pin, false, err

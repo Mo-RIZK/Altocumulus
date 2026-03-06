@@ -231,8 +231,8 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 				// This shard is within the range, proceed with retrieval logic
 				//fmt.Printf("Retrieving shard %d: %s with index: %d \n", pinnShardNum, pinn.Name, pinnShardNum%(c.or+c.par))
 				if slices.Contains(pinn.Allocations, spt.peerID) {
-					fmt.Printf("the spt ID is : %s Locallllll willl be falseeeeeee shardddd: %s with allocationnn : %s \n", spt.peerID.String(), pinn.Name, pinn.Allocations[0].String())
-					Local = false
+					//fmt.Printf("the spt ID is : %s Locallllll willl be falseeeeeee shardddd: %s with allocationnn : %s \n", spt.peerID.String(), pinn.Name, pinn.Allocations[0].String())
+					//Local = false
 				}
 				pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
 				repairShards = append(repairShards, pinnn)
@@ -270,12 +270,8 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s and localllllll is %t \n", time.Now().Sub(ssss).String(), Local)
 	//Local
 	if Local {
-		for _, bl := range blacklist {
-			fmt.Printf("BBBBLLLLL : %s \n", bl.String())
-			pin.PinOptions.Metadata["Black"] = pin.PinOptions.Metadata["Black"] + "," + bl.String()
-		}
-		pin.UserAllocations = make([]peer.ID, 0)
-		pin.UserAllocations = append(pin.UserAllocations, spt.peerID)
+		pin.Allocations = make([]peer.ID, 0)
+		pin.Allocations = append(pin.Allocations, spt.peerID)
 		shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
 		for _, pid := range shh.Allocations() {
 			fmt.Printf("Allocationssssssssssssss are: %s \n", pid.String())
@@ -477,14 +473,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 
 		}
 		wait1 := time.Now()
-		spt.rpcClient.CallContext(
-			ctx,
-			"",
-			"IPFSConnector",
-			"Pin",
-			*pin,
-			&struct{}{},
-		)
+		shh.FlushForStateless(ctx, *pin)
 		//if err != nil {
 		//return err
 		//}
