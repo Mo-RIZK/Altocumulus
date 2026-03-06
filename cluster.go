@@ -2395,66 +2395,71 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 
 	cidString, ok := pin.Metadata["Cids"]
 	if !ok || cidString == "" {
-		// If no CIDs, just return any peer
 		peers, _ := c.consensus.Peers(ctx)
 		if len(peers) > 0 {
 			return peers[0]
 		}
-		return "" // fallback
+		return ""
 	}
 
 	CIDs := strings.Split(cidString, ",")
 
 	peers, err := c.consensus.Peers(ctx)
 	if err != nil || len(peers) == 0 {
-		return "" // fallback
+		return ""
 	}
 
 	peerSim := make(map[peer.ID]int)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 33333333333333333\n")
 
 	for _, cidStr := range CIDs {
 		cidStr = strings.TrimSpace(cidStr)
-
-		// Convert from string → api.Cid → cid.Cid for RPC
 		apiCid, err := api.DecodeCid(cidStr)
 		if err != nil {
 			continue
 		}
-
-		// Decode api.Cid to cid.Cid for RPC
 		cidObj, err := cid.Decode(apiCid.String())
 		if err != nil {
 			continue
 		}
 
 		for _, p := range peers {
-			fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 444444444444444\n")
+			wg.Add(1)
+			go func(peer peer.ID, c cid.Cid, C *Cluster) {
+				defer wg.Done()
 
-			rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+				rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+				defer cancel()
 
-			var exists bool
-			err := c.rpcClient.CallContext(
-				rpcCtx,          // context
-				p,               // the peer to call
-				"IPFSConnector", // RPC service name
-				"BlockLocalHas", // RPC method name
-				cidObj,          // input argument (cid.Cid)
-				&exists,         // output argument (pointer to bool)
-			)
-			cancel() // cancel context immediately after call
+				var exists bool
+				err := C.rpcClient.CallContext(
+					rpcCtx,
+					peer,
+					"IPFSConnector",
+					"BlockLocalHas",
+					c,
+					&exists,
+				)
+				if err != nil {
+					fmt.Printf("RPC call failed for peer %s: %v\n", peer.String(), err)
+					return
+				}
 
-			if err != nil {
-				fmt.Printf("RPC call failed for peer %s: %v\n", p.String(), err)
-				continue
-			}
-
-			if exists {
-				peerSim[p]++
-				fmt.Printf("Found on peer: %s, similarity: %d\n", p.String(), peerSim[p])
-			}
+				if exists {
+					mu.Lock()
+					peerSim[peer]++
+					fmt.Printf("Found on peer: %s, similarity: %d\n", peer.String(), peerSim[peer])
+					mu.Unlock()
+				}
+			}(p, cidObj, c)
 		}
 	}
+
+	// Wait for all goroutines to finish
+	wg.Wait()
 
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 55555555555555555\n")
 
