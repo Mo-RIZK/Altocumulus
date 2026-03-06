@@ -32,13 +32,13 @@ const (
 	DefaultEnableRelayHop                  = true
 	DefaultStateSyncInterval               = 5 * time.Minute
 	DefaultPinRecoverInterval              = 12 * time.Minute
-	DefaultMonitorPingInterval             = 15 * time.Second
+	DefaultMonitorPingInterval             = 5 * time.Second
 	DefaultPeerWatchInterval               = 5 * time.Second
 	DefaultReplicationFactor               = 1
 	DefaultLeaveOnShutdown                 = false
 	DefaultPinOnlyOnTrustedPeers           = false
 	DefaultPinOnlyOnUntrustedPeers         = false
-	DefaultDisableRepinning                = true
+	DefaultDisableRepinning                = false
 	DefaultPeerstoreFile                   = "peerstore"
 	DefaultConnMgrHighWater                = 400
 	DefaultConnMgrLowWater                 = 100
@@ -153,7 +153,7 @@ type Config struct {
 	PinRecoverInterval time.Duration
 
 	// ReplicationFactorMax indicates the target number of nodes
-	// that should pin content. For example, a replication_factor of
+	// that should pin content. For exampe, a replication_factor of
 	// 3 will have cluster allocate each pinned hash to 3 peers if
 	// possible.
 	// See also ReplicationFactorMin. A ReplicationFactorMax of -1
@@ -165,7 +165,7 @@ type Config struct {
 	// is less than this threshold, an error will be returned.
 	// In the case of peer health issues, content pinned will be
 	// re-allocated if the threshold is crossed.
-	// For example, a ReplicationFactorMin of 2 will allocate at least
+	// For exampe, a ReplicationFactorMin of 2 will allocate at least
 	// two peer to hold content, and return an error if this is not
 	// possible.
 	ReplicationFactorMin int
