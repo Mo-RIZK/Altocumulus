@@ -231,8 +231,8 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 				// This shard is within the range, proceed with retrieval logic
 				//fmt.Printf("Retrieving shard %d: %s with index: %d \n", pinnShardNum, pinn.Name, pinnShardNum%(c.or+c.par))
 				if slices.Contains(pinn.Allocations, spt.peerID) {
-					//fmt.Printf("the spt ID is : %s Locallllll willl be falseeeeeee shardddd: %s with allocationnn : %s \n", spt.peerID.String(), pinn.Name, pinn.Allocations[0].String())
-					//Local = false
+					fmt.Printf("the spt ID is : %s Locallllll willl be falseeeeeee shardddd: %s with allocationnn : %s \n", spt.peerID.String(), pinn.Name, pinn.Allocations[0].String())
+					Local = false
 				}
 				pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
 				repairShards = append(repairShards, pinnn)
