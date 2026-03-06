@@ -34,7 +34,7 @@ const (
 	DefaultPinRecoverInterval              = 12 * time.Minute
 	DefaultMonitorPingInterval             = 15 * time.Second
 	DefaultPeerWatchInterval               = 5 * time.Second
-	DefaultReplicationFactor               = -1
+	DefaultReplicationFactor               = 1
 	DefaultLeaveOnShutdown                 = false
 	DefaultPinOnlyOnTrustedPeers           = false
 	DefaultPinOnlyOnUntrustedPeers         = false
