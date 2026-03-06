@@ -1628,6 +1628,7 @@ func (c *Cluster) pin(
 ) (api.Pin, bool, error) {
 	ctx, span := trace.StartSpan(ctx, "cluster/pin")
 	defer span.End()
+	fmt.Printf("1111111 ALLLLL in cluster pin is : %s \n", pin.Allocations[0].String())
 
 	if c.config.FollowerMode {
 		return api.Pin{}, false, errFollowerMode
@@ -1690,7 +1691,7 @@ func (c *Cluster) pin(
 	} else {
 		logger.Infof("pinning %s on %s:", pin.Cid, pin.Allocations)
 	}
-
+	fmt.Printf("22222222 ALLLLL in cluster pin is : %s \n", pin.Allocations[0].String())
 	return pin, true, c.consensus.LogPin(ctx, pin)
 }
 
