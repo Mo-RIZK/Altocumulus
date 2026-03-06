@@ -1463,29 +1463,27 @@ func (ipfs *Connector) postCtx(ctx context.Context, path string, contentType str
 	}
 	return body, nil
 }
-
-func (ipfs *Connector) HasBlock(ctx context.Context, c cid.Cid, out *bool) error {
-	if out == nil {
-		return fmt.Errorf("HasBlock: output pointer is nil")
-	}
-
-	fmt.Printf("Checking block %s\n", c.String())
+func (ipfs *Connector) BlockLocalHas(ctx context.Context, c cid.Cid) (bool, error) {
+	ctx, span := trace.StartSpan(ctx, "ipfsconn/ipfshttp/BlockLocalHas")
+	defer span.End()
 
 	ctx, cancel := context.WithTimeout(ctx, ipfs.config.IPFSRequestTimeout)
 	defer cancel()
 
-	url := "block/stat?arg=" + c.String()
+	url := "block/localhas?arg=" + c.String()
 
-	// Call postCtxNew and capture the response
-
-	resp, err := ipfs.postCtxNew(ctx, url, "", nil)
+	resp, err := ipfs.postCtx(ctx, url, "", nil)
 	if err != nil {
-		fmt.Printf("HTTP request failed: %v\n", err)
-		*out = false
-		return nil // treat errors as "block not present"
+		// treat errors as "block not present"
+		return false, nil
 	}
 
-	fmt.Printf("HTTP response: %s\n", string(resp))
-	*out = true
-	return nil
+	// Parse the boolean directly from the JSON: {"exists": true}
+	var exists bool
+	if _, err := fmt.Sscanf(string(resp), `{"exists":%t}`, &exists); err != nil {
+		// fallback to false if parsing fails
+		return false, nil
+	}
+
+	return exists, nil
 }

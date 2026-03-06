@@ -7,6 +7,7 @@ import (
 	"github.com/ipfs-cluster/ipfs-cluster/api"
 	"github.com/ipfs-cluster/ipfs-cluster/state"
 	"github.com/ipfs-cluster/ipfs-cluster/version"
+	"github.com/ipfs/go-cid"
 	"os"
 	"strings"
 
@@ -648,6 +649,21 @@ func (rpcapi *IPFSConnectorRPCAPI) Resolve(ctx context.Context, in string, out *
 		return err
 	}
 	*out = c
+	return nil
+}
+
+func (rpcapi *IPFSConnectorRPCAPI) BlockLocalHas(ctx context.Context, in cid.Cid, out *bool) error {
+	if out == nil {
+		return fmt.Errorf("BlockLocalHas: output pointer is nil")
+	}
+
+	// Call the internal Connector function
+	exists, err := rpcapi.ipfs.BlockLocalHas(ctx, in)
+	if err != nil {
+		return err
+	}
+
+	*out = exists
 	return nil
 }
 
