@@ -19,7 +19,7 @@ var DefaultRPCPolicy = map[string]RPCEndpointType{
 	"Cluster.PeerRemove":           RPCTrusted,
 	"Cluster.Peers":                RPCTrusted, // Used by ConnectGraph()
 	"Cluster.PeersWithFilter":      RPCClosed,
-	"Cluster.Pin":                  RPCClosed,
+	"Cluster.Pin":                  RPCTrusted,
 	"Cluster.PinGet":               RPCClosed,
 	"Cluster.PinPath":              RPCClosed,
 	"Cluster.Pins":                 RPCClosed, // Used in stateless tracker, ipfsproxy, restapi
@@ -53,7 +53,7 @@ var DefaultRPCPolicy = map[string]RPCEndpointType{
 	"IPFSConnector.BlockGet":    RPCTrusted,
 	"IPFSConnector.BlockStream": RPCTrusted, // Called by adders
 	"IPFSConnector.ConfigKey":   RPCClosed,
-	"IPFSConnector.Pin":         RPCClosed,
+	"IPFSConnector.Pin":         RPCTrusted,
 	"IPFSConnector.PinLs":       RPCClosed,
 	"IPFSConnector.PinLsCid":    RPCClosed,
 	"IPFSConnector.RepoStat":    RPCTrusted, // Called in broadcast from proxy/repo/stat
