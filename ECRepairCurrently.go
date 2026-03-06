@@ -688,6 +688,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 			//}
 		}
 		wait1 := time.Now()
+		for _, al := range pin.Allocations {
+			fmt.Printf("000000000 ALLLLL in cluster pin is : %s \n", al.String())
+		}
 		shh.FlushForStateless(spt.ctx, *pin)
 		wait2 := time.Since(wait1)
 		cancell()
