@@ -559,22 +559,24 @@ func (c *Cluster) alertsHandler() {
 							}
 						} else {
 							if distance.isClosest(pin.Cid) {
-								fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 111111111111111\n")
-								ppp := c.similarities(c.ctx, pin)
-								fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s by the peeerrr : %s \n", ppp.String(), c.id.String())
-								if ppp == c.id {
-									c.Enqueue(c.ctx, pin)
-								} else {
-									var out bool
-									c.rpcClient.CallContext(
-										c.ctx,
-										ppp,       // the peer you selected with `similarities()`
-										"Cluster", // type name of the registered component
-										"Enqueue", // method name
-										&pin,      // input argument
-										&out,      // output
-									)
-								}
+								go func() {
+									fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 111111111111111\n")
+									ppp := c.similarities(c.ctx, pin)
+									fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s by the peeerrr : %s \n", ppp.String(), c.id.String())
+									if ppp == c.id {
+										c.Enqueue(c.ctx, pin)
+									} else {
+										var out bool
+										c.rpcClient.CallContext(
+											c.ctx,
+											ppp,       // the peer you selected with `similarities()`
+											"Cluster", // type name of the registered component
+											"Enqueue", // method name
+											&pin,      // input argument
+											&out,      // output
+										)
+									}
+								}()
 							}
 						}
 
