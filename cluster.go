@@ -560,9 +560,9 @@ func (c *Cluster) alertsHandler() {
 						} else {
 							if distance.isClosest(pin.Cid) {
 								go func() {
-									fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 111111111111111\n")
+									fmt.Fprintf(os.Stdout, "Start Checking %s\n", time.Now().String())
 									ppp := c.similarities(c.ctx, pin)
-									fmt.Fprintf(os.Stdout, "PPPPPPPPPPPPPPPPPPP selected: %s by the peeerrr : %s \n", ppp.String(), c.id.String())
+									fmt.Fprintf(os.Stdout, "End Checking %s\n", time.Now().String())
 									if ppp == c.id {
 										c.Enqueue(c.ctx, pin)
 									} else {
