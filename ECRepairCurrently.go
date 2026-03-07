@@ -168,6 +168,7 @@ func startTimerNew5(ctx context.Context, toskip *bool) {
 // This will keep track of the fastest peers to use every 1 second, in addition to that, it will add the minimal interference to the system since it will ask for six data chunks during 1 sec interval before update
 // to the fastest n again.
 func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, time.Duration, time.Duration) {
+	overallstart := time.Now()
 	ssss := time.Now()
 	repairShards := make([]pinwithmeta, 0)
 	cidString := pin.Metadata["Cids"]
@@ -486,6 +487,8 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		//shh.FlushForStateless(spt.ctx, *pin)
 		wait2 := time.Since(wait1)
 		cancell()
+		overallend := time.Now()
+		fmt.Printf("Overall repair time: %s \n", overallend.Sub(overallstart).String())
 		return timedownloadchunks, timetorepairchunksonly, wait2
 	} else {
 		for _, pi := range repairShards {
@@ -711,6 +714,8 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		shh.FlushForStateless(spt.ctx, *pin)
 		wait2 := time.Since(wait1)
 		cancell()
+		overallend := time.Now()
+		fmt.Printf("Overall repair time: %s \n", overallend.Sub(overallstart).String())
 		return timedownloadchunks, timetorepairchunksonly, wait2
 	}
 
