@@ -219,6 +219,18 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	before := (numpin - 1) % (or + par)
 	after := (or + par - mod) % (or + par)
 	Local := true
+	shardCids := make([]Chunk, 0)
+	clustername := strings.Split(pin.Name, "-shard")[0] + "-clusterDAG-EC()-chunksize"
+	for pinn := range pinCh {
+		if pinn.Name == clustername {
+			pinnn := pinwithmeta{pinn, 0, make([]string, 0)}
+			shardCids = spt.retrieveCids(pinnn)
+			break
+		}
+	}
+	for _, sh := range shardCids {
+		fmt.Printf("Shardsss Cids : %s \n", sh.cid)
+	}
 	//fmt.Printf("taking shards between %d and %d \n", numpin-before, numpin+after)
 	for pinn := range pinCh {
 		if strings.Contains(pinn.Name, "-shard-") {
