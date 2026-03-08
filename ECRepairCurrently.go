@@ -165,6 +165,12 @@ func startTimerNew5(ctx context.Context, toskip *bool) {
 	}
 }
 
+// Map to track occurrences
+type cidInfo struct {
+	Count   int
+	Indexes []int
+}
+
 // This will keep track of the fastest peers to use every 1 second, in addition to that, it will add the minimal interference to the system since it will ask for six data chunks during 1 sec interval before update
 // to the fastest n again.
 func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, time.Duration, time.Duration) {
@@ -248,6 +254,25 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	for _, sh := range selectedShardCids {
 		fmt.Printf("Selectedddd Shardsss Cids : %s \n", sh.cid)
 	}
+
+	cidMap := make(map[string]*cidInfo)
+
+	// Iterate over the selected shards
+	for i, sh := range selectedShardCids {
+		if _, exists := cidMap[sh.cid]; !exists {
+			cidMap[sh.cid] = &cidInfo{
+				Count:   0,
+				Indexes: []int{},
+			}
+		}
+		cidMap[sh.cid].Count++
+		cidMap[sh.cid].Indexes = append(cidMap[sh.cid].Indexes, i+1)
+	}
+
+	// Print results
+	for cid, info := range cidMap {
+		fmt.Printf("CID: %s, Count: %d, Indexes: %v\n", cid, info.Count, info.Indexes)
+	}
 	//fmt.Printf("taking shards between %d and %d \n", numpin-before, numpin+after)
 	for pinn := range pinCh {
 		if strings.Contains(pinn.Name, "-shard-") {
@@ -267,6 +292,38 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 				pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
 				repairShards = append(repairShards, pinnn)
 			}
+		}
+	}
+	// Map to track how many times each CID has been added
+	addedCount := make(map[string]int)
+	for _, rs := range repairShards {
+		addedCount[rs.pin.Cid.String()]++
+	}
+
+	// Fill in missing duplicates with new indices
+	for _, rs := range repairShards {
+		// Count how many times this CID occurs in selectedShardCids
+		occurrences := 0
+		var indices []int
+		for i, sh := range selectedShardCids {
+			if sh.cid == rs.pin.Cid.String() {
+				occurrences++
+				indices = append(indices, i) // store the positions
+			}
+		}
+
+		// Add missing duplicates at the correct indices
+		for _, idx := range indices {
+			if addedCount[rs.pin.Cid.String()] >= occurrences {
+				break
+			}
+			extra := pinwithmeta{
+				pin:   rs.pin,  // reuse the existing pin object
+				index: idx + 1, // assign a new index for the duplicate
+				cids:  make([]string, 0),
+			}
+			repairShards = append(repairShards, extra)
+			addedCount[rs.pin.Cid.String()]++
 		}
 	}
 	// Sort repairShard by Index in ascending order
