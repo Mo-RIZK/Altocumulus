@@ -228,8 +228,25 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 			break
 		}
 	}
+
 	for _, sh := range shardCids {
 		fmt.Printf("Shardsss Cids : %s \n", sh.cid)
+	}
+	stripeSize := or + par
+
+	// convert shard number to stripe index
+	stripeIndex := (numpin - 1) / stripeSize
+
+	start := stripeIndex * stripeSize
+	end := start + stripeSize
+
+	if end > len(shardCids) {
+		end = len(shardCids)
+	}
+
+	selectedShardCids := shardCids[start:end]
+	for _, sh := range selectedShardCids {
+		fmt.Printf("Selectedddd Shardsss Cids : %s \n", sh.cid)
 	}
 	//fmt.Printf("taking shards between %d and %d \n", numpin-before, numpin+after)
 	for pinn := range pinCh {
