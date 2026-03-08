@@ -272,6 +272,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		}()
 		fmt.Printf("Selectedddd Shardsss Cids : %s \n", sh.cid)
 	}
+	wggs.Wait()
 
 	//fmt.Printf("taking shards between %d and %d \n", numpin-before, numpin+after)
 	/*for pinn := range pinCh {
