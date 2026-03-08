@@ -13,7 +13,6 @@ import (
 	"github.com/klauspost/reedsolomon"
 	"github.com/multiformats/go-multihash"
 	"os"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -214,16 +213,16 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		}
 	}()
 	fmt.Fprintf(os.Stdout, "getShardNumber of pin named : %s", pin.Name)
-	numpin, name, err := getShardNumber(pin.Name)
+	numpin, _, err := getShardNumber(pin.Name)
 	if err != nil {
 		fmt.Println("Error:", err)
 		return 0, 0, 0
 	}
 	tosend := (numpin - 1) % (or + par)
 	fmt.Printf("number of the shard to repair is : %d \n", numpin)
-	mod := numpin % (or + par)
-	before := (numpin - 1) % (or + par)
-	after := (or + par - mod) % (or + par)
+	//mod := numpin % (or + par)
+	//before := (numpin - 1) % (or + par)
+	//after := (or + par - mod) % (or + par)
 	Local := true
 	shardCids := make([]Chunk, 0)
 	clustername := strings.Split(pin.Name, "-shard")[0] + "-clusterDAG-EC()-chunksize"
@@ -251,30 +250,31 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	}
 
 	selectedShardCids := shardCids[start:end]
-	for _, sh := range selectedShardCids {
+	var wggs sync.WaitGroup
+	var mugs sync.Mutex
+	wggs.Add(or)
+	for i, sh := range selectedShardCids {
+		go func() {
+			cc, _ := cid.Decode(sh.cid)
+			gg, errr := cState.Get(ctx, api.Cid{cc})
+			if errr != nil {
+				return
+			}
+			mugs.Lock()
+			if len(repairShards) < or {
+				pinnn := pinwithmeta{gg, i + 1, make([]string, 0)}
+				repairShards = append(repairShards, pinnn)
+				wggs.Done()
+			}
+			mugs.Unlock()
+			return
+
+		}()
 		fmt.Printf("Selectedddd Shardsss Cids : %s \n", sh.cid)
 	}
 
-	cidMap := make(map[string]*cidInfo)
-
-	// Iterate over the selected shards
-	for i, sh := range selectedShardCids {
-		if _, exists := cidMap[sh.cid]; !exists {
-			cidMap[sh.cid] = &cidInfo{
-				Count:   0,
-				Indexes: []int{},
-			}
-		}
-		cidMap[sh.cid].Count++
-		cidMap[sh.cid].Indexes = append(cidMap[sh.cid].Indexes, i+1)
-	}
-
-	// Print results
-	for cid, info := range cidMap {
-		fmt.Printf("CID: %s, Count: %d, Indexes: %v\n", cid, info.Count, info.Indexes)
-	}
 	//fmt.Printf("taking shards between %d and %d \n", numpin-before, numpin+after)
-	for pinn := range pinCh {
+	/*for pinn := range pinCh {
 		if strings.Contains(pinn.Name, "-shard-") {
 			pinnShardNum, namee, err := getShardNumber(pinn.Name)
 			if err != nil {
@@ -291,41 +291,13 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 				}
 				pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
 				repairShards = append(repairShards, pinnn)
+				for _,ss := range repairShards {
+				}
 			}
 		}
-	}
-	// Map to track how many times each CID has been added
-	addedCount := make(map[string]int)
-	for _, rs := range repairShards {
-		addedCount[rs.pin.Cid.String()]++
 	}
 
-	// Fill in missing duplicates with new indices
-	for _, rs := range repairShards {
-		// Count how many times this CID occurs in selectedShardCids
-		occurrences := 0
-		var indices []int
-		for i, sh := range selectedShardCids {
-			if sh.cid == rs.pin.Cid.String() {
-				occurrences++
-				indices = append(indices, i) // store the positions
-			}
-		}
-
-		// Add missing duplicates at the correct indices
-		for _, idx := range indices {
-			if addedCount[rs.pin.Cid.String()] >= occurrences {
-				break
-			}
-			extra := pinwithmeta{
-				pin:   rs.pin,  // reuse the existing pin object
-				index: idx + 1, // assign a new index for the duplicate
-				cids:  make([]string, 0),
-			}
-			repairShards = append(repairShards, extra)
-			addedCount[rs.pin.Cid.String()]++
-		}
-	}
+	*/
 	// Sort repairShard by Index in ascending order
 	sortRepairShardsByIndex(repairShards)
 
