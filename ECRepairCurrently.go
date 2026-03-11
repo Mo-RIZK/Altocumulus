@@ -589,6 +589,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		Indexes := make([]int, 0)
 		ctxx, cancell := context.WithCancel(context.Background())
 		for i := 0; i < times; i++ {
+			fmt.Printf("DDDDDDDDDDDDDD: %d \n", i)
 			cc, _ := cid.Decode(CIDs[times])
 			exists, bad := spt.connector.BlockLocalHas(spt.ctx, cc)
 			if !exists || (bad != nil) {
