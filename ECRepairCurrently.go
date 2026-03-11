@@ -323,6 +323,15 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 			repairShards[i].cids = append(repairShards[i].cids, p)
 		}
 	}
+	for i, shard := range repairShards {
+
+		fmt.Printf("Shard %d:\n", i)
+
+		for j, c := range shard.cids {
+			fmt.Printf("  CID %d: %s\n", j, c)
+		}
+
+	}
 	/*wgg := new(sync.WaitGroup)
 	wgg.Add(or)
 	muu := new(sync.Mutex)
