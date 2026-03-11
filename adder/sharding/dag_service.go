@@ -169,7 +169,7 @@ func (dgs *DAGService) Finalize(ctx context.Context, dataRoot api.Cid) (api.Cid,
 	//if err != nil {
 	//      return api.NewCid(lastCid), err
 	//}
-	dgs.lastCid, _ = dgs.flushCurrentShards(ctx)
+	dgs.lastCid, _ = dgs.flushCurrentShardsWithRep(ctx)
 	if !dgs.lastCid.Equals(dataRoot.Cid) {
 		logger.Warnf("the last added CID (%s) is not the IPFS data root (%s). This is only normal when adding a single file without wrapping in directory.", dgs.lastCid, dataRoot)
 	}
@@ -363,7 +363,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 				dgs.current = (dgs.current + 1) % (dgs.addParams.O + dgs.addParams.P)
 			} else {
 				fmt.Fprintf(os.Stdout, "FLUSSSSSSSSSSHHHHHHHHHHHHHHHHHHHHHHHHHHHH !!!!!!!!!1\n")
-				_, err := dgs.flushCurrentShards(ctx)
+				_, err := dgs.flushCurrentShardsWithRep(ctx)
 				if err != nil {
 					return err
 				}
@@ -760,4 +760,132 @@ func (dgs *DAGService) flushCurrentShards(ctx context.Context) (cid.Cid, error) 
 type every struct {
 	black []peer.ID
 	nodes []ipld.Node
+}
+
+// flushes the dgs.currentShard and returns the LastLink()
+func (dgs *DAGService) flushCurrentShardsWithRep(ctx context.Context) (cid.Cid, error) {
+	fmt.Fprintf(os.Stdout, "Creating Shard DAG and sending roots %s\n", time.Now().Format("15:04:05.000"))
+	st := time.Now()
+	var LastLink cid.Cid
+	sharedCbor := make([]cid.Cid, dgs.original+dgs.parity)
+	lennodes := make([]int, dgs.original+dgs.parity)
+	shardd := dgs.currentShard
+	var mu sync.Mutex
+	if shardd[dgs.current] == nil {
+		return cid.Undef, errors.New("cannot flush a nil shard")
+	}
+	lens := len(dgs.shards)
+	fmt.Fprintf(os.Stdout, "lensss %d \n", lens)
+	for shardN := lens + 1; shardN <= lens+(dgs.original+dgs.parity); shardN++ {
+		dgs.wg.Add(1)
+		go func(shardN int) {
+			defer dgs.wg.Done()
+			shardCid, lennode, nodes, err := shardd[(shardN-1)%(dgs.original+dgs.parity)].FlushNew(ctx)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			black := make([]peer.ID, 0)
+			black = append(black, shardd[(shardN-1)%(dgs.original+dgs.parity)].allocations...)
+			ee := every{black: black, nodes: nodes}
+			dgs.topin = append(dgs.topin, ee)
+			sharedCbor[(shardN-1)%(dgs.original+dgs.parity)] = shardCid
+			lennodes[(shardN-1)%(dgs.original+dgs.parity)] = lennode
+			mu.Unlock()
+		}(shardN)
+	}
+	dgs.wg.Wait()
+	en := time.Now()
+	fmt.Fprintf(os.Stdout, "This set of shards sending overhead took : %s\n", en.Sub(st).String())
+	fmt.Fprintf(os.Stdout, "Pinning requests %s\n", time.Now().Format("15:04:05.000"))
+	// Merge allocations for shards that produced identical CIDs
+	for i := 0; i < len(sharedCbor); i++ {
+
+		if !sharedCbor[i].Defined() {
+			continue
+		}
+
+		allocSet := make(map[peer.ID]struct{})
+
+		// find all shards with the same CID
+		for j := 0; j < len(sharedCbor); j++ {
+
+			if sharedCbor[j] == sharedCbor[i] {
+
+				for _, p := range shardd[j].allocations {
+					allocSet[p] = struct{}{}
+				}
+
+			}
+		}
+
+		// convert set back to slice
+		merged := make([]peer.ID, 0, len(allocSet))
+		for p := range allocSet {
+			merged = append(merged, p)
+		}
+
+		// assign merged allocations to all identical shards
+		for j := 0; j < len(sharedCbor); j++ {
+			if sharedCbor[j] == sharedCbor[i] {
+				shardd[j].allocations = merged
+			}
+		}
+	}
+
+	for shardN := lens + 1; shardN <= lens+(dgs.original+dgs.parity); shardN++ {
+		//TODO: we want to check how much we will add shardN after seeing how much each shard have presence in the shardsCIDs
+
+		rootCid := sharedCbor[(shardN-1)%(dgs.original+dgs.parity)]
+		pin := api.PinWithOpts(api.NewCid(rootCid), shardd[(shardN-1)%(dgs.original+dgs.parity)].pinOptions)
+		pin.Name = fmt.Sprintf("%s-shard-EC(%d,%d)-%d", shardd[(shardN-1)%(dgs.original+dgs.parity)].pinOptions.Name, dgs.original, dgs.parity, shardN)
+		// this sets allocations as priority allocation
+		pin.Allocations = shardd[(shardN-1)%(dgs.original+dgs.parity)].allocations
+		BlocksConc := ""
+		first := 1
+		for _, cid := range shardd[(shardN-1)%(dgs.original+dgs.parity)].blocksCIDs {
+			if first == 1 {
+				BlocksConc = cid.String()
+				first++
+			} else {
+				BlocksConc = BlocksConc + "," + cid.String()
+			}
+		}
+		pin.Metadata["Cids"] = BlocksConc
+		pin.Type = api.ShardType
+		ref := api.NewCid(dgs.previousShard)
+		pin.Reference = &ref
+		pin.MaxDepth = 1
+		//////////////////////////////////pin.Metadata["Cids"]=pin.Metadata["Cids"] + ""
+		pin.ShardSize = shardd[(shardN-1)%(dgs.original+dgs.parity)].Size()                                               // use current size, not the limit
+		if lennodes[(shardN-1)%(dgs.original+dgs.parity)] > len(shardd[(shardN-1)%(dgs.original+dgs.parity)].dagNode)+1 { // using an indirect graph
+			pin.MaxDepth = 2
+		}
+
+		logger.Infof("shard #%d (%s) completed. Total size: %s. Links: %d",
+			shardN,
+			rootCid,
+			humanize.Bytes(shardd[(shardN-1)%(dgs.original+dgs.parity)].Size()),
+			len(shardd[(shardN-1)%(dgs.original+dgs.parity)].dagNode),
+		)
+
+		adder.Pin(ctx, shardd[(shardN-1)%(dgs.original+dgs.parity)].rpc, pin)
+		//TODO: Flush the n+k shards root nodes together here instead of flushing them one by one and return some metadata to tell us how they must be linked in the consensus
+		dgs.totalSize += shardd[(shardN-1)%(dgs.original+dgs.parity)].Size()
+		dgs.shards[fmt.Sprintf("%d", shardN-1)] = rootCid
+		dgs.previousShard = rootCid
+		dgs.sendOutput(api.AddedOutput{
+			Name:        fmt.Sprintf("shard-%d", shardN-1),
+			Cid:         api.NewCid(rootCid),
+			Size:        shardd[(shardN-1)%(dgs.original+dgs.parity)].Size(),
+			Allocations: shardd[(shardN-1)%(dgs.original+dgs.parity)].Allocations(),
+		})
+
+		LastLink = shardd[(shardN-1)%(dgs.original+dgs.parity)].LastLink()
+	}
+	dgs.currentShard = make([]*shard, dgs.original+dgs.parity)
+	enn := time.Now()
+	dgs.shardPINtime += enn.Sub(en)
+	fmt.Fprintf(os.Stdout, "This set of shards pinning took : %s\n", enn.Sub(en).String())
+	return LastLink, nil
 }
