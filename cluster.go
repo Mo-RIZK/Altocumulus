@@ -745,11 +745,6 @@ func (c *Cluster) repinFromPeer(ctx context.Context, p peer.ID, pin api.Pin) {
 	pin.Allocations = nil // force re-allocations
 	// note that pin() should not result in different allocations
 	// if we are not under the replication-factor min.
-	if strings.Contains(pin.Name, "EC") {
-		//check for the best peer
-		c.RepairJobs.Enqueue(c.ctx, pin)
-		return
-	}
 	_, ok, err := c.pin(ctx, pin, []peer.ID{p})
 	if ok && err == nil {
 		logger.Infof("repinned %s out of %s", pin.Cid, p)
