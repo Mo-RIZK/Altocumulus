@@ -302,7 +302,28 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	// Sort repairShard by Index in ascending order
 	sortRepairShardsByIndex(repairShards)
 
-	wgg := new(sync.WaitGroup)
+	fmt.Printf("STEEEEEEEEEPPPPPPPPPP RRRRRRRRRREEEEEEETTTTTTTTT with length of repair shards is : %d\n", len(repairShards))
+
+	for i, pinwm := range repairShards {
+
+		// Get the CIDs stored in metadata
+		cidsStr := pinwm.pin.Metadata["Cids"]
+
+		if cidsStr == "" {
+			continue
+		}
+
+		// Split the comma-separated list
+		parts := strings.Split(cidsStr, ",")
+
+		for _, p := range parts {
+
+			p = strings.TrimSpace(p)
+
+			repairShards[i].cids = append(repairShards[i].cids, p)
+		}
+	}
+	/*wgg := new(sync.WaitGroup)
 	wgg.Add(or)
 	muu := new(sync.Mutex)
 	ret := 0
@@ -310,6 +331,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	for i, pinwm := range repairShards {
 		go func(pinwm pinwithmeta, i int) {
 			cidss := spt.retrieveCids(pinwm)
+
 			muu.Lock()
 			if ret < or {
 				ret++
@@ -326,7 +348,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 
 		}(pinwm, i)
 	}
-	wgg.Wait()
+	wgg.Wait()*/
 	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s and localllllll is %t \n", time.Now().Sub(ssss).String(), Local)
 	//Local
 	if Local {
