@@ -841,6 +841,8 @@ func (dgs *DAGService) flushCurrentShardsWithRep(ctx context.Context) (cid.Cid, 
 		pin.Name = fmt.Sprintf("%s-shard-EC(%d,%d)-%d", shardd[(shardN-1)%(dgs.original+dgs.parity)].pinOptions.Name, dgs.original, dgs.parity, shardN)
 		// this sets allocations as priority allocation
 		pin.Allocations = shardd[(shardN-1)%(dgs.original+dgs.parity)].allocations
+		pin.ReplicationFactorMin = len(pin.Allocations)
+		pin.ReplicationFactorMax = len(pin.Allocations)
 		BlocksConc := ""
 		first := 1
 		for _, cid := range shardd[(shardN-1)%(dgs.original+dgs.parity)].blocksCIDs {
