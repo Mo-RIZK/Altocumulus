@@ -388,7 +388,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		ctxx, cancell := context.WithCancel(context.Background())
 		for i := 0; i < times; i++ {
 			fmt.Printf("DDDDDDDDDDDDDD: %d \n", i)
-			cc, _ := cid.Decode(CIDs[times])
+			cc, _ := cid.Decode(CIDs[i])
 			exists, bad := spt.connector.BlockLocalHas(spt.ctx, cc)
 			if !exists || (bad != nil) {
 				retrieved := 0
@@ -622,7 +622,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		ctxx, cancell := context.WithCancel(context.Background())
 		for i := 0; i < times; i++ {
 			fmt.Printf("DDDDDDDDDDDDDD: %d \n", i)
-			cc, _ := cid.Decode(CIDs[times])
+			cc, _ := cid.Decode(CIDs[i])
 			exists, bad := spt.connector.BlockLocalHas(spt.ctx, cc)
 			if !exists || (bad != nil) {
 				retrieved := 0
