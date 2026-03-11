@@ -250,30 +250,29 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	}
 
 	selectedShardCids := shardCids[start:end]
+	var wggs sync.WaitGroup
+	var mugs sync.Mutex
+	wggs.Add(or)
 	for i, sh := range selectedShardCids {
+		go func() {
+			cc, _ := cid.Decode(sh.cid)
+			gg, errr := cState.Get(ctx, api.Cid{cc})
+			if errr != nil {
+				return
+			}
+			mugs.Lock()
+			if len(repairShards) < or {
+				pinnn := pinwithmeta{gg, i + 1, make([]string, 0)}
+				repairShards = append(repairShards, pinnn)
+				wggs.Done()
+			}
+			mugs.Unlock()
+			return
 
-		fmt.Printf("Selectedddd Shardsss Cids : %s\n", sh.cid)
-
-		cc, err := cid.Decode(sh.cid)
-		if err != nil {
-			fmt.Printf("failed to decode CID %s: %v\n", sh.cid, err)
-			continue
-		}
-
-		gg, err := cState.Get(ctx, api.Cid{cc})
-		if err != nil {
-			fmt.Printf("failed to get pin for CID %s: %v\n", sh.cid, err)
-			continue
-		}
-
-		pinnn := pinwithmeta{
-			pin:   gg,
-			index: i + 1,
-			cids:  make([]string, 0),
-		}
-
-		repairShards = append(repairShards, pinnn)
+		}()
+		fmt.Printf("Selectedddd Shardsss Cids : %s \n", sh.cid)
 	}
+	wggs.Wait()
 
 	//fmt.Printf("taking shards between %d and %d \n", numpin-before, numpin+after)
 	/*for pinn := range pinCh {
@@ -303,37 +302,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	// Sort repairShard by Index in ascending order
 	sortRepairShardsByIndex(repairShards)
 
-	fmt.Printf("STEEEEEEEEEPPPPPPPPPP RRRRRRRRRREEEEEEETTTTTTTTT with length of repair shards is : %d\n", len(repairShards))
-
-	for i, pinwm := range repairShards {
-
-		// Get the CIDs stored in metadata
-		cidsStr := pinwm.pin.Metadata["Cids"]
-
-		if cidsStr == "" {
-			continue
-		}
-
-		// Split the comma-separated list
-		parts := strings.Split(cidsStr, ",")
-
-		for _, p := range parts {
-
-			p = strings.TrimSpace(p)
-
-			repairShards[i].cids = append(repairShards[i].cids, p)
-		}
-	}
-	for i, shard := range repairShards {
-
-		fmt.Printf("Shard %d:\n", i)
-
-		for j, c := range shard.cids {
-			fmt.Printf("  CID %d: %s\n", j, c)
-		}
-
-	}
-	/*wgg := new(sync.WaitGroup)
+	wgg := new(sync.WaitGroup)
 	wgg.Add(or)
 	muu := new(sync.Mutex)
 	ret := 0
@@ -341,7 +310,6 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 	for i, pinwm := range repairShards {
 		go func(pinwm pinwithmeta, i int) {
 			cidss := spt.retrieveCids(pinwm)
-
 			muu.Lock()
 			if ret < or {
 				ret++
@@ -358,7 +326,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 
 		}(pinwm, i)
 	}
-	wgg.Wait()*/
+	wgg.Wait()
 	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s and localllllll is %t \n", time.Now().Sub(ssss).String(), Local)
 	//Local
 	if Local {
@@ -387,7 +355,6 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		Indexes := make([]int, 0)
 		ctxx, cancell := context.WithCancel(context.Background())
 		for i := 0; i < times; i++ {
-			fmt.Printf("DDDDDDDDDDDDDD: %d \n", i)
 			cc, _ := cid.Decode(CIDs[i])
 			exists, bad := spt.connector.BlockLocalHas(spt.ctx, cc)
 			if !exists || (bad != nil) {
@@ -621,7 +588,6 @@ func (spt *ECRepairS) repinUsingRSWithSwitching(pin *api.Pin) (time.Duration, ti
 		Indexes := make([]int, 0)
 		ctxx, cancell := context.WithCancel(context.Background())
 		for i := 0; i < times; i++ {
-			fmt.Printf("DDDDDDDDDDDDDD: %d \n", i)
 			cc, _ := cid.Decode(CIDs[i])
 			exists, bad := spt.connector.BlockLocalHas(spt.ctx, cc)
 			if !exists || (bad != nil) {
