@@ -550,7 +550,7 @@ func (c *Cluster) alertsHandler() {
 
 			for pin := range pinCh {
 				if containsPeer(pin.Allocations, alrt.Peer) {
-					if strings.Contains(pin.Name, "EC") {
+					if strings.Contains(pin.Name, "EC") && len(pin.Allocations) < 2 {
 						if sim == 0 {
 							var repair bool
 							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
