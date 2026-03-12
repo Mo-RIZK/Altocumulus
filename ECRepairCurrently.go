@@ -1502,7 +1502,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 		shardCidds = append(shardCidds, cc)
 		for _, all := range sh.Allocations {
 			if all == spt.peerID {
-				Local = false
+				//Local = false
 				break
 			}
 		}
