@@ -573,8 +573,17 @@ func (c *Cluster) alertsHandler() {
 							if distance.isClosest(pin.Cid) {
 								go func() {
 									fmt.Fprintf(os.Stdout, "Start Checking %s\n", time.Now().String())
-									ppp := c.similarities(c.ctx, pin)
+									ppp, common := c.similarities(c.ctx, pin)
 									fmt.Fprintf(os.Stdout, "End Checking %s\n", time.Now().String())
+									first := 1
+									for _, com := range common {
+										if first == 1 {
+											pin.Metadata["common"] = com
+											first++
+										} else {
+											pin.Metadata["common"] = pin.Metadata["common"] + "," + com
+										}
+									}
 									if ppp == c.id {
 										c.Enqueue(c.ctx, pin)
 									} else {
@@ -2399,26 +2408,27 @@ func (c *Cluster) RepoGCLocal(ctx context.Context) (api.RepoGC, error) {
 	return resp, nil
 }
 
-func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
+func (c *Cluster) similarities(ctx context.Context, pin api.Pin) (peer.ID, []string) {
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
 
 	cidString, ok := pin.Metadata["Cids"]
 	if !ok || cidString == "" {
 		peers, _ := c.consensus.Peers(ctx)
 		if len(peers) > 0 {
-			return peers[0]
+			return peers[0], nil
 		}
-		return ""
+		return "", nil
 	}
 
 	CIDs := strings.Split(cidString, ",")
 
 	peers, err := c.consensus.Peers(ctx)
 	if err != nil || len(peers) == 0 {
-		return ""
+		return "", nil
 	}
 
 	peerSim := make(map[peer.ID]int)
+	peerCIDMatches := make(map[peer.ID][]string)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
@@ -2460,6 +2470,8 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 				if exists {
 					mu.Lock()
 					peerSim[peer]++
+					// store CID for that peer
+					peerCIDMatches[peer] = append(peerCIDMatches[peer], cidStr)
 					fmt.Printf("Found on peer: %s, similarity: %d\n", peer.String(), peerSim[peer])
 					mu.Unlock()
 				}
@@ -2485,7 +2497,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) peer.ID {
 	}
 
 	fmt.Printf("MAX similarities: %d with peer %s\n", maxSim, bestPeer)
-	return bestPeer
+	return bestPeer, peerCIDMatches[bestPeer]
 }
 
 func (c *Cluster) Enqueue(ctx context.Context, cid api.Pin) error {
