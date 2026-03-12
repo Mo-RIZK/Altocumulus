@@ -572,9 +572,9 @@ func (c *Cluster) alertsHandler() {
 						} else {
 							if distance.isClosest(pin.Cid) {
 								go func() {
-									fmt.Fprintf(os.Stdout, "Start Checking %s\n", time.Now().String())
+									ss := time.Now()
 									ppp, common := c.similarities(c.ctx, pin)
-									fmt.Fprintf(os.Stdout, "End Checking %s\n", time.Now().String())
+									fmt.Fprintf(os.Stdout, "Checking %s\n", time.Now().Sub(ss).String())
 									first := 1
 									for _, com := range common {
 										if first == 1 {
