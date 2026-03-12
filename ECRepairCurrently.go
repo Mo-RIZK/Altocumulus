@@ -1088,6 +1088,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					timerlaunched = true
 				}
 				if toskip {
+					t1 := time.Now()
 					Indexes = make([]int, 0)
 					wg.Add(or)
 					ctxx, cancel := context.WithCancel(context.Background())
@@ -1113,7 +1114,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 						}(i, j)
 					}
 					wg.Wait()
-					fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee \n")
+					fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee in %s time \n", time.Now().Sub(t1).String())
 					// Find where to allocate this file
 					stt := time.Now()
 					timedownloadchunks += stt.Sub(sttt)
@@ -1131,6 +1132,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					toskip = false
 				} else {
 					wg.Add(or)
+					t1 := time.Now()
 					ctxx, cancel := context.WithCancel(context.Background())
 					for _, j := range Indexes {
 						go func(i int, j int) {
@@ -1155,7 +1157,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					}
 
 					wg.Wait()
-					fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee \n")
+					fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee with %s time \n", time.Now().Sub(t1).String())
 					// Find where to allocate this file
 					stt := time.Now()
 					timedownloadchunks += stt.Sub(sttt)
@@ -1244,6 +1246,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					timerlaunched = true
 				}
 				if toskip {
+					t1 := time.Now()
 					Indexes = make([]int, 0)
 					wg.Add(or)
 					ctxx, cancel := context.WithCancel(context.Background())
@@ -1269,7 +1272,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 						}(i, j)
 					}
 					wg.Wait()
-					fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee \n")
+					fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee for %s time \n", time.Now().Sub(t1).String())
 					// Find where to allocate this file
 					stt := time.Now()
 					timedownloadchunks += stt.Sub(sttt)
@@ -1286,6 +1289,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					shh.AddLink(ctx, rawnode.Cid(), size)
 					toskip = false
 				} else {
+					t1 := time.Now()
 					wg.Add(or)
 					ctxx, cancel := context.WithCancel(context.Background())
 					for _, j := range Indexes {
@@ -1311,7 +1315,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					}
 
 					wg.Wait()
-					fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee \n")
+					fmt.Printf("REPAIR GOT HERE ENDEDDDD this stripeeeee for %s time \n", time.Now().Sub(t1).String())
 					// Find where to allocate this file
 					stt := time.Now()
 					timedownloadchunks += stt.Sub(sttt)
