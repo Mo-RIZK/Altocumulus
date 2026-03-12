@@ -1551,9 +1551,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					wg.Add(or)
 					for j := 0; j < or+par; j++ {
 						go func(i int, j int) {
-							blockCtx, blockCancel := context.WithTimeout(ctxx, 5*time.Second)
-							defer blockCancel()
-							bytess := spt.getData(blockCtx, shardCidds[j][i])
+							bytess := spt.getData(spt.ctx, shardCidds[j][i])
 							fmt.Printf("GOTTTTTTTTTTT: %s \n", shardCidds[j][i])
 							mu.Lock()
 							if retrieved < or {
@@ -1593,9 +1591,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					t1 := time.Now()
 					for _, j := range Indexes {
 						go func(i int, j int) {
-							blockCtx, blockCancel := context.WithTimeout(ctxx, 5*time.Second)
-							defer blockCancel()
-							bytess := spt.getData(blockCtx, shardCidds[j][i])
+							bytess := spt.getData(spt.ctx, shardCidds[j][i])
 							fmt.Printf("GOTTTTTTTTTTT: %s \n", shardCidds[j][i])
 							mu.Lock()
 							if retrieved < or {
@@ -1717,9 +1713,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					wg.Add(or)
 					for j := 0; j < or+par; j++ {
 						go func(i int, j int) {
-							blockCtx, blockCancel := context.WithTimeout(ctxx, 5*time.Second)
-							defer blockCancel()
-							bytess := spt.getData(blockCtx, shardCidds[j][i])
+							bytess := spt.getData(spt.ctx, shardCidds[j][i])
 							fmt.Printf("GOTTTTTTTTTTT: %s \n", shardCidds[j][i])
 							mu.Lock()
 							if retrieved < or {
@@ -1760,9 +1754,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					//ctxx, cancel := context.WithCancel(context.Background())
 					for _, j := range Indexes {
 						go func(i int, j int) {
-							blockCtx, blockCancel := context.WithTimeout(ctxx, 5*time.Second)
-							defer blockCancel()
-							bytess := spt.getData(blockCtx, shardCidds[j][i])
+							bytess := spt.getData(spt.ctx, shardCidds[j][i])
 							fmt.Printf("GOTTTTTTTTTTT: %s \n", shardCidds[j][i])
 							mu.Lock()
 							if retrieved < or {
