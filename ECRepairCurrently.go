@@ -1786,7 +1786,6 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		Indexes := make([]int, 0)
 		ctxx, cancell := context.WithCancel(context.Background())
 		for i := 0; i < times; i++ {
-
 			if contains(Common, CIDs[i]) {
 				fmt.Printf("Entereddddddd to the have localllll part\n")
 				bytess := spt.getData(ctxx, CIDs[i])
