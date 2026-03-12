@@ -1549,10 +1549,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					t1 := time.Now()
 					Indexes = make([]int, 0)
 					wg.Add(or)
-					ctxxx, cancel := context.WithCancel(context.Background())
 					for j := 0; j < or+par; j++ {
 						go func(i int, j int) {
-							bytess := spt.getData(ctxxx, shardCidds[j][i])
+							bytess := spt.getData(spt.ctx, shardCidds[j][i])
 							fmt.Printf("GOTTTTTTTTTTT: %s \n", shardCidds[j][i])
 							mu.Lock()
 							if retrieved < or {
@@ -1561,10 +1560,6 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 								Indexes = append(Indexes, j)
 								mu.Unlock()
 								wg.Done()
-								if retrieved == or {
-									cancel()
-									return
-								}
 							} else {
 								mu.Unlock()
 								return
@@ -1594,10 +1589,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 				} else {
 					wg.Add(or)
 					t1 := time.Now()
-					ctxx, cancel := context.WithCancel(context.Background())
 					for _, j := range Indexes {
 						go func(i int, j int) {
-							bytess := spt.getData(ctxx, shardCidds[j][i])
+							bytess := spt.getData(spt.ctx, shardCidds[j][i])
 							fmt.Printf("GOTTTTTTTTTTT: %s \n", shardCidds[j][i])
 							mu.Lock()
 							if retrieved < or {
@@ -1606,12 +1600,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 								Indexes = append(Indexes, j)
 								mu.Unlock()
 								wg.Done()
-								if retrieved == or {
-									cancel()
-								}
 							} else {
-								cancel()
 								mu.Unlock()
+								return
 							}
 
 						}(i, j)
@@ -1719,10 +1710,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					t1 := time.Now()
 					Indexes = make([]int, 0)
 					wg.Add(or)
-					ctxx, cancel := context.WithCancel(context.Background())
 					for j := 0; j < or+par; j++ {
 						go func(i int, j int) {
-							bytess := spt.getData(ctxx, shardCidds[j][i])
+							bytess := spt.getData(spt.ctx, shardCidds[j][i])
 							fmt.Printf("GOTTTTTTTTTTT: %s \n", shardCidds[j][i])
 							mu.Lock()
 							if retrieved < or {
@@ -1731,12 +1721,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 								Indexes = append(Indexes, j)
 								mu.Unlock()
 								wg.Done()
-								if retrieved == or {
-									cancel()
-								}
 							} else {
-								cancel()
 								mu.Unlock()
+								return
 							}
 
 						}(i, j)
@@ -1763,10 +1750,10 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 				} else {
 					t1 := time.Now()
 					wg.Add(or)
-					ctxx, cancel := context.WithCancel(context.Background())
+					//ctxx, cancel := context.WithCancel(context.Background())
 					for _, j := range Indexes {
 						go func(i int, j int) {
-							bytess := spt.getData(ctxx, shardCidds[j][i])
+							bytess := spt.getData(spt.ctx, shardCidds[j][i])
 							fmt.Printf("GOTTTTTTTTTTT: %s \n", shardCidds[j][i])
 							mu.Lock()
 							if retrieved < or {
@@ -1775,12 +1762,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 								Indexes = append(Indexes, j)
 								mu.Unlock()
 								wg.Done()
-								if retrieved == or {
-									cancel()
-								}
 							} else {
-								cancel()
 								mu.Unlock()
+								return
 							}
 
 						}(i, j)
