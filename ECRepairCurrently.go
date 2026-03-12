@@ -958,6 +958,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 	hashFunCode, _ := multihash.Names[strings.ToLower("sha2-256")]
 	prefix.MhType = hashFunCode
 	prefix.MhLength = -1
+	var sumhas, nodecreate time.Duration
 	//here we want to recreate the missing shard
 	cState, err := spt.cons.State(spt.ctx)
 	if err != nil {
@@ -1076,8 +1077,10 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 		ctxx, cancell := context.WithCancel(context.Background())
 		wait := time.Now()
 		for i := 0; i < times; i++ {
+			sumh := time.Now()
 			cc, _ := cid.Decode(CIDs[i])
 			exists, bad := spt.connector.BlockLocalHas(spt.ctx, cc)
+			sumhas += time.Now().Sub(sumh)
 			if !exists || (bad != nil) {
 				retrieved := 0
 				sttt := time.Now()
@@ -1123,6 +1126,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					enc.Reconstruct(reconstructshards)
 					enn := time.Since(stt)
 					timetorepairchunksonly += enn
+					nodec := time.Now()
 					//rawnode, _ := merkledag.NewRawNodeWPrefix(reconstructshards[tosend], prefix)
 					nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
 					nodee.SetFileData(reconstructshards[tosend])
@@ -1131,6 +1135,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					shh.SendBlock(spt.ctx, rawnode)
 					size := uint64(len(rawnode.RawData()))
 					shh.AddLink(ctx, rawnode.Cid(), size)
+					nodecreate += time.Now().Sub(nodec)
 					toskip = false
 				} else {
 					wg.Add(or)
@@ -1166,6 +1171,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					enc.Reconstruct(reconstructshards)
 					enn := time.Since(stt)
 					timetorepairchunksonly += enn
+					nodec := time.Now()
 					//rawnode, _ := merkledag.NewRawNodeWPrefix(reconstructshards[tosend], prefix)
 					nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
 					nodee.SetFileData(reconstructshards[tosend])
@@ -1174,6 +1180,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					shh.SendBlock(spt.ctx, rawnode)
 					size := uint64(len(rawnode.RawData()))
 					shh.AddLink(ctx, rawnode.Cid(), size)
+					nodecreate += time.Now().Sub(nodec)
 				}
 			} else {
 				fmt.Printf("Entereddddddd to the have localllll part\n")
@@ -1186,6 +1193,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 				shh.SendBlock(spt.ctx, rawnode)
 				size := uint64(len(rawnode.RawData()))
 				shh.AddLink(ctx, rawnode.Cid(), size)
+
 			}
 
 		}
@@ -1203,7 +1211,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 		wait2 := time.Since(wait1)
 		cancell()
 		overallend := time.Now()
-		fmt.Printf("Overall repair time: %s \n", overallend.Sub(overallstart).String())
+		fmt.Printf("Overall repair time: %s with node creation time : %s and check local time : %s \n", overallend.Sub(overallstart).String(), nodecreate.String(), sumhas.String())
 		return timedownloadchunks, timetorepairchunksonly, wait2
 	} else {
 		for _, pi := range repairShards {
@@ -1237,8 +1245,10 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 		ctxx, cancell := context.WithCancel(context.Background())
 		wait := time.Now()
 		for i := 0; i < times; i++ {
+			sumh := time.Now()
 			cc, _ := cid.Decode(CIDs[i])
 			exists, bad := spt.connector.BlockLocalHas(spt.ctx, cc)
+			sumhas += time.Now().Sub(sumh)
 			if !exists || (bad != nil) {
 				retrieved := 0
 				sttt := time.Now()
@@ -1283,6 +1293,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					enc.Reconstruct(reconstructshards)
 					enn := time.Since(stt)
 					timetorepairchunksonly += enn
+					nodec := time.Now()
 					//rawnode, _ := merkledag.NewRawNodeWPrefix(reconstructshards[tosend], prefix)
 					nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
 					nodee.SetFileData(reconstructshards[tosend])
@@ -1291,6 +1302,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					shh.SendBlock(spt.ctx, rawnode)
 					size := uint64(len(rawnode.RawData()))
 					shh.AddLink(ctx, rawnode.Cid(), size)
+					nodecreate += time.Now().Sub(nodec)
 					toskip = false
 				} else {
 					t1 := time.Now()
@@ -1326,6 +1338,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					enc.Reconstruct(reconstructshards)
 					enn := time.Since(stt)
 					timetorepairchunksonly += enn
+					nodec := time.Now()
 					//rawnode, _ := merkledag.NewRawNodeWPrefix(reconstructshards[tosend], prefix)
 					nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
 					nodee.SetFileData(reconstructshards[tosend])
@@ -1334,6 +1347,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					shh.SendBlock(spt.ctx, rawnode)
 					size := uint64(len(rawnode.RawData()))
 					shh.AddLink(ctx, rawnode.Cid(), size)
+					nodecreate += time.Now().Sub(nodec)
 				}
 			} else {
 				fmt.Printf("Entereddddddd to the have localllll part\n")
@@ -1359,7 +1373,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 		wait2 := time.Since(wait1)
 		cancell()
 		overallend := time.Now()
-		fmt.Printf("Overall repair time: %s \n", overallend.Sub(overallstart).String())
+		fmt.Printf("Overall repair time: %s with node creation time : %s and check local time : %s \n", overallend.Sub(overallstart).String(), nodecreate.String(), sumhas.String())
 		return timedownloadchunks, timetorepairchunksonly, wait2
 	}
 
