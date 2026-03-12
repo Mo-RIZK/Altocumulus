@@ -1717,7 +1717,10 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		shh.FlushNew(spt.ctx)
 		wait2 := time.Since(wait1)
 		cancell()
-
+		pin.Allocations = make([]peer.ID, 0)
+		for _, all := range shh.Allocations() {
+			pin.Allocations = append(pin.Allocations, all)
+		}
 		errr := spt.rpcClient.CallContext(
 			ctx,
 			"",
@@ -1929,6 +1932,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 			}
 		}
 		wait1 := time.Now()
+		for _, all := range shh.Allocations() {
+			pin.Allocations = append(pin.Allocations, all)
+		}
 		shh.FlushForStateless(spt.ctx, *pin)
 		wait2 := time.Since(wait1)
 		cancell()
