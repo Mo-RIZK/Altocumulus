@@ -1074,6 +1074,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 		timerlaunched := false
 		Indexes := make([]int, 0)
 		ctxx, cancell := context.WithCancel(context.Background())
+		wait := time.Now()
 		for i := 0; i < times; i++ {
 			cc, _ := cid.Decode(CIDs[i])
 			exists, bad := spt.connector.BlockLocalHas(spt.ctx, cc)
@@ -1091,10 +1092,10 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 					t1 := time.Now()
 					Indexes = make([]int, 0)
 					wg.Add(or)
-					ctxx, cancel := context.WithCancel(context.Background())
+					ctxxx, cancel := context.WithCancel(context.Background())
 					for j := 0; j < or+par; j++ {
 						go func(i int, j int) {
-							bytess := spt.getData(ctxx, shardCidds[j][i])
+							bytess := spt.getData(ctxxx, shardCidds[j][i])
 							fmt.Printf("GOTTTTTTTTTTT: %s \n", shardCidds[j][i])
 							mu.Lock()
 							if retrieved < or {
@@ -1105,10 +1106,11 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 								wg.Done()
 								if retrieved == or {
 									cancel()
+									return
 								}
 							} else {
-								cancel()
 								mu.Unlock()
+								return
 							}
 
 						}(i, j)
@@ -1188,6 +1190,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 
 		}
 		wait1 := time.Now()
+		fmt.Printf("Ended the repair in %s time \n", wait1.Sub(wait))
 
 		for _, al := range pin.Allocations {
 			fmt.Printf("000000000 ALLLLL in cluster pin is : %s \n", al.String())
@@ -1232,6 +1235,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 		timerlaunched := false
 		Indexes := make([]int, 0)
 		ctxx, cancell := context.WithCancel(context.Background())
+		wait := time.Now()
 		for i := 0; i < times; i++ {
 			cc, _ := cid.Decode(CIDs[i])
 			exists, bad := spt.connector.BlockLocalHas(spt.ctx, cc)
@@ -1347,6 +1351,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 		}
 
 		wait1 := time.Now()
+		fmt.Printf("Ended the repair in %s time \n", wait1.Sub(wait))
 		for _, al := range pin.Allocations {
 			fmt.Printf("000000000 ALLLLL in cluster pin is : %s \n", al.String())
 		}
