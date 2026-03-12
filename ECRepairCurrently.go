@@ -1932,6 +1932,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 			}
 		}
 		wait1 := time.Now()
+		pin.Allocations = make([]peer.ID, 0)
 		for _, all := range shh.Allocations() {
 			pin.Allocations = append(pin.Allocations, all)
 		}
