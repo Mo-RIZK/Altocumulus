@@ -1681,6 +1681,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 		shh, _ := sharding.NewShards(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions)
 		pin.Allocations = make([]peer.ID, 0)
 		for _, all := range shh.Allocations() {
+			fmt.Printf("sharddddd allocation is: %s \n", all.String())
 			pin.Allocations = append(pin.Allocations, all)
 		}
 		enc, _ := reedsolomon.New(or, par)
