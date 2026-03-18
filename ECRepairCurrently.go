@@ -1749,6 +1749,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		)
 
 		if errr != nil {
+			fmt.Printf("HIIIIIIII")
 			return 0, 0, 0
 		}
 		fmt.Printf("REPAIR TOOK %s \n", time.Now().Sub(start).String())
