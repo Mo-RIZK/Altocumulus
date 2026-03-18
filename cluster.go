@@ -2496,7 +2496,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) (peer.ID, []str
 		}
 	}
 
-	fmt.Printf("MAX similarities: %d with peer %s\n", maxSim, bestPeer)
+	fmt.Printf("MAX similarities: %d out of %d with peer %s\n", maxSim, len(CIDs), bestPeer)
 	return bestPeer, peerCIDMatches[bestPeer]
 }
 
