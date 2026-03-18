@@ -1732,7 +1732,6 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 			}
 		}
 		wait1 := time.Now()
-		shh.FlushNew(spt.ctx)
 		wait2 := time.Since(wait1)
 		cancell()
 		pin.Allocations = make([]peer.ID, 0)
