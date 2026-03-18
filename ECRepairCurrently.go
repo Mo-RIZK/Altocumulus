@@ -1435,7 +1435,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitchingNew(pin *api.Pin) (time.Duration,
 func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, time.Duration, time.Duration) {
 	ssss := time.Now()
 	repairShards := make([]pinwithmeta, 0)
-	//start := time.Now()
+	start := time.Now()
 	cidString := pin.Metadata["Cids"]
 	CIDs := strings.Split(cidString, ",")
 	commonstring := pin.Metadata["common"]
@@ -1747,9 +1747,12 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 			pin,
 			&struct{}{},
 		)
+
 		if errr != nil {
 			return 0, 0, 0
 		}
+		fmt.Printf("REPAIR TOOK %s \n", time.Now().Sub(start).String())
+
 		return timedownloadchunks, timetorepairchunksonly, wait2
 	} else {
 		for _, pi := range repairShards {
@@ -1970,6 +1973,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		shh.FlushForStateless(spt.ctx, *pin)
 		wait2 := time.Since(wait1)
 		cancell()
+		fmt.Printf("REPAIR TOOK %s \n", time.Now().Sub(start).String())
 		return timedownloadchunks, timetorepairchunksonly, wait2
 	}
 }
