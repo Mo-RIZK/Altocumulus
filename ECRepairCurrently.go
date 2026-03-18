@@ -1595,7 +1595,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 									sss := time.Now()
 									bytess := spt.getData(ctxx, shard.cids[i])
 									nnn := time.Since(sss)
-									fmt.Printf("REPAIR GOT HERE FOR shard %d : %s \n", shard.index, nnn.String())
+									fmt.Printf("REPAIR GOT HERE Local FOR shard %d : %s \n", shard.index, nnn.String())
 									mu.Lock()
 									if retrieved < or {
 										retrieved++
@@ -1648,7 +1648,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 									sss := time.Now()
 									bytess := spt.getData(ctxx, shard.cids[i])
 									nnn := time.Since(sss)
-									fmt.Printf("REPAIR GOT HERE FOR shard %d : %s \n", shard.index, nnn.String())
+									fmt.Printf("REPAIR GOT HERE Local FOR shard %d : %s \n", shard.index, nnn.String())
 									mu.Lock()
 									if retrieved < or {
 										retrieved++
@@ -1829,7 +1829,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 									sss := time.Now()
 									bytess := spt.getData(ctxx, shard.cids[i])
 									nnn := time.Since(sss)
-									fmt.Printf("REPAIR GOT HERE FOR shard %d : %s \n", shard.index, nnn.String())
+									fmt.Printf("REPAIR GOT HERE Not local FOR shard %d : %s \n", shard.index, nnn.String())
 									mu.Lock()
 									if retrieved < or {
 										retrieved++
@@ -1928,7 +1928,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 								sss := time.Now()
 								bytess := spt.getData(ctxx, shard.cids[i])
 								nnn := time.Since(sss)
-								fmt.Printf("REPAIR GOT HERE FOR shard %d : %s \n", shard.index, nnn.String())
+								fmt.Printf("REPAIR GOT HERE Not local,  FOR shard %d : %s \n", shard.index, nnn.String())
 								mu.Lock()
 								if retrieved < or {
 									retrieved++
