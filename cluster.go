@@ -535,7 +535,7 @@ func (c *Cluster) alertsHandler() {
 				logger.Warn(err)
 				return
 			}
-			sim := 1
+			sim := 0
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			fmt.Fprintf(os.Stdout, "Collecting the ip addresses of all nodes took : %s \n", bet.String())
@@ -552,7 +552,7 @@ func (c *Cluster) alertsHandler() {
 				if containsPeer(pin.Allocations, alrt.Peer) {
 					if strings.Contains(pin.Name, "EC") && len(pin.Allocations) < 2 {
 						if sim == 0 {
-							cidStr := "QmYwAPJzv5CZsnAzt8auVZRnGi2C4dYh9N7VDaRao7tAor"
+							/*cidStr := "QmYwAPJzv5CZsnAzt8auVZRnGi2C4dYh9N7VDaRao7tAor"
 
 							ci, err := cid.Decode(cidStr)
 							if err != nil {
@@ -562,13 +562,13 @@ func (c *Cluster) alertsHandler() {
 
 							if distance.isClosest(cc) {
 								c.Enqueue(c.ctx, pin)
-							}
+							}*/
 
-							/*var repair bool
+							var repair bool
 							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
 							if repair {
-								c.repinFromPeer(c.ctx, alrt.Peer, pin)
-							}*/
+								c.Enqueue(c.ctx, pin)
+							}
 						} else {
 							if distance.isClosest(pin.Cid) {
 								go func() {
