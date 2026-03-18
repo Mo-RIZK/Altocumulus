@@ -563,12 +563,14 @@ func (c *Cluster) alertsHandler() {
 							if distance.isClosest(cc) {
 								c.Enqueue(c.ctx, pin)
 							}*/
-
-							var repair bool
-							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
-							if repair {
+							if distance.isClosest(pin.Cid) {
 								c.Enqueue(c.ctx, pin)
 							}
+							/*var repair bool
+							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
+							if repair {
+								c.Enqueue(c.ctx, pin)*/
+							//}
 						} else {
 							if distance.isClosest(pin.Cid) {
 								go func() {
