@@ -1739,19 +1739,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		for _, all := range shh.Allocations() {
 			pin.Allocations = append(pin.Allocations, all)
 		}
-		errr := spt.rpcClient.CallContext(
-			ctx,
-			"",
-			"IPFSConnector",
-			"Pin",
-			pin,
-			&struct{}{},
-		)
-
-		if errr != nil {
-			fmt.Printf("HIIIIIIII")
-			return 0, 0, 0
-		}
+		shh.FlushForStateless(spt.ctx, *pin)
 		fmt.Printf("REPAIR TOOK %s \n", time.Now().Sub(start).String())
 
 		return timedownloadchunks, timetorepairchunksonly, wait2
