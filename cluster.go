@@ -563,7 +563,32 @@ func (c *Cluster) alertsHandler() {
 							if distance.isClosest(cc) {
 								c.Enqueue(c.ctx, pin)
 							}*/
-							if distance.isClosest(pin.Cid) {
+							/*if distance.isClosest(pin.Cid) {
+								common := make([]string, 0)
+								cidString, _ := pin.Metadata["Cids"]
+								CIDs := strings.Split(cidString, ",")
+								for _, ci := range CIDs {
+									cc, _ := cid.Decode(ci)
+									ex, _ := c.ipfs.BlockLocalHas(c.ctx, cc)
+									if ex {
+										common = append(common, ci)
+									}
+								}
+								fmt.Printf("MAX similarities: %d out of %d \n", len(common), len(CIDs))
+								first := 1
+								for _, com := range common {
+									if first == 1 {
+										pin.Metadata["common"] = com
+										first++
+									} else {
+										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
+									}
+								}
+								c.Enqueue(c.ctx, pin)
+							}*/
+							var repair bool
+							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
+							if repair {
 								common := make([]string, 0)
 								cidString, _ := pin.Metadata["Cids"]
 								CIDs := strings.Split(cidString, ",")
@@ -586,11 +611,6 @@ func (c *Cluster) alertsHandler() {
 								}
 								c.Enqueue(c.ctx, pin)
 							}
-							/*var repair bool
-							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
-							if repair {
-								c.Enqueue(c.ctx, pin)*/
-							//}
 						} else {
 							if distance.isClosest(pin.Cid) {
 								go func() {
