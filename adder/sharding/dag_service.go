@@ -321,11 +321,17 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		var err error
 		// important: shards use the DAGService context.
 		oppts := dgs.addParams.PinOptions
+		for _, all := range dgs.addParams.UserAllocations {
+			fmt.Fprintf(os.Stdout, "Allocations 1 are %s \n", all.String())
+		}
 		oppts.ReplicationFactorMin = dgs.addParams.O + dgs.addParams.P
 		oppts.ReplicationFactorMax = dgs.addParams.O + dgs.addParams.P
 		allocs, err := adder.BlockAllocate(ctx, dgs.rpcClient, oppts)
 		if err != nil {
 			return err
+		}
+		for _, all := range allocs {
+			fmt.Fprintf(os.Stdout, "Allocations 2 are %s \n", all.String())
 		}
 		for i := 0; i < dgs.addParams.O+dgs.addParams.P; i++ {
 			shardd[i], err = NewShard(dgs.ctx, ctx, dgs.rpcClient, dgs.addParams.PinOptions, allocs[i])
