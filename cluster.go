@@ -551,7 +551,7 @@ func (c *Cluster) alertsHandler() {
 			for pin := range pinCh {
 				if containsPeer(pin.Allocations, alrt.Peer) {
 					if strings.Contains(pin.Name, "EC") && len(pin.Allocations) < 2 {
-						if sim == 1 {
+						if sim == 0 {
 							/*cidStr := "QmYwAPJzv5CZsnAzt8auVZRnGi2C4dYh9N7VDaRao7tAor"
 
 							ci, err := cid.Decode(cidStr)
@@ -563,7 +563,7 @@ func (c *Cluster) alertsHandler() {
 							if distance.isClosest(cc) {
 								c.Enqueue(c.ctx, pin)
 							}*/
-							/*if distance.isClosest(pin.Cid) {
+							if distance.isClosest(pin.Cid) {
 								common := make([]string, 0)
 								cidString, _ := pin.Metadata["Cids"]
 								CIDs := strings.Split(cidString, ",")
@@ -585,8 +585,8 @@ func (c *Cluster) alertsHandler() {
 									}
 								}
 								c.Enqueue(c.ctx, pin)
-							}*/
-							var repair bool
+							}
+							/*var repair bool
 							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
 							if repair {
 								common := make([]string, 0)
@@ -610,7 +610,7 @@ func (c *Cluster) alertsHandler() {
 									}
 								}
 								c.Enqueue(c.ctx, pin)
-							}
+							}*/
 						} else {
 							if distance.isClosest(pin.Cid) {
 								go func() {
