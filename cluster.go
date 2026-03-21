@@ -551,7 +551,7 @@ func (c *Cluster) alertsHandler() {
 			for pin := range pinCh {
 				if containsPeer(pin.Allocations, alrt.Peer) {
 					if strings.Contains(pin.Name, "EC") && len(pin.Allocations) < 2 {
-						if sim == 0 {
+						if sim == 1 {
 							/*cidStr := "QmYwAPJzv5CZsnAzt8auVZRnGi2C4dYh9N7VDaRao7tAor"
 
 							ci, err := cid.Decode(cidStr)
