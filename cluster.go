@@ -615,7 +615,7 @@ func (c *Cluster) alertsHandler() {
 							if distance.isClosest(pin.Cid) {
 								go func() {
 									ss := time.Now()
-									ppp, common := c.similarities(c.ctx, pin)
+									ppp, common, allmatches := c.similaritiesNew(c.ctx, pin)
 									fmt.Fprintf(os.Stdout, "Checking %s\n", time.Now().Sub(ss).String())
 									first := 1
 									for _, com := range common {
@@ -624,6 +624,15 @@ func (c *Cluster) alertsHandler() {
 											first++
 										} else {
 											pin.Metadata["common"] = pin.Metadata["common"] + "," + com
+										}
+									}
+									first = 1
+									for _, com := range allmatches {
+										if first == 1 {
+											pin.Metadata["allmatches"] = com
+											first++
+										} else {
+											pin.Metadata["allmatches"] = pin.Metadata["allmatches"] + "," + com
 										}
 									}
 									if ppp == c.id {
@@ -2540,6 +2549,118 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) (peer.ID, []str
 
 	fmt.Printf("MAX similarities: %d out of %d with peer %s\n", maxSim, len(CIDs), bestPeer)
 	return bestPeer, peerCIDMatches[bestPeer]
+}
+
+func (c *Cluster) similaritiesNew(ctx context.Context, pin api.Pin) (peer.ID, []string, []string) {
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
+
+	cidString, ok := pin.Metadata["Cids"]
+	if !ok || cidString == "" {
+		peers, _ := c.consensus.Peers(ctx)
+		if len(peers) > 0 {
+			return peers[0], nil, nil
+		}
+		return "", nil, nil
+	}
+
+	CIDs := strings.Split(cidString, ",")
+
+	peers, err := c.consensus.Peers(ctx)
+	if err != nil || len(peers) == 0 {
+		return "", nil, nil
+	}
+
+	peerSim := make(map[peer.ID]int)
+	peerCIDMatches := make(map[peer.ID][]string)
+
+	// NEW: global set of all matched CIDs
+	allMatchedCIDs := make(map[string]struct{})
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 33333333333333333\n")
+
+	for _, cidStr := range CIDs {
+		cidStr = strings.TrimSpace(cidStr)
+
+		apiCid, err := api.DecodeCid(cidStr)
+		if err != nil {
+			continue
+		}
+
+		cidObj, err := cid.Decode(apiCid.String())
+		if err != nil {
+			continue
+		}
+
+		for _, p := range peers {
+			wg.Add(1)
+			go func(peer peer.ID, c cid.Cid, cidValue string, C *Cluster) {
+				defer wg.Done()
+
+				rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+				defer cancel()
+
+				var exists bool
+				err := C.rpcClient.CallContext(
+					rpcCtx,
+					peer,
+					"IPFSConnector",
+					"BlockLocalHas",
+					c,
+					&exists,
+				)
+				if err != nil {
+					fmt.Printf("RPC call failed for peer %s: %v\n", peer.String(), err)
+					return
+				}
+
+				if exists {
+					mu.Lock()
+
+					peerSim[peer]++
+					peerCIDMatches[peer] = append(peerCIDMatches[peer], cidValue)
+
+					// NEW: store globally
+					allMatchedCIDs[cidValue] = struct{}{}
+
+					fmt.Printf("Found on peer: %s, similarity: %d\n", peer.String(), peerSim[peer])
+
+					mu.Unlock()
+				}
+			}(p, cidObj, cidStr, c)
+		}
+	}
+
+	wg.Wait()
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 55555555555555555\n")
+
+	// Find best peer
+	maxSim := -1
+	var bestPeer peer.ID
+
+	for _, p := range peers {
+		count := peerSim[p]
+		fmt.Fprintf(os.Stdout, "Peer %s has %d similarities\n", p.String(), count)
+
+		if count > maxSim {
+			maxSim = count
+			bestPeer = p
+		}
+	}
+
+	// NEW: convert global set → slice
+	allMatchedList := make([]string, 0, len(allMatchedCIDs))
+	for cidStr := range allMatchedCIDs {
+		allMatchedList = append(allMatchedList, cidStr)
+	}
+
+	fmt.Printf("MAX similarities: %d out of %d with peer %s\n", maxSim, len(CIDs), bestPeer)
+	fmt.Printf("Total matched anywhere: %d\n", len(allMatchedList))
+
+	return bestPeer, peerCIDMatches[bestPeer], allMatchedList
 }
 
 func (c *Cluster) Enqueue(ctx context.Context, cid api.Pin) error {

@@ -1440,6 +1440,8 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 	CIDs := strings.Split(cidString, ",")
 	commonstring := pin.Metadata["common"]
 	Common := strings.Split(commonstring, ",")
+	allmatches := pin.Metadata["allmatches"]
+	AllMatches := strings.Split(allmatches, ",")
 	var timedownloadchunks, timetorepairchunksonly time.Duration
 	ctx, span := trace.StartSpan(spt.ctx, "pintracker/repinFromPeer")
 	defer span.End()
@@ -1555,7 +1557,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		Indexes := make([]int, 0)
 		ctxx, cancell := context.WithCancel(context.Background())
 		for i := 0; i < times; i++ {
-			if contains(Common, CIDs[i]) {
+			if contains(Common, CIDs[i]) || contains(AllMatches, CIDs[i]) {
 				fmt.Printf("Entereddddddd to the have localllll part\n")
 				bytess := spt.getData(ctxx, CIDs[i])
 				fmt.Printf("This is the dataaaaaaaaaaaa size : %d \n", len(bytess))
@@ -1777,7 +1779,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		Indexes := make([]int, 0)
 		ctxx, cancell := context.WithCancel(context.Background())
 		for i := 0; i < times; i++ {
-			if contains(Common, CIDs[i]) {
+			if contains(Common, CIDs[i]) || contains(AllMatches, CIDs[i]) {
 				fmt.Printf("Entereddddddd to the have localllll part\n")
 				bytess := spt.getData(ctxx, CIDs[i])
 				fmt.Printf("This is the dataaaaaaaaaaaa size : %d \n", len(bytess))
