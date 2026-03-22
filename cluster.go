@@ -615,7 +615,7 @@ func (c *Cluster) alertsHandler() {
 							if distance.isClosest(pin.Cid) {
 								go func() {
 									ss := time.Now()
-									ppp, common, allmatches := c.similaritiesNew(c.ctx, pin)
+									ppp, common := c.similarities(c.ctx, pin)
 									fmt.Fprintf(os.Stdout, "Checking %s\n", time.Now().Sub(ss).String())
 									first := 1
 									for _, com := range common {
@@ -626,7 +626,7 @@ func (c *Cluster) alertsHandler() {
 											pin.Metadata["common"] = pin.Metadata["common"] + "," + com
 										}
 									}
-									first = 1
+									/*first = 1
 									for _, com := range allmatches {
 										if first == 1 {
 											pin.Metadata["allmatches"] = com
@@ -634,7 +634,7 @@ func (c *Cluster) alertsHandler() {
 										} else {
 											pin.Metadata["allmatches"] = pin.Metadata["allmatches"] + "," + com
 										}
-									}
+									}*/
 									if ppp == c.id {
 										c.Enqueue(c.ctx, pin)
 									} else {
