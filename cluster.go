@@ -661,7 +661,7 @@ func (c *Cluster) alertsHandler() {
 									ss := time.Now()
 
 									//ppp, common := c.similarities(c.ctx, pin)
-									ppp, common := c.similarities_new(c.ctx, pin)
+									ppp, common := c.similarities_new1(c.ctx, pin)
 									fmt.Fprintf(os.Stdout, "Checking %s\n", time.Now().Sub(ss).String())
 									first := 1
 									for _, com := range common {
@@ -2701,4 +2701,100 @@ func (c *Cluster) Enqueue(ctx context.Context, cid api.Pin) error {
 		return err
 	}
 	return nil
+}
+
+func (c *Cluster) similarities_new1(ctx context.Context, pin api.Pin) (peer.ID, []string) {
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
+
+	peerSim := make(map[peer.ID]int)
+
+	cidString, ok := pin.Metadata["Cids"]
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP %s \n", cidString)
+	if !ok || cidString == "" {
+		return "", nil
+	}
+
+	CIDs := strings.Split(cidString, ",")
+
+	peers, err := c.consensus.Peers(ctx)
+	if err != nil || len(peers) == 0 {
+		return "", nil
+	}
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 4444444444 \n")
+
+	CIDMatches := make([]string, 0)
+	var mu sync.Mutex
+
+	for _, cidStr := range CIDs {
+		cidStr = strings.TrimSpace(cidStr)
+
+		apiCid, err := api.DecodeCid(cidStr)
+		if err != nil {
+			continue
+		}
+		cidObj, err := cid.Decode(apiCid.String())
+		if err != nil {
+			continue
+		}
+
+		rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		responses := 0
+		found := false
+
+		for _, p := range peers {
+			go func(peerID peer.ID, cidValue cid.Cid, cidText string, C *Cluster) {
+				var exists bool
+				err := C.rpcClient.CallContext(
+					rpcCtx,
+					peerID,
+					"IPFSConnector",
+					"BlockLocalHas",
+					cidValue,
+					&exists,
+				)
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				responses++
+
+				if err == nil && exists && !found {
+					found = true
+					CIDMatches = append(CIDMatches, cidText)
+					peerSim[peerID]++
+					cancel()
+					wg.Done()
+					return
+				}
+
+				if responses == len(peers) && !found {
+					wg.Done()
+				}
+			}(p, cidObj, cidStr, c)
+		}
+
+		wg.Wait()
+		cancel()
+	}
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 555555555555 \n")
+
+	maxSim := -1
+	var bestPeer peer.ID
+	for _, p := range peers {
+		count := peerSim[p]
+		fmt.Fprintf(os.Stdout, "Peer %s has %d similarities\n", p.String(), count)
+		if count > maxSim {
+			maxSim = count
+			bestPeer = p
+		}
+	}
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 666666666666 \n")
+
+	fmt.Printf("MAX similarities: %d out of %d \n", len(CIDMatches), len(CIDs))
+	return bestPeer, CIDMatches
 }
