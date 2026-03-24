@@ -1559,7 +1559,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		for i := 0; i < times; i++ {
 			if contains(Common, CIDs[i]) || contains(AllMatches, CIDs[i]) {
 				fmt.Printf("Entereddddddd to the have localllll part\n")
+				sttt := time.Now()
 				bytess := spt.getData(ctxx, CIDs[i])
+				st := time.Now().Sub(sttt)
 				fmt.Printf("This is the dataaaaaaaaaaaa size : %d \n", len(bytess))
 				nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
 				nodee.SetFileData(bytess)
@@ -1568,9 +1570,10 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 				shh.SendBlock(spt.ctx, rawnode)
 				size := uint64(len(rawnode.RawData()))
 				shh.AddLink(ctx, rawnode.Cid(), size)
+				timedownloadchunks += st
+
 			} else {
 				retrieved := 0
-				sttt := time.Now()
 				reconstructshards := make([][]byte, or+par)
 				nbShardsMeta := 0
 				readfrom := make([]pinwithmeta, 0)
@@ -1590,6 +1593,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 					if toskip {
 						Indexes = make([]int, 0)
 						wg.Add(or)
+						sttt := time.Now()
 						ctxx, cancel := context.WithCancel(context.Background())
 						for _, shard := range readfrom {
 							if len(shard.cids) > 0 {
@@ -1643,6 +1647,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 							}
 						}
 						wg.Add(or)
+						sttt := time.Now()
 						ctxx, cancel := context.WithCancel(context.Background())
 						for _, shard := range readfiltered {
 							if len(shard.cids) > 0 {
@@ -1689,6 +1694,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 				} else {
 					//ask for the six out of six because at least we have six shards metadata
 					wg.Add(or)
+					sttt := time.Now()
 					ctxx, cancel := context.WithCancel(context.Background())
 					for _, shard := range readfrom {
 						if len(shard.cids) > 0 {
@@ -1781,7 +1787,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		for i := 0; i < times; i++ {
 			if contains(Common, CIDs[i]) || contains(AllMatches, CIDs[i]) {
 				fmt.Printf("Entereddddddd to the have localllll part\n")
+				sttt := time.Now()
 				bytess := spt.getData(ctxx, CIDs[i])
+				st := time.Now().Sub(sttt)
 				fmt.Printf("This is the dataaaaaaaaaaaa size : %d \n", len(bytess))
 				nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
 				nodee.SetFileData(bytess)
@@ -1790,9 +1798,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 				shh.SendBlock(spt.ctx, rawnode)
 				size := uint64(len(rawnode.RawData()))
 				shh.AddLink(ctx, rawnode.Cid(), size)
+				timedownloadchunks += st
 			} else {
 				retrieved := 0
-				sttt := time.Now()
 				reconstructshards := make([][]byte, or+par)
 				nbShardsMeta := 0
 				readfrom := make([]pinwithmeta, 0)
@@ -1812,6 +1820,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 					if toskip {
 						Indexes = make([]int, 0)
 						wg.Add(or)
+						sttt := time.Now()
 						ctxx, cancel := context.WithCancel(context.Background())
 						for _, shard := range readfrom {
 							if len(shard.cids) > 0 {
@@ -1865,6 +1874,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 							}
 						}
 						wg.Add(or)
+						sttt := time.Now()
 						ctxx, cancel := context.WithCancel(context.Background())
 						for _, shard := range readfiltered {
 							if len(shard.cids) > 0 {
@@ -1911,6 +1921,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 				} else {
 					//ask for the six out of six because at least we have six shards metadata
 					wg.Add(or)
+					sttt := time.Now()
 					ctxx, cancel := context.WithCancel(context.Background())
 					for _, shard := range readfrom {
 						if len(shard.cids) > 0 {
