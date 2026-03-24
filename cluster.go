@@ -535,7 +535,7 @@ func (c *Cluster) alertsHandler() {
 				logger.Warn(err)
 				return
 			}
-			sim := 2
+			sim := 0
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			fmt.Fprintf(os.Stdout, "Collecting the ip addresses of all nodes took : %s \n", bet.String())
@@ -592,6 +592,7 @@ func (c *Cluster) alertsHandler() {
 							}
 						}
 						if sim == 1 {
+							/////////////// similarities 111111
 							if distance.isClosest(pin.Cid) {
 								go func() {
 									ss := time.Now()
@@ -634,6 +635,7 @@ func (c *Cluster) alertsHandler() {
 							}
 						}
 						if sim == 2 {
+							/////////////// simialrities newwwwwwww
 							if distance.isClosest(pin.Cid) {
 								go func() {
 									ss := time.Now()
@@ -676,6 +678,7 @@ func (c *Cluster) alertsHandler() {
 							}
 						}
 						if sim == 3 {
+							////////// XORRRRR
 							if distance.isClosest(pin.Cid) {
 								common := make([]string, 0)
 								cidString, _ := pin.Metadata["Cids"]
