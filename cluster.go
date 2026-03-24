@@ -535,7 +535,7 @@ func (c *Cluster) alertsHandler() {
 				logger.Warn(err)
 				return
 			}
-			sim := 0
+			sim := 3
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			fmt.Fprintf(os.Stdout, "Collecting the ip addresses of all nodes took : %s \n", bet.String())
@@ -564,29 +564,7 @@ func (c *Cluster) alertsHandler() {
 							if distance.isClosest(cc) {
 								c.Enqueue(c.ctx, pin)
 							}*/
-							/*if distance.isClosest(pin.Cid) {
-								common := make([]string, 0)
-								cidString, _ := pin.Metadata["Cids"]
-								CIDs := strings.Split(cidString, ",")
-								for _, ci := range CIDs {
-									cc, _ := cid.Decode(ci)
-									ex, _ := c.ipfs.BlockLocalHas(c.ctx, cc)
-									if ex {
-										common = append(common, ci)
-									}
-								}
-								fmt.Printf("MAX similarities: %d out of %d \n", len(common), len(CIDs))
-								first := 1
-								for _, com := range common {
-									if first == 1 {
-										pin.Metadata["common"] = com
-										first++
-									} else {
-										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
-									}
-								}
-								c.Enqueue(c.ctx, pin)
-							}*/
+							/**/
 							var repair bool
 							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
 							if repair {
@@ -695,6 +673,31 @@ func (c *Cluster) alertsHandler() {
 										)
 									}
 								}()
+							}
+						}
+						if sim == 3 {
+							if distance.isClosest(pin.Cid) {
+								common := make([]string, 0)
+								cidString, _ := pin.Metadata["Cids"]
+								CIDs := strings.Split(cidString, ",")
+								for _, ci := range CIDs {
+									cc, _ := cid.Decode(ci)
+									ex, _ := c.ipfs.BlockLocalHas(c.ctx, cc)
+									if ex {
+										common = append(common, ci)
+									}
+								}
+								fmt.Printf("MAX similarities: %d out of %d \n", len(common), len(CIDs))
+								first := 1
+								for _, com := range common {
+									if first == 1 {
+										pin.Metadata["common"] = com
+										first++
+									} else {
+										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
+									}
+								}
+								c.Enqueue(c.ctx, pin)
 							}
 						}
 
