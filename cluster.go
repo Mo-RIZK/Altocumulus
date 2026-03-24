@@ -2602,6 +2602,7 @@ func (c *Cluster) similarities_new(ctx context.Context, pin api.Pin) (peer.ID, [
 	responsesnb := 0
 	peerSim := make(map[peer.ID]int)
 	cidString, ok := pin.Metadata["Cids"]
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP %s \n", cidString)
 	if !ok || cidString == "" {
 		peers, _ := c.consensus.Peers(ctx)
 		if len(peers) > 0 {
@@ -2616,7 +2617,7 @@ func (c *Cluster) similarities_new(ctx context.Context, pin api.Pin) (peer.ID, [
 	if err != nil || len(peers) == 0 {
 		return "", nil
 	}
-
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 4444444444 \n")
 	CIDMatches := make([]string, 0)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -2668,7 +2669,7 @@ func (c *Cluster) similarities_new(ctx context.Context, pin api.Pin) (peer.ID, [
 		}
 		wg.Wait()
 	}
-
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 555555555555 \n")
 	// Wait for all goroutines to finish
 
 	maxSim := -1
@@ -2681,6 +2682,7 @@ func (c *Cluster) similarities_new(ctx context.Context, pin api.Pin) (peer.ID, [
 			bestPeer = p
 		}
 	}
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 666666666666 \n")
 
 	fmt.Printf("MAX similarities: %d out of %d \n", len(CIDMatches), len(CIDs))
 	return bestPeer, CIDMatches
