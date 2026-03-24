@@ -2647,7 +2647,7 @@ func (c *Cluster) similarities_new(ctx context.Context, pin api.Pin) (peer.ID, [
 					c,
 					&exists,
 				)
-				if err != nil {
+				if err != nil || !exists {
 					fmt.Printf("RPC call failed for peer %s: %v\n", peer.String(), err)
 					mu.Lock()
 					responsesnb++
