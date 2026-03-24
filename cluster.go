@@ -2634,6 +2634,7 @@ func (c *Cluster) similarities_new(ctx context.Context, pin api.Pin) (peer.ID, [
 		}
 		rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 		wg.Add(1)
+		existed := 0
 		for _, p := range peers {
 			go func(peer peer.ID, c cid.Cid, C *Cluster) {
 
@@ -2659,11 +2660,17 @@ func (c *Cluster) similarities_new(ctx context.Context, pin api.Pin) (peer.ID, [
 
 				if exists {
 					mu.Lock()
-					CIDMatches = append(CIDMatches, cidStr)
-					peerSim[p]++
-					wg.Done()
-					cancel()
-					mu.Unlock()
+					if existed == 0 {
+						CIDMatches = append(CIDMatches, cidStr)
+						peerSim[p]++
+						wg.Done()
+						existed++
+						cancel()
+						mu.Unlock()
+					} else {
+						return
+					}
+
 				}
 			}(p, cidObj, c)
 		}
