@@ -535,7 +535,7 @@ func (c *Cluster) alertsHandler() {
 				logger.Warn(err)
 				return
 			}
-			sim := 2
+			sim := 0
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			fmt.Fprintf(os.Stdout, "Collecting the ip addresses of all nodes took : %s \n", bet.String())
@@ -599,7 +599,7 @@ func (c *Cluster) alertsHandler() {
 
 									//ppp, common := c.similarities(c.ctx, pin)
 									ppp, common := c.similarities(c.ctx, pin)
-									fmt.Fprintf(os.Stdout, "Checking %s\n", time.Now().Sub(ss).String())
+									fmt.Fprintf(os.Stdout, "Checkingggg %s\n", time.Now().Sub(ss).String())
 									first := 1
 									for _, com := range common {
 										if first == 1 {
@@ -642,7 +642,7 @@ func (c *Cluster) alertsHandler() {
 
 									//ppp, common := c.similarities(c.ctx, pin)
 									ppp, common := c.similarities_new1(c.ctx, pin)
-									fmt.Fprintf(os.Stdout, "Checking %s\n", time.Now().Sub(ss).String())
+									fmt.Fprintf(os.Stdout, "Checkingggg %s\n", time.Now().Sub(ss).String())
 									first := 1
 									for _, com := range common {
 										if first == 1 {
@@ -2553,8 +2553,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) (peer.ID, []str
 			go func(peer peer.ID, c cid.Cid, C *Cluster) {
 				defer wg.Done()
 
-				rpcCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-				defer cancel()
+				rpcCtx, _ := context.WithTimeout(ctx, 500*time.Millisecond)
 
 				var exists bool
 				err := C.rpcClient.CallContext(
