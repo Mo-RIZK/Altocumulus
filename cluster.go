@@ -706,6 +706,12 @@ func (c *Cluster) alertsHandler() {
 
 					} else {
 						if distance.isClosest(pin.Cid) {
+							if strings.Contains(pin.Name, "EC") {
+								cidString, _ := pin.Metadata["Cids"]
+
+								CIDs := strings.Split(cidString, ",")
+								fmt.Printf("REPPPP ECCC of length: %d \n", len(CIDs))
+							}
 							c.repinFromPeer(c.ctx, alrt.Peer, pin)
 						}
 					}
