@@ -535,7 +535,7 @@ func (c *Cluster) alertsHandler() {
 				logger.Warn(err)
 				return
 			}
-			sim := 3
+			sim := 0
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			fmt.Fprintf(os.Stdout, "Collecting the ip addresses of all nodes took : %s \n", bet.String())
@@ -550,7 +550,7 @@ func (c *Cluster) alertsHandler() {
 
 			for pin := range pinCh {
 				if containsPeer(pin.Allocations, alrt.Peer) {
-					if strings.Contains(pin.Name, "EC") && len(pin.Allocations) < 2 && strings.Contains(pin.Name, "shard") {
+					if strings.Contains(pin.Name, "EC") && len(pin.Allocations) < 2 {
 						if sim == 0 {
 							//      BALANCED ////
 							/*cidStr := "QmYwAPJzv5CZsnAzt8auVZRnGi2C4dYh9N7VDaRao7tAor"
