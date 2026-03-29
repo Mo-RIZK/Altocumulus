@@ -535,9 +535,10 @@ func (c *Cluster) alertsHandler() {
 				logger.Warn(err)
 				return
 			}
-			sim := 1
+			sim := 0
 			enn := time.Now()
 			bet := enn.Sub(stt)
+			kk := 0
 			fmt.Fprintf(os.Stdout, "Collecting the ip addresses of all nodes took : %s \n", bet.String())
 			c.repairing = make([]peer.ID, 0)
 			pinCh := make(chan api.Pin, 1024)
@@ -550,6 +551,7 @@ func (c *Cluster) alertsHandler() {
 
 			for pin := range pinCh {
 				if containsPeer(pin.Allocations, alrt.Peer) {
+					kk++
 					if strings.Contains(pin.Name, "EC") && len(pin.Allocations) < 2 {
 						if sim == 0 {
 							//      BALANCED ////
@@ -717,6 +719,7 @@ func (c *Cluster) alertsHandler() {
 					}
 				}
 			}
+			fmt.Fprintf(os.Stdout, "SSSSSHHHHHH : %d \n", kk)
 		}
 	}
 }
