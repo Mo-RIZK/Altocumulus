@@ -1440,6 +1440,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 	CIDs := strings.Split(cidString, ",")
 	commonstring := pin.Metadata["common"]
 	Common := strings.Split(commonstring, ",")
+	fmt.Printf("MAX similarities: %d out of %d \n", len(Common), len(CIDs))
 	allmatches := pin.Metadata["allmatches"]
 	AllMatches := strings.Split(allmatches, ",")
 	var timedownloadchunks, timetorepairchunksonly time.Duration

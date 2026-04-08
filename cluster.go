@@ -775,7 +775,6 @@ func (c *Cluster) alertsHandler() {
 										common = append(common, ci)
 									}
 								}
-								fmt.Printf("MAX similarities: %d out of %d \n", len(common), len(CIDs))
 								first := 1
 								for _, com := range common {
 									if first == 1 {
@@ -887,7 +886,7 @@ func (c *Cluster) alertsHandler() {
 										common = append(common, ci)
 									}
 								}
-								fmt.Printf("MAX similarities: %d out of %d \n", len(common), len(CIDs))
+
 								first := 1
 								for _, com := range common {
 									if first == 1 {
@@ -2863,7 +2862,6 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) (peer.ID, []str
 		}
 	}
 
-	fmt.Printf("MAX similarities: %d out of %d with peer %s\n", maxSim, len(CIDs), bestPeer)
 	return bestPeer, peerCIDMatches[bestPeer]
 }
 
@@ -2961,7 +2959,6 @@ func (c *Cluster) similarities_new(ctx context.Context, pin api.Pin) (peer.ID, [
 	}
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 666666666666 \n")
 
-	fmt.Printf("MAX similarities: %d out of %d \n", len(CIDMatches), len(CIDs))
 	return bestPeer, CIDMatches
 }
 
@@ -3065,6 +3062,5 @@ func (c *Cluster) similarities_new1(ctx context.Context, pin api.Pin) (peer.ID, 
 	}
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 666666666666 \n")
 
-	fmt.Printf("MAX similarities: %d out of %d \n", len(CIDMatches), len(CIDs))
 	return bestPeer, CIDMatches
 }
