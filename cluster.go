@@ -728,7 +728,7 @@ func (c *Cluster) alertsHandler() {
 				logger.Warn(err)
 				return
 			}
-			sim := 0
+			sim := 4
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			kk := 0
