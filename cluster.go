@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ipfs/go-cid"
+	"math/big"
+	_ "math/big"
 	"mime/multipart"
 	"os"
 	"strings"
@@ -492,6 +494,197 @@ func (c *Cluster) Alerts() []api.Alert {
 	return alerts
 }
 
+type sim4PeerScore struct {
+	Peer           peer.ID
+	Similarity     int
+	AssignedShards int
+	AssignedChunks int
+	Distance       *big.Int
+}
+
+func repairChunkLoadFromMetadata(pin api.Pin) int {
+	cidString, ok := pin.Metadata["Cids"]
+	if !ok || strings.TrimSpace(cidString) == "" {
+		return 1
+	}
+
+	parts := strings.Split(cidString, ",")
+	count := 0
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			count++
+		}
+	}
+
+	if count == 0 {
+		return 1
+	}
+	return count
+}
+
+func xorDistanceCIDToPeer(c cid.Cid, p peer.ID) *big.Int {
+	cBytes := c.Bytes()
+	pBytes := []byte(p)
+
+	maxLen := len(cBytes)
+	if len(pBytes) > maxLen {
+		maxLen = len(pBytes)
+	}
+
+	a := make([]byte, maxLen)
+	b := make([]byte, maxLen)
+
+	copy(a[maxLen-len(cBytes):], cBytes)
+	copy(b[maxLen-len(pBytes):], pBytes)
+
+	x := make([]byte, maxLen)
+	for i := 0; i < maxLen; i++ {
+		x[i] = a[i] ^ b[i]
+	}
+
+	return new(big.Int).SetBytes(x)
+}
+
+func betterSim4Score(a, b sim4PeerScore) bool {
+	// 1) similarity first
+	if a.Similarity != b.Similarity {
+		return a.Similarity > b.Similarity
+	}
+
+	// 2) then balance by number of assigned metadata shards
+	if a.AssignedShards != b.AssignedShards {
+		return a.AssignedShards < b.AssignedShards
+	}
+
+	// 3) then balance by total chunk load
+	if a.AssignedChunks != b.AssignedChunks {
+		return a.AssignedChunks < b.AssignedChunks
+	}
+
+	// 4) final tie-breaker: lower XOR distance
+	return a.Distance.Cmp(b.Distance) < 0
+}
+
+func (c *Cluster) commonChunksByPeerForPin(
+	ctx context.Context,
+	pin api.Pin,
+	candidates []peer.ID,
+) map[peer.ID][]string {
+	commonByPeer := make(map[peer.ID][]string)
+
+	cidString, ok := pin.Metadata["Cids"]
+	if !ok || strings.TrimSpace(cidString) == "" {
+		return commonByPeer
+	}
+
+	CIDs := strings.Split(cidString, ",")
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, cidStr := range CIDs {
+		cidStr = strings.TrimSpace(cidStr)
+		if cidStr == "" {
+			continue
+		}
+
+		apiCid, err := api.DecodeCid(cidStr)
+		if err != nil {
+			continue
+		}
+
+		cidObj, err := cid.Decode(apiCid.String())
+		if err != nil {
+			continue
+		}
+
+		for _, p := range candidates {
+			wg.Add(1)
+			go func(pid peer.ID, shardCID string, cobj cid.Cid) {
+				defer wg.Done()
+
+				rpcCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+				defer cancel()
+
+				var exists bool
+				err := c.rpcClient.CallContext(
+					rpcCtx,
+					pid,
+					"IPFSConnector",
+					"BlockLocalHas",
+					cobj,
+					&exists,
+				)
+				if err != nil || !exists {
+					return
+				}
+
+				mu.Lock()
+				commonByPeer[pid] = append(commonByPeer[pid], shardCID)
+				mu.Unlock()
+			}(p, cidStr, cidObj)
+		}
+	}
+
+	wg.Wait()
+	return commonByPeer
+}
+
+func (c *Cluster) chooseRepairPeerSim4(
+	ctx context.Context,
+	pin api.Pin,
+	exclude peer.ID,
+	assignedShards map[peer.ID]int,
+	assignedChunks map[peer.ID]int,
+) (peer.ID, []string, error) {
+	peers, err := c.consensus.Peers(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+
+	candidates := make([]peer.ID, 0, len(peers))
+	for _, p := range peers {
+		if p == exclude {
+			continue
+		}
+		candidates = append(candidates, p)
+	}
+
+	if len(candidates) == 0 {
+		return "", nil, fmt.Errorf("no candidate peers available")
+	}
+
+	commonByPeer := c.commonChunksByPeerForPin(ctx, pin, candidates)
+
+	rootCidObj, err := cid.Decode(pin.Cid.String())
+	if err != nil {
+		return "", nil, err
+	}
+
+	best := sim4PeerScore{
+		Peer:           "",
+		Similarity:     -1,
+		AssignedShards: 0,
+		AssignedChunks: 0,
+		Distance:       nil,
+	}
+
+	for _, p := range candidates {
+		score := sim4PeerScore{
+			Peer:           p,
+			Similarity:     len(commonByPeer[p]),
+			AssignedShards: assignedShards[p],
+			AssignedChunks: assignedChunks[p],
+			Distance:       xorDistanceCIDToPeer(rootCidObj, p),
+		}
+
+		if best.Peer == "" || betterSim4Score(score, best) {
+			best = score
+		}
+	}
+
+	return best.Peer, commonByPeer[best.Peer], nil
+}
+
 // read the alerts channel from the monitor and triggers repins
 func (c *Cluster) alertsHandler() {
 	for {
@@ -539,6 +732,8 @@ func (c *Cluster) alertsHandler() {
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			kk := 0
+			assignedShards := make(map[peer.ID]int)
+			assignedChunks := make(map[peer.ID]int)
 			fmt.Fprintf(os.Stdout, "Collecting the ip addresses of all nodes took : %s \n", bet.String())
 			c.repairing = make([]peer.ID, 0)
 			pinCh := make(chan api.Pin, 1024)
@@ -703,6 +898,67 @@ func (c *Cluster) alertsHandler() {
 									}
 								}
 								c.Enqueue(c.ctx, pin)
+							}
+						}
+						if sim == 4 {
+							// similarity first, then shard-count balance, then chunk-load balance
+							if distance.isClosest(pin.Cid) {
+								bestPeer, common, err := c.chooseRepairPeerSim4(
+									c.ctx,
+									pin,
+									alrt.Peer,
+									assignedShards,
+									assignedChunks,
+								)
+								if err != nil {
+									logger.Warnf("sim=4 peer selection failed for %s: %v", pin.Cid, err)
+									continue
+								}
+
+								// Store the common chunks found on the chosen peer
+								if len(common) > 0 {
+									first := 1
+									for _, com := range common {
+										if first == 1 {
+											pin.Metadata["common"] = com
+											first++
+										} else {
+											pin.Metadata["common"] = pin.Metadata["common"] + "," + com
+										}
+									}
+								} else {
+									pin.Metadata["common"] = ""
+								}
+
+								// Update balancing state across all EC pins in this alert cycle
+								assignedShards[bestPeer]++
+								assignedChunks[bestPeer] += repairChunkLoadFromMetadata(pin)
+
+								fmt.Printf(
+									"sim=4 selected peer=%s similarities=%d assignedShards=%d assignedChunks=%d repairLoad=%d\n",
+									bestPeer.String(),
+									len(common),
+									assignedShards[bestPeer],
+									assignedChunks[bestPeer],
+									repairChunkLoadFromMetadata(pin),
+								)
+
+								if bestPeer == c.id {
+									c.Enqueue(c.ctx, pin)
+								} else {
+									var out bool
+									err := c.rpcClient.CallContext(
+										c.ctx,
+										bestPeer,
+										"Cluster",
+										"Enqueue",
+										&pin,
+										&out,
+									)
+									if err != nil {
+										logger.Warnf("failed forwarding sim=4 repair to %s: %v", bestPeer, err)
+									}
+								}
 							}
 						}
 
@@ -2562,7 +2818,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) (peer.ID, []str
 			go func(peer peer.ID, c cid.Cid, C *Cluster) {
 				defer wg.Done()
 
-				rpcCtx, _ := context.WithTimeout(ctx, 500*time.Millisecond)
+				rpcCtx, _ := context.WithTimeout(ctx, 200*time.Millisecond)
 
 				var exists bool
 				err := C.rpcClient.CallContext(
