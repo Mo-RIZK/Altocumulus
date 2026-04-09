@@ -925,12 +925,16 @@ func (c *Cluster) alertsHandler() {
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
 					fmt.Printf("AAAAAAAAAAAAA %d \n", len(CIDsSim4))
+
 					allpeers := distance.otherPeers
 					allpeers = append(allpeers, c.id)
 
 					shardsSim := make([]ShardSim, 0)
 					peerLoad := make(map[peer.ID]int)
 					Toassign := make(map[peer.ID][]api.Pin)
+
+					// ✅ NEW: track assignment per shard
+					assigned := make(map[string]bool)
 
 					// STEP 1: build ShardSim
 					for _, shard := range CIDsSim4 {
@@ -951,32 +955,39 @@ func (c *Cluster) alertsHandler() {
 						shardsSim = append(shardsSim, sh)
 					}
 
-					// STEP 2: sort by similarity %
+					// STEP 2: sort
 					SortShardsByMatchPercentage(shardsSim)
 					fmt.Printf("BBBBBBBBBBBBB %d \n", len(shardsSim))
-					// STEP 3: initial placement (best peer first, no load yet)
+
+					// STEP 3: initial placement (1 per peer max)
 					for _, shard := range shardsSim {
 						first := 0
+
 						if peerLoad[shard.Peer] == 0 {
 							for _, com := range shard.Matches {
-								if first == 1 {
+								if first == 0 {
 									shard.Shard.Metadata["common"] = com
-									first++
+									first = 1
 								} else {
-									shard.Shard.Metadata["common"] = shard.Shard.Metadata["common"] + "," + com
+									shard.Shard.Metadata["common"] += "," + com
 								}
 							}
+
 							Toassign[shard.Peer] = append(Toassign[shard.Peer], shard.Shard)
 
-							// FIXED BUG HERE
+							// ✅ mark as assigned
+							assigned[shard.Shard.Cid.String()] = true
+
 							peerLoad[shard.Peer] += shard.TotalCids - len(shard.Matches)
 						}
 					}
+
 					fmt.Printf("CCCCCCCCC %d \n", len(shardsSim))
-					// STEP 4: collect unassigned shards
+
+					// STEP 4: collect unassigned shards (✅ FIXED)
 					var unassignedShards []ShardSim
 					for _, shard := range shardsSim {
-						if len(Toassign[shard.Peer]) == 0 {
+						if !assigned[shard.Shard.Cid.String()] {
 							unassignedShards = append(unassignedShards, shard)
 						}
 					}
@@ -985,11 +996,11 @@ func (c *Cluster) alertsHandler() {
 					for _, shard := range unassignedShards {
 
 						bestPeer := peer.ID("")
-						bestScore := int(^uint(0) >> 1) // infinity
+						bestScore := int(^uint(0) >> 1)
 
 						for _, p := range allpeers {
 
-							// ---- similarity handling ----
+							// similarity
 							simm := shard.Similarity_local
 							missing := shard.TotalCids - simm
 
@@ -998,10 +1009,10 @@ func (c *Cluster) alertsHandler() {
 								missing = shard.TotalCids
 							}
 
-							// ---- load ----
+							// load
 							load := peerLoad[p]
 
-							// ---- interference ----
+							// interference
 							interference := 0
 							for _, assignedPin := range Toassign[p] {
 								for _, sh2 := range shardsSim {
@@ -1015,22 +1026,14 @@ func (c *Cluster) alertsHandler() {
 								}
 							}
 
-							// ---- scoring ----
+							// scoring
 							score := 0
-
-							// 1. repair cost (main factor)
 							score += missing
-
-							// 2. interference penalty
 							score += interference
-
-							// 3. load balancing
 							score += load
 
-							// 4. dynamic similarity preference
 							if p == shard.Peer {
-								k := len(Toassign[p]) // shards already on peer
-
+								k := len(Toassign[p])
 								simRatio := float64(simm) / float64(shard.TotalCids)
 								threshold := float64(k) / float64(k+1)
 
@@ -1039,24 +1042,32 @@ func (c *Cluster) alertsHandler() {
 								}
 							}
 
-							// ---- choose best ----
 							if score < bestScore {
 								bestScore = score
 								bestPeer = p
 							}
 						}
 
-						// ---- assign ----
+						// ✅ safety check
+						if bestPeer == "" {
+							panic("no peer selected for shard")
+						}
+
+						// assign
 						first := 0
 						for _, com := range shard.Matches {
-							if first == 1 {
+							if first == 0 {
 								shard.Shard.Metadata["common"] = com
-								first++
+								first = 1
 							} else {
-								shard.Shard.Metadata["common"] = shard.Shard.Metadata["common"] + "," + com
+								shard.Shard.Metadata["common"] += "," + com
 							}
 						}
+
 						Toassign[bestPeer] = append(Toassign[bestPeer], shard.Shard)
+
+						// ✅ mark assigned
+						assigned[shard.Shard.Cid.String()] = true
 
 						if bestPeer == shard.Peer {
 							peerLoad[bestPeer] += shard.TotalCids - len(shard.Matches)
@@ -1067,14 +1078,23 @@ func (c *Cluster) alertsHandler() {
 						fmt.Printf("Shard %s -> Peer %s | score=%d\n",
 							shard.Shard.Name, bestPeer, bestScore)
 					}
+
 					fmt.Printf("CCCCCCCCCCCCCCCCC %d \n", len(Toassign))
+
+					// ✅ correct total count
 					total := 0
 					for p, pins := range Toassign {
 						fmt.Printf("Peer %s -> %d pins\n", p, len(pins))
 						total += len(pins)
 					}
 					fmt.Printf("TOTAL ASSIGNED: %d\n", total)
-					// STEP 6: execute assignments
+
+					// ✅ sanity check (optional but VERY useful)
+					if total != len(CIDsSim4) {
+						fmt.Printf("WARNING: some shards were not assigned! expected=%d got=%d\n", len(CIDsSim4), total)
+					}
+
+					// STEP 6: execute
 					for peerID, pins := range Toassign {
 						for _, pin := range pins {
 
