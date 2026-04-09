@@ -924,6 +924,7 @@ func (c *Cluster) alertsHandler() {
 			if sim == 4 && fff {
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
+					fmt.Printf("AAAAAAAAAAAAA \n")
 					allpeers := distance.otherPeers
 					allpeers = append(allpeers, c.id)
 
