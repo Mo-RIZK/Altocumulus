@@ -924,7 +924,7 @@ func (c *Cluster) alertsHandler() {
 			if sim == 4 && fff {
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
-					fmt.Printf("AAAAAAAAAAAAA \n")
+					fmt.Printf("AAAAAAAAAAAAA %d \n", len(CIDsSim4))
 					allpeers := distance.otherPeers
 					allpeers = append(allpeers, c.id)
 
@@ -1068,6 +1068,12 @@ func (c *Cluster) alertsHandler() {
 							shard.Shard.Name, bestPeer, bestScore)
 					}
 					fmt.Printf("CCCCCCCCCCCCCCCCC %d \n", len(Toassign))
+					total := 0
+					for p, pins := range Toassign {
+						fmt.Printf("Peer %s -> %d pins\n", p, len(pins))
+						total += len(pins)
+					}
+					fmt.Printf("TOTAL ASSIGNED: %d\n", total)
 					// STEP 6: execute assignments
 					for peerID, pins := range Toassign {
 						for _, pin := range pins {
