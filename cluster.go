@@ -953,7 +953,7 @@ func (c *Cluster) alertsHandler() {
 
 					// STEP 2: sort by similarity %
 					SortShardsByMatchPercentage(shardsSim)
-
+					fmt.Printf("BBBBBBBBBBBBB %d \n", len(shardsSim))
 					// STEP 3: initial placement (best peer first, no load yet)
 					for _, shard := range shardsSim {
 						first := 0
@@ -972,7 +972,7 @@ func (c *Cluster) alertsHandler() {
 							peerLoad[shard.Peer] += shard.TotalCids - len(shard.Matches)
 						}
 					}
-
+					fmt.Printf("CCCCCCCCC %d \n", len(shardsSim))
 					// STEP 4: collect unassigned shards
 					var unassignedShards []ShardSim
 					for _, shard := range shardsSim {
@@ -1067,6 +1067,7 @@ func (c *Cluster) alertsHandler() {
 						fmt.Printf("Shard %s -> Peer %s | score=%d\n",
 							shard.Shard.Name, bestPeer, bestScore)
 					}
+					fmt.Printf("CCCCCCCCCCCCCCCCC %d \n", len(Toassign))
 					// STEP 6: execute assignments
 					for peerID, pins := range Toassign {
 						for _, pin := range pins {
