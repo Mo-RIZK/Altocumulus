@@ -10,6 +10,7 @@ import (
 	_ "math/big"
 	"mime/multipart"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -685,111 +686,6 @@ func (c *Cluster) chooseRepairPeerSim4(
 	return best.Peer, commonByPeer[best.Peer], nil
 }
 
-func (c *Cluster) chooseGlobalPlannerForPins(
-	ctx context.Context,
-	pins []api.Pin,
-	exclude peer.ID,
-) (peer.ID, error) {
-	peers, err := c.consensus.Peers(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	candidates := make([]peer.ID, 0, len(peers))
-	for _, p := range peers {
-		if p == exclude {
-			continue
-		}
-		candidates = append(candidates, p)
-	}
-
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("no candidate peers available")
-	}
-
-	var bestPeer peer.ID
-	var bestSum *big.Int
-
-	for _, p := range candidates {
-		sum := big.NewInt(0)
-
-		for _, pin := range pins {
-			cidObj, err := cid.Decode(pin.Cid.String())
-			if err != nil {
-				continue
-			}
-			sum.Add(sum, xorDistanceCIDToPeer(cidObj, p))
-		}
-
-		if bestPeer == "" || sum.Cmp(bestSum) < 0 {
-			bestPeer = p
-			bestSum = new(big.Int).Set(sum)
-		}
-	}
-
-	if bestPeer == "" {
-		return "", fmt.Errorf("could not choose global planner")
-	}
-
-	return bestPeer, nil
-}
-
-func (c *Cluster) chooseRepairPeerSim4Global(
-	ctx context.Context,
-	pin api.Pin,
-	exclude peer.ID,
-	assignedShards map[peer.ID]int,
-	assignedChunks map[peer.ID]int,
-) (peer.ID, []string, error) {
-	peers, err := c.consensus.Peers(ctx)
-	if err != nil {
-		return "", nil, err
-	}
-
-	candidates := make([]peer.ID, 0, len(peers))
-	for _, p := range peers {
-		if p == exclude {
-			continue
-		}
-		candidates = append(candidates, p)
-	}
-
-	if len(candidates) == 0 {
-		return "", nil, fmt.Errorf("no candidate peers available")
-	}
-
-	commonByPeer := c.commonChunksByPeerForPin(ctx, pin, candidates)
-
-	rootCidObj, err := cid.Decode(pin.Cid.String())
-	if err != nil {
-		return "", nil, err
-	}
-
-	best := sim4PeerScore{
-		Peer:           "",
-		Similarity:     -1,
-		AssignedShards: 0,
-		AssignedChunks: 0,
-		Distance:       nil,
-	}
-
-	for _, p := range candidates {
-		score := sim4PeerScore{
-			Peer:           p,
-			Similarity:     len(commonByPeer[p]),
-			AssignedShards: assignedShards[p],
-			AssignedChunks: assignedChunks[p],
-			Distance:       xorDistanceCIDToPeer(rootCidObj, p),
-		}
-
-		if best.Peer == "" || betterSim4Score(score, best) {
-			best = score
-		}
-	}
-
-	return best.Peer, commonByPeer[best.Peer], nil
-}
-
 // read the alerts channel from the monitor and triggers repins
 func (c *Cluster) alertsHandler() {
 	for {
@@ -798,22 +694,23 @@ func (c *Cluster) alertsHandler() {
 			return
 		case alrt := <-c.monitor.Alerts():
 			// Follower peers do not care about alerts.
+			// They can do nothing about them.
 			if c.config.FollowerMode {
 				continue
 			}
-
 			logger.Warnf("metric alert for %s: Peer: %s.", alrt.Name, alrt.Peer)
 			c.alertsMux.Lock()
 			{
 				if len(c.alerts) > maxAlerts {
 					c.alerts = c.alerts[:0]
 				}
+
 				c.alerts = append(c.alerts, alrt)
 			}
 			c.alertsMux.Unlock()
 
 			if alrt.Name != pingMetricName {
-				continue
+				continue // only handle ping alerts
 			}
 
 			if c.config.DisableRepinning {
@@ -826,22 +723,19 @@ func (c *Cluster) alertsHandler() {
 				logger.Warn(err)
 				return
 			}
-
 			stt := time.Now()
 			distance, err := c.distances(c.ctx, alrt.Peer)
 			if err != nil {
 				logger.Warn(err)
 				return
 			}
-
 			sim := 4
+			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			kk := 0
 			fmt.Fprintf(os.Stdout, "Collecting the ip addresses of all nodes took : %s \n", bet.String())
-
 			c.repairing = make([]peer.ID, 0)
-
 			pinCh := make(chan api.Pin, 1024)
 			go func() {
 				err = cState.List(c.ctx, pinCh)
@@ -850,48 +744,37 @@ func (c *Cluster) alertsHandler() {
 				}
 			}()
 
-			ecPins := make([]api.Pin, 0)
-			normalPins := make([]api.Pin, 0)
-
 			for pin := range pinCh {
-				if !containsPeer(pin.Allocations, alrt.Peer) {
-					continue
-				}
+				if containsPeer(pin.Allocations, alrt.Peer) {
+					kk++
+					if strings.Contains(pin.Name, "EC") && len(pin.Allocations) < 2 {
+						if sim == 0 {
+							//      BALANCED ////
+							/*cidStr := "QmYwAPJzv5CZsnAzt8auVZRnGi2C4dYh9N7VDaRao7tAor"
 
-				kk++
-
-				if strings.Contains(pin.Name, "EC") && len(pin.Allocations) < 2 {
-					ecPins = append(ecPins, pin)
-				} else {
-					normalPins = append(normalPins, pin)
-				}
-			}
-
-			if sim == 4 && len(ecPins) > 0 {
-				planner, err := c.chooseGlobalPlannerForPins(c.ctx, ecPins, alrt.Peer)
-				if err != nil {
-					logger.Warnf("sim=4 global planner selection failed: %v", err)
-				} else {
-					fmt.Printf("sim=4 global planner selected: %s\n", planner.String())
-
-					if planner == c.id {
-						assignedShards := make(map[peer.ID]int)
-						assignedChunks := make(map[peer.ID]int)
-
-						for _, pin := range ecPins {
-							bestPeer, common, err := c.chooseRepairPeerSim4Global(
-								c.ctx,
-								pin,
-								alrt.Peer,
-								assignedShards,
-								assignedChunks,
-							)
+							ci, err := cid.Decode(cidStr)
 							if err != nil {
-								logger.Warnf("sim=4 repair peer selection failed for %s: %v", pin.Cid, err)
-								continue
+								panic(err)
 							}
+							cc := api.Cid{ci}
 
-							if len(common) > 0 {
+							if distance.isClosest(cc) {
+								c.Enqueue(c.ctx, pin)
+							}*/
+							/**/
+							var repair bool
+							repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
+							if repair {
+								common := make([]string, 0)
+								cidString, _ := pin.Metadata["Cids"]
+								CIDs := strings.Split(cidString, ",")
+								for _, ci := range CIDs {
+									cc, _ := cid.Decode(ci)
+									ex, _ := c.ipfs.BlockLocalHas(c.ctx, cc)
+									if ex {
+										common = append(common, ci)
+									}
+								}
 								first := 1
 								for _, com := range common {
 									if first == 1 {
@@ -901,163 +784,364 @@ func (c *Cluster) alertsHandler() {
 										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
 									}
 								}
-							} else {
-								pin.Metadata["common"] = ""
+								c.Enqueue(c.ctx, pin)
+							}
+						}
+						if sim == 1 {
+							/////////////// similarities 111111
+							if distance.isClosest(pin.Cid) {
+								go func() {
+									ss := time.Now()
+
+									//ppp, common := c.similarities(c.ctx, pin)
+									ppp, common := c.similarities(c.ctx, pin)
+									fmt.Fprintf(os.Stdout, "Checkingggg %s\n", time.Now().Sub(ss).String())
+									first := 1
+									for _, com := range common {
+										if first == 1 {
+											pin.Metadata["common"] = com
+											first++
+										} else {
+											pin.Metadata["common"] = pin.Metadata["common"] + "," + com
+										}
+									}
+									/*first = 1
+									for _, com := range allmatches {
+										if first == 1 {
+											pin.Metadata["allmatches"] = com
+											first++
+										} else {
+											pin.Metadata["allmatches"] = pin.Metadata["allmatches"] + "," + com
+										}
+									}*/
+									if ppp == c.id {
+										c.Enqueue(c.ctx, pin)
+									} else {
+										var out bool
+										c.rpcClient.CallContext(
+											c.ctx,
+											ppp,       // the peer you selected with `similarities()`
+											"Cluster", // type name of the registered component
+											"Enqueue", // method name
+											&pin,      // input argument
+											&out,      // output
+										)
+									}
+								}()
+							}
+						}
+						if sim == 2 {
+							/////////////// simialrities newwwwwwww
+							if distance.isClosest(pin.Cid) {
+								go func() {
+									ss := time.Now()
+
+									//ppp, common := c.similarities(c.ctx, pin)
+									//ppp, common := c.similarities_new1(c.ctx, pin)
+									ppp, common := c.similaritiessssss(c.ctx, pin)
+									fmt.Fprintf(os.Stdout, "Checkingggg %s\n", time.Now().Sub(ss).String())
+									first := 1
+									for _, com := range common {
+										if first == 1 {
+											pin.Metadata["common"] = com
+											first++
+										} else {
+											pin.Metadata["common"] = pin.Metadata["common"] + "," + com
+										}
+									}
+									/*first = 1
+									for _, com := range allmatches {
+										if first == 1 {
+											pin.Metadata["allmatches"] = com
+											first++
+										} else {
+											pin.Metadata["allmatches"] = pin.Metadata["allmatches"] + "," + com
+										}
+									}*/
+									if ppp == c.id {
+										c.Enqueue(c.ctx, pin)
+									} else {
+										var out bool
+										c.rpcClient.CallContext(
+											c.ctx,
+											ppp,       // the peer you selected with `similarities()`
+											"Cluster", // type name of the registered component
+											"Enqueue", // method name
+											&pin,      // input argument
+											&out,      // output
+										)
+									}
+								}()
+							}
+						}
+						if sim == 3 {
+							////////// XORRRRR
+							if distance.isClosest(pin.Cid) {
+								common := make([]string, 0)
+								cidString, _ := pin.Metadata["Cids"]
+								CIDs := strings.Split(cidString, ",")
+								for _, ci := range CIDs {
+									cc, _ := cid.Decode(ci)
+									ex, _ := c.ipfs.BlockLocalHas(c.ctx, cc)
+									if ex {
+										common = append(common, ci)
+									}
+								}
+
+								first := 1
+								for _, com := range common {
+									if first == 1 {
+										pin.Metadata["common"] = com
+										first++
+									} else {
+										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
+									}
+								}
+								c.Enqueue(c.ctx, pin)
+							}
+						}
+						if sim == 4 {
+							CIDsSim4 = append(CIDsSim4, pin)
+						}
+
+					} else {
+						if distance.isClosest(pin.Cid) {
+							if strings.Contains(pin.Name, "EC") {
+								cidString, _ := pin.Metadata["Cids"]
+
+								CIDs := strings.Split(cidString, ",")
+								fmt.Printf("REPPPP ECCC of length: %d \n", len(CIDs))
+							}
+							c.repinFromPeer(c.ctx, alrt.Peer, pin)
+						}
+					}
+				}
+			}
+			// TODO check if the sim == 4 before checking the nearest peer to the sum of all of the shards CIDs
+			if sim == 4 {
+				SortCIDs(CIDsSim4)
+				if distance.isClosest(CIDsSim4[0].Cid) {
+					allpeers := distance.otherPeers
+					allpeers = append(allpeers, c.id)
+
+					shardsSim := make([]ShardSim, 0)
+					peerLoad := make(map[peer.ID]int)
+					Toassign := make(map[peer.ID][]api.Pin)
+
+					// STEP 1: build ShardSim
+					for _, shard := range CIDsSim4 {
+						cidString, _ := shard.Metadata["Cids"]
+						CIDs := strings.Split(cidString, ",")
+
+						peeer, simlocal, matches := c.similaritiessssss_New_Scheduler(c.ctx, shard)
+
+						sh := ShardSim{
+							Shard:            shard,
+							Peer:             peeer,
+							Similarity_local: simlocal,
+							Similarity_other: len(matches) - simlocal,
+							TotalCids:        len(CIDs),
+							Matches:          matches,
+						}
+
+						shardsSim = append(shardsSim, sh)
+					}
+
+					// STEP 2: sort by similarity %
+					SortShardsByMatchPercentage(shardsSim)
+
+					// STEP 3: initial placement (best peer first, no load yet)
+					for _, shard := range shardsSim {
+						first := 0
+						if peerLoad[shard.Peer] == 0 {
+							for _, com := range shard.Matches {
+								if first == 1 {
+									shard.Shard.Metadata["common"] = com
+									first++
+								} else {
+									shard.Shard.Metadata["common"] = shard.Shard.Metadata["common"] + "," + com
+								}
+							}
+							Toassign[shard.Peer] = append(Toassign[shard.Peer], shard.Shard)
+
+							// FIXED BUG HERE
+							peerLoad[shard.Peer] += shard.TotalCids - len(shard.Matches)
+						}
+					}
+
+					// STEP 4: collect unassigned shards
+					var unassignedShards []ShardSim
+					for _, shard := range shardsSim {
+						if len(Toassign[shard.Peer]) == 0 {
+							unassignedShards = append(unassignedShards, shard)
+						}
+					}
+
+					// STEP 5: main scheduling loop
+					for _, shard := range unassignedShards {
+
+						bestPeer := peer.ID("")
+						bestScore := int(^uint(0) >> 1) // infinity
+
+						for _, p := range allpeers {
+
+							// ---- similarity handling ----
+							simm := shard.Similarity_local
+							missing := shard.TotalCids - simm
+
+							if p != shard.Peer {
+								simm = 0
+								missing = shard.TotalCids
 							}
 
-							assignedShards[bestPeer]++
-							assignedChunks[bestPeer] += repairChunkLoadFromMetadata(pin)
+							// ---- load ----
+							load := peerLoad[p]
 
-							fmt.Printf(
-								"sim=4 pin=%s -> peer=%s similarities=%d assignedShards=%d assignedChunks=%d repairLoad=%d\n",
-								pin.Cid.String(),
-								bestPeer.String(),
-								len(common),
-								assignedShards[bestPeer],
-								assignedChunks[bestPeer],
-								repairChunkLoadFromMetadata(pin),
-							)
+							// ---- interference ----
+							interference := 0
+							for _, assignedPin := range Toassign[p] {
+								for _, sh2 := range shardsSim {
+									if sh2.Shard.Cid.Equals(assignedPin.Cid) {
+										interference += min(
+											shard.TotalCids-len(shard.Matches),
+											sh2.TotalCids-len(sh2.Matches),
+										)
+										break
+									}
+								}
+							}
 
-							if bestPeer == c.id {
+							// ---- scoring ----
+							score := 0
+
+							// 1. repair cost (main factor)
+							score += missing
+
+							// 2. interference penalty
+							score += interference
+
+							// 3. load balancing
+							score += load
+
+							// 4. dynamic similarity preference
+							if p == shard.Peer {
+								k := len(Toassign[p]) // shards already on peer
+
+								simRatio := float64(simm) / float64(shard.TotalCids)
+								threshold := float64(k) / float64(k+1)
+
+								if simRatio > threshold {
+									score -= shard.TotalCids / 2
+								}
+							}
+
+							// ---- choose best ----
+							if score < bestScore {
+								bestScore = score
+								bestPeer = p
+							}
+						}
+
+						// ---- assign ----
+						first := 0
+						for _, com := range shard.Matches {
+							if first == 1 {
+								shard.Shard.Metadata["common"] = com
+								first++
+							} else {
+								shard.Shard.Metadata["common"] = shard.Shard.Metadata["common"] + "," + com
+							}
+						}
+						Toassign[bestPeer] = append(Toassign[bestPeer], shard.Shard)
+
+						if bestPeer == shard.Peer {
+							peerLoad[bestPeer] += shard.TotalCids - len(shard.Matches)
+						} else {
+							peerLoad[bestPeer] += shard.TotalCids
+						}
+
+						fmt.Printf("Shard %s -> Peer %s | score=%d\n",
+							shard.Shard.Name, bestPeer, bestScore)
+					}
+					// STEP 6: execute assignments
+					for peerID, pins := range Toassign {
+						for _, pin := range pins {
+
+							if peerID == c.id {
 								c.Enqueue(c.ctx, pin)
 							} else {
 								var out bool
-								err := c.rpcClient.CallContext(
+								c.rpcClient.CallContext(
 									c.ctx,
-									bestPeer,
+									peerID,
 									"Cluster",
 									"Enqueue",
 									&pin,
 									&out,
 								)
-								if err != nil {
-									logger.Warnf("failed forwarding sim=4 repair to %s: %v", bestPeer, err)
-								}
 							}
-						}
-					}
-				}
-			} else {
-				for _, pin := range ecPins {
-					if sim == 0 {
-						var repair bool
-						repair, c.repairing = distance.isClosestNeww(pin.Cid, c.repairing)
-						if repair {
-							common := make([]string, 0)
-							cidString, _ := pin.Metadata["Cids"]
-							CIDs := strings.Split(cidString, ",")
-							for _, ci := range CIDs {
-								cc, _ := cid.Decode(ci)
-								ex, _ := c.ipfs.BlockLocalHas(c.ctx, cc)
-								if ex {
-									common = append(common, ci)
-								}
-							}
-							first := 1
-							for _, com := range common {
-								if first == 1 {
-									pin.Metadata["common"] = com
-									first++
-								} else {
-									pin.Metadata["common"] = pin.Metadata["common"] + "," + com
-								}
-							}
-							c.Enqueue(c.ctx, pin)
-						}
-					}
-
-					if sim == 1 {
-						if distance.isClosest(pin.Cid) {
-							go func(pin api.Pin) {
-								ss := time.Now()
-								ppp, common := c.similarities(c.ctx, pin)
-								fmt.Fprintf(os.Stdout, "Checkingggg %s\n", time.Now().Sub(ss).String())
-								first := 1
-								for _, com := range common {
-									if first == 1 {
-										pin.Metadata["common"] = com
-										first++
-									} else {
-										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
-									}
-								}
-								if ppp == c.id {
-									c.Enqueue(c.ctx, pin)
-								} else {
-									var out bool
-									c.rpcClient.CallContext(c.ctx, ppp, "Cluster", "Enqueue", &pin, &out)
-								}
-							}(pin)
-						}
-					}
-
-					if sim == 2 {
-						if distance.isClosest(pin.Cid) {
-							go func(pin api.Pin) {
-								ss := time.Now()
-								ppp, common := c.similarities_new1(c.ctx, pin)
-								fmt.Fprintf(os.Stdout, "Checkingggg %s\n", time.Now().Sub(ss).String())
-								first := 1
-								for _, com := range common {
-									if first == 1 {
-										pin.Metadata["common"] = com
-										first++
-									} else {
-										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
-									}
-								}
-								if ppp == c.id {
-									c.Enqueue(c.ctx, pin)
-								} else {
-									var out bool
-									c.rpcClient.CallContext(c.ctx, ppp, "Cluster", "Enqueue", &pin, &out)
-								}
-							}(pin)
-						}
-					}
-
-					if sim == 3 {
-						if distance.isClosest(pin.Cid) {
-							common := make([]string, 0)
-							cidString, _ := pin.Metadata["Cids"]
-							CIDs := strings.Split(cidString, ",")
-							for _, ci := range CIDs {
-								cc, _ := cid.Decode(ci)
-								ex, _ := c.ipfs.BlockLocalHas(c.ctx, cc)
-								if ex {
-									common = append(common, ci)
-								}
-							}
-
-							first := 1
-							for _, com := range common {
-								if first == 1 {
-									pin.Metadata["common"] = com
-									first++
-								} else {
-									pin.Metadata["common"] = pin.Metadata["common"] + "," + com
-								}
-							}
-							c.Enqueue(c.ctx, pin)
 						}
 					}
 				}
 			}
-
-			for _, pin := range normalPins {
-				if distance.isClosest(pin.Cid) {
-					if strings.Contains(pin.Name, "EC") {
-						cidString, _ := pin.Metadata["Cids"]
-						CIDs := strings.Split(cidString, ",")
-						fmt.Printf("REPPPP ECCC of length: %d \n", len(CIDs))
-					}
-					c.repinFromPeer(c.ctx, alrt.Peer, pin)
-				}
-			}
-
 			fmt.Fprintf(os.Stdout, "SSSSSHHHHHH : %d \n", kk)
 		}
 	}
+}
+
+// Helper function to calculate interference based on similarity
+func calculateInterference(shard1, shard2 ShardSim) int {
+	// Calculate the total number of chunks (CIDs) that will need to be repaired
+	// TotalChunks = CIDs in shard1 - matches with shard2
+	overlap := min(shard1.TotalCids-len(shard1.Matches), shard2.TotalCids-len(shard2.Matches))
+	return overlap
+}
+
+type ShardSim struct {
+	Shard            api.Pin
+	Peer             peer.ID
+	Similarity_local int
+	Similarity_other int
+	TotalCids        int
+	Matches          []string
+}
+
+// Function to calculate the match percentage and sort based on it
+func SortShardsByMatchPercentage(shards []ShardSim) {
+	// Sort by match percentage (descending order)
+	sort.Slice(shards, func(i, j int) bool {
+		// Calculate match percentage for shard[i]
+		percentageI := float64(len(shards[i].Matches)) / float64(shards[i].TotalCids) * 100
+		// Calculate match percentage for shard[j]
+		percentageJ := float64(len(shards[j].Matches)) / float64(shards[j].TotalCids) * 100
+
+		// Sort in descending order (larger percentage first)
+		return percentageI > percentageJ
+	})
+}
+
+// Function to sort pins by the number of CIDs in "Cids" field in descending order
+func SortPinsByCIDCount(pins []api.Pin) {
+	// Sort pins by the number of CIDs in Metadata["Cids"], in descending order
+	sort.SliceStable(pins, func(i, j int) bool {
+		// Get the "Cids" string for both pins and split by comma
+		cidListI := strings.Split(pins[i].Metadata["Cids"], ",")
+		cidListJ := strings.Split(pins[j].Metadata["Cids"], ",")
+
+		// Count the number of CIDs in each list
+		countI := len(cidListI)
+		countJ := len(cidListJ)
+
+		// Sort by count in descending order
+		return countI > countJ
+	})
+}
+
+// Function to sort an array of cids.CID directly
+func SortCIDs(cids []api.Pin) {
+	sort.Slice(cids, func(i, j int) bool {
+		return cids[i].Cid.Cid.String() < cids[j].Cid.Cid.String()
+	})
 }
 
 // BandwidthByProtocol returns the libp2p bandwidth metrics as provided by the
@@ -2946,6 +3030,192 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) (peer.ID, []str
 	return bestPeer, peerCIDMatches[bestPeer]
 }
 
+func (c *Cluster) similaritiessssss(ctx context.Context, pin api.Pin) (peer.ID, []string) {
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
+
+	cidString, ok := pin.Metadata["Cids"]
+	if !ok || cidString == "" {
+		peers, _ := c.consensus.Peers(ctx)
+		if len(peers) > 0 {
+			return peers[0], nil
+		}
+		return "", nil
+	}
+
+	CIDs := strings.Split(cidString, ",")
+	CIDMatches := make([]string, 0)
+	peers, err := c.consensus.Peers(ctx)
+	if err != nil || len(peers) == 0 {
+		return "", nil
+	}
+
+	peerSim := make(map[peer.ID]int)
+	peerCIDMatches := make(map[peer.ID][]string)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 33333333333333333\n")
+
+	for _, cidStr := range CIDs {
+		cidStr = strings.TrimSpace(cidStr)
+		apiCid, err := api.DecodeCid(cidStr)
+		if err != nil {
+			continue
+		}
+		cidObj, err := cid.Decode(apiCid.String())
+		if err != nil {
+			continue
+		}
+
+		for _, p := range peers {
+			wg.Add(1)
+			go func(peer peer.ID, c cid.Cid, C *Cluster) {
+				defer wg.Done()
+
+				rpcCtx, _ := context.WithTimeout(ctx, 200*time.Millisecond)
+
+				var exists bool
+				err := C.rpcClient.CallContext(
+					rpcCtx,
+					peer,
+					"IPFSConnector",
+					"BlockLocalHas",
+					c,
+					&exists,
+				)
+				if err != nil {
+					fmt.Printf("RPC call failed for peer %s: %v\n", peer.String(), err)
+					return
+				}
+
+				if exists {
+					mu.Lock()
+					peerSim[peer]++
+					if !contains(CIDMatches, c.String()) {
+						CIDMatches = append(CIDMatches, c.String())
+					}
+					// store CID for that peer
+					peerCIDMatches[peer] = append(peerCIDMatches[peer], cidStr)
+					fmt.Printf("Found on peer: %s, similarity: %d\n", peer.String(), peerSim[peer])
+					mu.Unlock()
+				}
+			}(p, cidObj, c)
+		}
+	}
+
+	// Wait for all goroutines to finish
+	wg.Wait()
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 55555555555555555\n")
+
+	// Find the peer with the most similarities
+	maxSim := -1
+	var bestPeer peer.ID
+	for _, p := range peers {
+		count := peerSim[p]
+		fmt.Fprintf(os.Stdout, "Peer %s has %d similarities\n", p.String(), count)
+		if count > maxSim {
+			maxSim = count
+			bestPeer = p
+		}
+	}
+
+	return bestPeer, CIDMatches
+}
+
+func (c *Cluster) similaritiessssss_New_Scheduler(ctx context.Context, pin api.Pin) (peer.ID, int, []string) {
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
+
+	cidString, ok := pin.Metadata["Cids"]
+	if !ok || cidString == "" {
+		peers, _ := c.consensus.Peers(ctx)
+		if len(peers) > 0 {
+			return peers[0], 0, nil
+		}
+		return "", 0, nil
+	}
+
+	CIDs := strings.Split(cidString, ",")
+	CIDMatches := make([]string, 0)
+	peers, err := c.consensus.Peers(ctx)
+	if err != nil || len(peers) == 0 {
+		return "", 0, nil
+	}
+
+	peerSim := make(map[peer.ID]int)
+	peerCIDMatches := make(map[peer.ID][]string)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 33333333333333333\n")
+
+	for _, cidStr := range CIDs {
+		cidStr = strings.TrimSpace(cidStr)
+		apiCid, err := api.DecodeCid(cidStr)
+		if err != nil {
+			continue
+		}
+		cidObj, err := cid.Decode(apiCid.String())
+		if err != nil {
+			continue
+		}
+
+		for _, p := range peers {
+			wg.Add(1)
+			go func(peer peer.ID, c cid.Cid, C *Cluster) {
+				defer wg.Done()
+
+				rpcCtx, _ := context.WithTimeout(ctx, 200*time.Millisecond)
+
+				var exists bool
+				err := C.rpcClient.CallContext(
+					rpcCtx,
+					peer,
+					"IPFSConnector",
+					"BlockLocalHas",
+					c,
+					&exists,
+				)
+				if err != nil {
+					fmt.Printf("RPC call failed for peer %s: %v\n", peer.String(), err)
+					return
+				}
+
+				if exists {
+					mu.Lock()
+					peerSim[peer]++
+					if !contains(CIDMatches, c.String()) {
+						CIDMatches = append(CIDMatches, c.String())
+					}
+					// store CID for that peer
+					peerCIDMatches[peer] = append(peerCIDMatches[peer], cidStr)
+					fmt.Printf("Found on peer: %s, similarity: %d\n", peer.String(), peerSim[peer])
+					mu.Unlock()
+				}
+			}(p, cidObj, c)
+		}
+	}
+
+	// Wait for all goroutines to finish
+	wg.Wait()
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 55555555555555555\n")
+
+	// Find the peer with the most similarities
+	maxSim := -1
+	var bestPeer peer.ID
+	for _, p := range peers {
+		count := peerSim[p]
+		fmt.Fprintf(os.Stdout, "Peer %s has %d similarities\n", p.String(), count)
+		if count > maxSim {
+			maxSim = count
+			bestPeer = p
+		}
+	}
+
+	return bestPeer, maxSim, CIDMatches
+}
+
 func (c *Cluster) similarities_new(ctx context.Context, pin api.Pin) (peer.ID, []string) {
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
 	responsesnb := 0
@@ -3143,5 +3413,6 @@ func (c *Cluster) similarities_new1(ctx context.Context, pin api.Pin) (peer.ID, 
 	}
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 666666666666 \n")
 
+	fmt.Printf("MAX similarities: %d out of %d \n", len(CIDMatches), len(CIDs))
 	return bestPeer, CIDMatches
 }
