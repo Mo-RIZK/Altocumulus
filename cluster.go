@@ -729,6 +729,7 @@ func (c *Cluster) alertsHandler() {
 				logger.Warn(err)
 				return
 			}
+			fff := false
 			sim := 4
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
@@ -902,6 +903,7 @@ func (c *Cluster) alertsHandler() {
 						}
 						if sim == 4 {
 							CIDsSim4 = append(CIDsSim4, pin)
+							fff = true
 						}
 
 					} else {
@@ -916,9 +918,10 @@ func (c *Cluster) alertsHandler() {
 						}
 					}
 				}
+
 			}
 			// TODO check if the sim == 4 before checking the nearest peer to the sum of all of the shards CIDs
-			if sim == 4 {
+			if sim == 4 && fff {
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
 					allpeers := distance.otherPeers
