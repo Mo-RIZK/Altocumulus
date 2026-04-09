@@ -730,7 +730,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 4
+			sim := 0
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
@@ -3013,7 +3013,7 @@ func (c *Cluster) similarities(ctx context.Context, pin api.Pin) (peer.ID, []str
 			go func(peer peer.ID, c cid.Cid, C *Cluster) {
 				defer wg.Done()
 
-				rpcCtx, _ := context.WithTimeout(ctx, 200*time.Millisecond)
+				rpcCtx, _ := context.WithTimeout(ctx, 500*time.Millisecond)
 
 				var exists bool
 				err := C.rpcClient.CallContext(
@@ -3103,7 +3103,7 @@ func (c *Cluster) similaritiessssss(ctx context.Context, pin api.Pin) (peer.ID, 
 			go func(peer peer.ID, c cid.Cid, C *Cluster) {
 				defer wg.Done()
 
-				rpcCtx, _ := context.WithTimeout(ctx, 200*time.Millisecond)
+				rpcCtx, _ := context.WithTimeout(ctx, 500*time.Millisecond)
 
 				var exists bool
 				err := C.rpcClient.CallContext(
@@ -3196,7 +3196,7 @@ func (c *Cluster) similaritiessssss_New_Scheduler(ctx context.Context, pin api.P
 			go func(peer peer.ID, c cid.Cid, C *Cluster) {
 				defer wg.Done()
 
-				rpcCtx, _ := context.WithTimeout(ctx, 200*time.Millisecond)
+				rpcCtx, _ := context.WithTimeout(ctx, 500*time.Millisecond)
 
 				var exists bool
 				err := C.rpcClient.CallContext(
