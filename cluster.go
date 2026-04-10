@@ -730,7 +730,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 1
+			sim := 2
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
