@@ -838,8 +838,8 @@ func (c *Cluster) alertsHandler() {
 									ss := time.Now()
 
 									//ppp, common := c.similarities(c.ctx, pin)
-									//ppp, common := c.similarities_new1(c.ctx, pin)
-									ppp, common := c.similaritiessssss(c.ctx, pin)
+									ppp, common := c.similarities_new1(c.ctx, pin)
+									//ppp, common := c.similaritiessssss(c.ctx, pin)
 									fmt.Fprintf(os.Stdout, "Checkingggg %s\n", time.Now().Sub(ss).String())
 									first := 1
 									for _, com := range common {
@@ -935,25 +935,42 @@ func (c *Cluster) alertsHandler() {
 
 					// ✅ NEW: track assignment per shard
 					assigned := make(map[string]bool)
-
+					var wg sync.WaitGroup
+					var mu sync.Mutex
 					// STEP 1: build ShardSim
 					for _, shard := range CIDsSim4 {
-						cidString, _ := shard.Metadata["Cids"]
-						CIDs := strings.Split(cidString, ",")
+						wg.Add(1)
+						go func() {
+							defer wg.Done()
+							cidString, _ := shard.Metadata["Cids"]
+							CIDs := strings.Split(cidString, ",")
 
-						peeer, simlocal, matches := c.similaritiessssss_New_Scheduler(c.ctx, shard)
+							//peeer, simlocal, matches := c.similaritiessssss_New_Scheduler(c.ctx, shard)
+							peeer, matches := c.similarities_new1(c.ctx, shard)
 
-						sh := ShardSim{
-							Shard:            shard,
-							Peer:             peeer,
-							Similarity_local: simlocal,
-							Similarity_other: len(matches) - simlocal,
-							TotalCids:        len(CIDs),
-							Matches:          matches,
-						}
+							/*sh := ShardSim{
+								Shard:            shard,
+								Peer:             peeer,
+								Similarity_local: simlocal,
+								Similarity_other: len(matches) - simlocal,
+								TotalCids:        len(CIDs),
+								Matches:          matches,
+							}*/
+							sh := ShardSim{
+								Shard:            shard,
+								Peer:             peeer,
+								Similarity_local: len(matches),
+								Similarity_other: 0,
+								TotalCids:        len(CIDs),
+								Matches:          matches,
+							}
+							mu.Lock()
+							shardsSim = append(shardsSim, sh)
+							mu.Unlock()
+						}()
 
-						shardsSim = append(shardsSim, sh)
 					}
+					wg.Wait()
 
 					// STEP 2: sort
 					SortShardsByMatchPercentage(shardsSim)
@@ -3386,7 +3403,7 @@ func (c *Cluster) similarities_new1(ctx context.Context, pin api.Pin) (peer.ID, 
 			continue
 		}
 
-		rpcCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		rpcCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 
 		var wg sync.WaitGroup
 		wg.Add(1)
