@@ -730,7 +730,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 3
+			sim := 0
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
@@ -3461,6 +3461,5 @@ func (c *Cluster) similarities_new1(ctx context.Context, pin api.Pin) (peer.ID, 
 	}
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 666666666666 \n")
 
-	fmt.Printf("MAX similarities: %d out of %d \n", len(CIDMatches), len(CIDs))
 	return bestPeer, CIDMatches
 }
