@@ -730,7 +730,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 4 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based
+			sim := 0 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
