@@ -730,7 +730,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 2 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based
+			sim := 5 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
@@ -901,7 +901,7 @@ func (c *Cluster) alertsHandler() {
 								c.Enqueue(c.ctx, pin)
 							}
 						}
-						if sim == 4 {
+						if sim == 5 {
 							CIDsSim4 = append(CIDsSim4, pin)
 							fff = true
 						}
@@ -997,6 +997,212 @@ func (c *Cluster) alertsHandler() {
 
 							peerLoad[shard.Peer] += shard.TotalCids - len(shard.Matches)
 						}
+					}
+
+					fmt.Printf("CCCCCCCCC %d \n", len(shardsSim))
+
+					// STEP 4: collect unassigned shards (✅ FIXED)
+					var unassignedShards []ShardSim
+					for _, shard := range shardsSim {
+						if !assigned[shard.Shard.Cid.String()] {
+							unassignedShards = append(unassignedShards, shard)
+						}
+					}
+
+					// STEP 5: main scheduling loop
+					for _, shard := range unassignedShards {
+
+						bestPeer := peer.ID("")
+						bestScore := int(^uint(0) >> 1)
+
+						for _, p := range allpeers {
+
+							// similarity
+							simm := shard.Similarity_local
+							missing := shard.TotalCids - simm
+
+							if p != shard.Peer {
+								simm = 0
+								missing = shard.TotalCids
+							}
+
+							// load
+							load := peerLoad[p]
+
+							// interference
+							interference := 0
+							for _, assignedPin := range Toassign[p] {
+								for _, sh2 := range shardsSim {
+									if sh2.Shard.Cid.Equals(assignedPin.Cid) {
+										interference += min(
+											shard.TotalCids-len(shard.Matches),
+											sh2.TotalCids-len(sh2.Matches),
+										)
+										break
+									}
+								}
+							}
+
+							// scoring
+							score := 0
+							score += missing
+							score += interference
+							score += load
+
+							if p == shard.Peer {
+								k := len(Toassign[p])
+								simRatio := float64(simm) / float64(shard.TotalCids)
+								threshold := float64(k) / float64(k+1)
+
+								if simRatio > threshold {
+									score -= shard.TotalCids / 2
+								}
+							}
+
+							if score < bestScore {
+								bestScore = score
+								bestPeer = p
+							}
+						}
+
+						// ✅ safety check
+						if bestPeer == "" {
+							panic("no peer selected for shard")
+						}
+
+						// assign
+						first := 0
+						for _, com := range shard.Matches {
+							if first == 0 {
+								shard.Shard.Metadata["common"] = com
+								first = 1
+							} else {
+								shard.Shard.Metadata["common"] += "," + com
+							}
+						}
+
+						Toassign[bestPeer] = append(Toassign[bestPeer], shard.Shard)
+
+						// ✅ mark assigned
+						assigned[shard.Shard.Cid.String()] = true
+
+						if bestPeer == shard.Peer {
+							peerLoad[bestPeer] += shard.TotalCids - len(shard.Matches)
+						} else {
+							peerLoad[bestPeer] += shard.TotalCids
+						}
+
+						fmt.Printf("Shard %s -> Peer %s | score=%d\n",
+							shard.Shard.Name, bestPeer, bestScore)
+					}
+
+					fmt.Printf("CCCCCCCCCCCCCCCCC %d \n", len(Toassign))
+
+					// ✅ correct total count
+					total := 0
+					for p, pins := range Toassign {
+						fmt.Printf("Peer %s -> %d pins\n", p, len(pins))
+						total += len(pins)
+					}
+					fmt.Printf("TOTAL ASSIGNED: %d\n", total)
+
+					// ✅ sanity check (optional but VERY useful)
+					if total != len(CIDsSim4) {
+						fmt.Printf("WARNING: some shards were not assigned! expected=%d got=%d\n", len(CIDsSim4), total)
+					}
+
+					// STEP 6: execute
+					for peerID, pins := range Toassign {
+						for _, pin := range pins {
+
+							if peerID == c.id {
+								c.Enqueue(c.ctx, pin)
+							} else {
+								var out bool
+								c.rpcClient.CallContext(
+									c.ctx,
+									peerID,
+									"Cluster",
+									"Enqueue",
+									&pin,
+									&out,
+								)
+							}
+						}
+					}
+				}
+			}
+
+			if sim == 5 && fff {
+				SortCIDs(CIDsSim4)
+				if distance.isClosest(CIDsSim4[0].Cid) {
+					fmt.Printf("AAAAAAAAAAAAA %d \n", len(CIDsSim4))
+
+					allpeers := distance.otherPeers
+					allpeers = append(allpeers, c.id)
+
+					shardsSim := make([]ShardSim, 0)
+					peerLoad := make(map[peer.ID]int)
+					Toassign := make(map[peer.ID][]api.Pin)
+
+					// ✅ NEW: track assignment per shard
+					assigned := make(map[string]bool)
+					var wg sync.WaitGroup
+					var mu sync.Mutex
+					// STEP 1: build ShardSim
+					for _, shard := range CIDsSim4 {
+						wg.Add(1)
+						go func() {
+							defer wg.Done()
+							cidString, _ := shard.Metadata["Cids"]
+							CIDs := strings.Split(cidString, ",")
+
+							//peeer, simlocal, matches := c.similaritiessssss_New_Scheduler(c.ctx, shard)
+							peeer, matches := c.similarities_new1(c.ctx, shard)
+
+							/*sh := ShardSim{
+								Shard:            shard,
+								Peer:             peeer,
+								Similarity_local: simlocal,
+								Similarity_other: len(matches) - simlocal,
+								TotalCids:        len(CIDs),
+								Matches:          matches,
+							}*/
+							sh := ShardSim{
+								Shard:            shard,
+								Peer:             peeer,
+								Similarity_local: len(matches),
+								Similarity_other: 0,
+								TotalCids:        len(CIDs),
+								Matches:          matches,
+							}
+							mu.Lock()
+							shardsSim = append(shardsSim, sh)
+							mu.Unlock()
+						}()
+
+					}
+					wg.Wait()
+					fmt.Printf("BBBBBBBBBBBBB %d \n", len(shardsSim))
+
+					// STEP 3: initial placement
+					for _, shard := range shardsSim {
+						first := 0
+						for _, com := range shard.Matches {
+							if first == 0 {
+								shard.Shard.Metadata["common"] = com
+								first = 1
+							} else {
+								shard.Shard.Metadata["common"] += "," + com
+							}
+						}
+
+						Toassign[shard.Peer] = append(Toassign[shard.Peer], shard.Shard)
+
+						// ✅ mark as assigned
+						assigned[shard.Shard.Cid.String()] = true
+
+						peerLoad[shard.Peer] += shard.TotalCids - len(shard.Matches)
 					}
 
 					fmt.Printf("CCCCCCCCC %d \n", len(shardsSim))
