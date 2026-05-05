@@ -732,6 +732,13 @@ func (c *Cluster) alertsHandler() {
 			fff := false
 			sim := 5 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based
 			CIDsSim4 := make([]api.Pin, 0)
+			topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
+			if err != nil {
+				logger.Warnf("could not load topology: %s", err)
+			} else {
+				logger.Infof("loaded topology with %d peers", len(topology.NodesByPeer))
+			}
+			topology.PrintFull()
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			kk := 0
