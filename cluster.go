@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ipfs/go-cid"
+	"math"
 	"math/big"
 	_ "math/big"
 	"mime/multipart"
@@ -732,13 +733,6 @@ func (c *Cluster) alertsHandler() {
 			fff := false
 			sim := 5 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based
 			CIDsSim4 := make([]api.Pin, 0)
-			topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
-			if err != nil {
-				logger.Warnf("could not load topology: %s", err)
-			} else {
-				logger.Infof("loaded topology with %d peers", len(topology.NodesByPeer))
-			}
-			topology.PrintFull()
 			enn := time.Now()
 			bet := enn.Sub(stt)
 			kk := 0
@@ -845,7 +839,7 @@ func (c *Cluster) alertsHandler() {
 									ss := time.Now()
 
 									//ppp, common := c.similarities(c.ctx, pin)
-									ppp, common := c.similarities_new1(c.ctx, pin)
+									ppp, common, _ := c.similarities_new1(c.ctx, pin)
 									//ppp, common := c.similaritiessssss(c.ctx, pin)
 									fmt.Fprintf(os.Stdout, "Checkingggg %s\n", time.Now().Sub(ss).String())
 									first := 1
@@ -908,7 +902,7 @@ func (c *Cluster) alertsHandler() {
 								c.Enqueue(c.ctx, pin)
 							}
 						}
-						if sim == 5 {
+						if sim == 5 || sim == 6 {
 							CIDsSim4 = append(CIDsSim4, pin)
 							fff = true
 						}
@@ -953,7 +947,7 @@ func (c *Cluster) alertsHandler() {
 							CIDs := strings.Split(cidString, ",")
 
 							//peeer, simlocal, matches := c.similaritiessssss_New_Scheduler(c.ctx, shard)
-							peeer, matches := c.similarities_new1(c.ctx, shard)
+							peeer, matches, _ := c.similarities_new1(c.ctx, shard)
 
 							/*sh := ShardSim{
 								Shard:            shard,
@@ -1165,7 +1159,7 @@ func (c *Cluster) alertsHandler() {
 							CIDs := strings.Split(cidString, ",")
 
 							//peeer, simlocal, matches := c.similaritiessssss_New_Scheduler(c.ctx, shard)
-							peeer, matches := c.similarities_new1(c.ctx, shard)
+							peeer, matches, _ := c.similarities_new1(c.ctx, shard)
 
 							/*sh := ShardSim{
 								Shard:            shard,
@@ -1345,6 +1339,242 @@ func (c *Cluster) alertsHandler() {
 					}
 				}
 			}
+			if (sim == 6 || sim == 7) && fff {
+				SortCIDs(CIDsSim4)
+
+				if distance.isClosest(CIDsSim4[0].Cid) {
+					if sim == 6 {
+						fmt.Println("In Go Global Max-Min Repair Strategy !!!")
+					} else {
+						fmt.Println("In Go Global Sufferage Repair Strategy !!!")
+					}
+
+					topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
+					if err != nil {
+						logger.Warnf("could not load topology: %s", err)
+						continue
+					}
+
+					logger.Infof("loaded topology with %d peers", len(topology.NodesByPeer))
+					topology.PrintFull()
+
+					allpeers := distance.otherPeers
+					allpeers = append(allpeers, c.id)
+
+					shardsSim := make([]ShardSim, 0)
+					var wg sync.WaitGroup
+					var mu sync.Mutex
+
+					for _, shard := range CIDsSim4 {
+						shard := shard
+
+						wg.Add(1)
+						go func() {
+							defer wg.Done()
+
+							cidString, _ := shard.Metadata["Cids"]
+							CIDs := strings.Split(cidString, ",")
+
+							bestPeer, matches, peermatches := c.similarities_new1(c.ctx, shard)
+
+							sh := ShardSim{
+								Shard:            shard,
+								Peer:             bestPeer,
+								Similarity_local: len(matches),
+								Similarity_other: 0,
+								TotalCids:        len(CIDs),
+								Matches:          matches,
+								PeerMatches:      peermatches,
+							}
+
+							mu.Lock()
+							shardsSim = append(shardsSim, sh)
+							mu.Unlock()
+						}()
+					}
+
+					wg.Wait()
+
+					fmt.Printf("Number of repair shards: %d\n", len(shardsSim))
+
+					machineEndTime := make(map[peer.ID]float64)
+					Toassign := make(map[peer.ID][]api.Pin)
+
+					for _, p := range allpeers {
+						machineEndTime[p] = 0.0
+					}
+
+					unscheduled := make([]ShardSim, 0, len(shardsSim))
+					unscheduled = append(unscheduled, shardsSim...)
+
+					for len(unscheduled) > 0 {
+						chosenIndex := -1
+						chosenPeer := peer.ID("")
+						chosenProcessingTime := 0.0
+
+						if sim == 6 {
+							// -----------------------------
+							// Global Max-Min
+							// -----------------------------
+							worstBestCompletion := -1.0
+
+							for idx, shard := range unscheduled {
+								bestPeer := peer.ID("")
+								bestCompletion := math.Inf(1)
+								bestPij := math.Inf(1)
+
+								for _, p := range allpeers {
+									pij := estimateShardProcessingTime(
+										topology,
+										allpeers,
+										shard,
+										p,
+									)
+
+									if math.IsInf(pij, 1) {
+										continue
+									}
+
+									completion := machineEndTime[p] + pij
+
+									if completion < bestCompletion ||
+										(completion == bestCompletion && p.String() < bestPeer.String()) {
+										bestCompletion = completion
+										bestPeer = p
+										bestPij = pij
+									}
+								}
+
+								if bestPeer == "" {
+									continue
+								}
+
+								if bestCompletion > worstBestCompletion {
+									worstBestCompletion = bestCompletion
+									chosenIndex = idx
+									chosenPeer = bestPeer
+									chosenProcessingTime = bestPij
+								}
+							}
+						} else {
+							// -----------------------------
+							// Global Sufferage
+							// -----------------------------
+							bestScore := -1.0
+
+							for idx, shard := range unscheduled {
+								type option struct {
+									peer       peer.ID
+									pij        float64
+									completion float64
+								}
+
+								options := make([]option, 0)
+
+								for _, p := range allpeers {
+									pij := estimateShardProcessingTime(
+										topology,
+										allpeers,
+										shard,
+										p,
+									)
+
+									if math.IsInf(pij, 1) {
+										continue
+									}
+
+									options = append(options, option{
+										peer:       p,
+										pij:        pij,
+										completion: machineEndTime[p] + pij,
+									})
+								}
+
+								if len(options) == 0 {
+									continue
+								}
+
+								sort.Slice(options, func(i, j int) bool {
+									if options[i].completion == options[j].completion {
+										return options[i].peer.String() < options[j].peer.String()
+									}
+									return options[i].completion < options[j].completion
+								})
+
+								best := options[0]
+
+								secondCompletion := best.completion
+								if len(options) >= 2 {
+									secondCompletion = options[1].completion
+								}
+
+								minPij := options[0].pij
+								for _, opt := range options {
+									if opt.pij < minPij {
+										minPij = opt.pij
+									}
+								}
+
+								score := 0.0
+								if best.completion <= 0 {
+									score = math.Inf(1)
+								} else {
+									score = (secondCompletion - best.completion) * (minPij / best.completion)
+								}
+
+								if score > bestScore {
+									bestScore = score
+									chosenIndex = idx
+									chosenPeer = best.peer
+									chosenProcessingTime = best.pij
+								}
+							}
+						}
+
+						if chosenIndex == -1 || chosenPeer == "" {
+							fmt.Println("No schedulable shard found")
+							break
+						}
+
+						chosenShard := unscheduled[chosenIndex]
+
+						setCommonMetadata(&chosenShard.Shard, chosenShard.Matches)
+
+						Toassign[chosenPeer] = append(Toassign[chosenPeer], chosenShard.Shard)
+						machineEndTime[chosenPeer] += chosenProcessingTime
+
+						simCount := 0
+						if chosenShard.PeerMatches != nil {
+							simCount = chosenShard.PeerMatches[chosenPeer]
+						}
+
+						fmt.Printf(
+							"Shard %s -> Peer %s | similarities=%d/%d | estimated_time=%f | machine_end=%f\n",
+							chosenShard.Shard.Name,
+							chosenPeer,
+							simCount,
+							chosenShard.TotalCids,
+							chosenProcessingTime,
+							machineEndTime[chosenPeer],
+						)
+
+						unscheduled = append(
+							unscheduled[:chosenIndex],
+							unscheduled[chosenIndex+1:]...,
+						)
+					}
+
+					total := 0
+					for p, pins := range Toassign {
+						fmt.Printf("Peer %s -> %d pins\n", p, len(pins))
+						total += len(pins)
+					}
+
+					fmt.Printf("TOTAL ASSIGNED: %d / %d\n", total, len(CIDsSim4))
+
+					executeAssignments(c, Toassign)
+				}
+			}
 			fmt.Fprintf(os.Stdout, "SSSSSHHHHHH : %d \n", kk)
 		}
 	}
@@ -1358,6 +1588,14 @@ func calculateInterference(shard1, shard2 ShardSim) int {
 	return overlap
 }
 
+type ShardSim_1 struct {
+	Shard            api.Pin
+	Peer             peer.ID
+	Similarity_local int
+	Similarity_other int
+	TotalCids        int
+	Matches          []string
+}
 type ShardSim struct {
 	Shard            api.Pin
 	Peer             peer.ID
@@ -1365,6 +1603,9 @@ type ShardSim struct {
 	Similarity_other int
 	TotalCids        int
 	Matches          []string
+
+	// NEW: similarity count for every peer
+	PeerMatches map[peer.ID]int
 }
 
 // Function to calculate the match percentage and sort based on it
@@ -3582,7 +3823,111 @@ func (c *Cluster) Enqueue(ctx context.Context, cid api.Pin) error {
 	return nil
 }
 
-func (c *Cluster) similarities_new1(ctx context.Context, pin api.Pin) (peer.ID, []string) {
+func (c *Cluster) similarities_new1(ctx context.Context, pin api.Pin) (peer.ID, []string, map[peer.ID]int) {
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
+
+	peerSim := make(map[peer.ID]int)
+
+	cidString, ok := pin.Metadata["Cids"]
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP %s \n", cidString)
+	if !ok || cidString == "" {
+		return "", nil, peerSim
+	}
+
+	CIDs := strings.Split(cidString, ",")
+
+	peers, err := c.consensus.Peers(ctx)
+	if err != nil || len(peers) == 0 {
+		return "", nil, peerSim
+	}
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 4444444444 \n")
+
+	CIDMatches := make([]string, 0)
+	var mu sync.Mutex
+
+	for _, cidStr := range CIDs {
+		cidStr = strings.TrimSpace(cidStr)
+
+		apiCid, err := api.DecodeCid(cidStr)
+		if err != nil {
+			continue
+		}
+
+		cidObj, err := cid.Decode(apiCid.String())
+		if err != nil {
+			continue
+		}
+
+		rpcCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		responses := 0
+		found := false
+
+		for _, p := range peers {
+			go func(peerID peer.ID, cidValue cid.Cid, cidText string, C *Cluster) {
+				var exists bool
+				err := C.rpcClient.CallContext(
+					rpcCtx,
+					peerID,
+					"IPFSConnector",
+					"BlockLocalHas",
+					cidValue,
+					&exists,
+				)
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				responses++
+
+				if err == nil && exists {
+					peerSim[peerID]++
+
+					if !found {
+						found = true
+						CIDMatches = append(CIDMatches, cidText)
+						cancel()
+						wg.Done()
+					}
+
+					return
+				}
+
+				if responses == len(peers) && !found {
+					wg.Done()
+				}
+			}(p, cidObj, cidStr, c)
+		}
+
+		wg.Wait()
+		cancel()
+	}
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 555555555555 \n")
+
+	maxSim := -1
+	var bestPeer peer.ID
+
+	for _, p := range peers {
+		count := peerSim[p]
+		fmt.Fprintf(os.Stdout, "Peer %s has %d similarities\n", p.String(), count)
+
+		if count > maxSim {
+			maxSim = count
+			bestPeer = p
+		}
+	}
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 666666666666 \n")
+
+	return bestPeer, CIDMatches, peerSim
+}
+
+func (c *Cluster) similarities_new11(ctx context.Context, pin api.Pin) (peer.ID, []string) {
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
 
 	peerSim := make(map[peer.ID]int)
@@ -3765,4 +4110,86 @@ func (c *Cluster) similarities_new0(ctx context.Context, pin api.Pin) (peer.ID, 
 	}
 
 	return bestPeer, peerCIDMatches[bestPeer]
+}
+
+func setCommonMetadata(pin *api.Pin, matches []string) {
+	if len(matches) == 0 {
+		return
+	}
+
+	if pin.Metadata == nil {
+		pin.Metadata = make(map[string]string)
+	}
+
+	pin.Metadata["common"] = strings.Join(matches, ",")
+}
+
+func bestIncomingBandwidthMBps(
+	topology *NetworkTopology,
+	allpeers []peer.ID,
+	dst peer.ID,
+) float64 {
+	best := 0.0
+
+	for _, src := range allpeers {
+		if src == dst {
+			continue
+		}
+
+		bw := topology.EffectiveBandwidth(src, dst) // Mbit
+		if float64(bw) > best {
+			best = float64(bw)
+		}
+	}
+
+	return best
+}
+
+func estimateShardProcessingTime(
+	topology *NetworkTopology,
+	allpeers []peer.ID,
+	shard ShardSim,
+	repairPeer peer.ID,
+) float64 {
+	simCount := 0
+
+	if shard.PeerMatches != nil {
+		simCount = shard.PeerMatches[repairPeer]
+	}
+
+	missingChunks := shard.TotalCids - simCount
+
+	if missingChunks <= 0 {
+		return 0.0
+	}
+
+	bw := bestIncomingBandwidthMBps(topology, allpeers, repairPeer)
+	if bw <= 0 {
+		return math.Inf(1)
+	}
+
+	return float64(missingChunks) / bw
+}
+
+func executeAssignments(
+	c *Cluster,
+	assignments map[peer.ID][]api.Pin,
+) {
+	for peerID, pins := range assignments {
+		for _, pin := range pins {
+			if peerID == c.id {
+				c.Enqueue(c.ctx, pin)
+			} else {
+				var out bool
+				c.rpcClient.CallContext(
+					c.ctx,
+					peerID,
+					"Cluster",
+					"Enqueue",
+					&pin,
+					&out,
+				)
+			}
+		}
+	}
 }
