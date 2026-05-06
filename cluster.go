@@ -1355,6 +1355,15 @@ func (c *Cluster) alertsHandler() {
 					allpeers := distance.otherPeers
 					allpeers = append(allpeers, c.id)
 
+					fmt.Println("DEBUG topology peer IDs:")
+					for p, n := range topology.NodesByPeer {
+						fmt.Printf("topology peer=%s node=%s\n", p.String(), n.Name)
+					}
+
+					fmt.Println("DEBUG candidate peer IDs:")
+					for _, p := range allpeers {
+						fmt.Printf("candidate peer=%s\n", p.String())
+					}
 					assignments, assignedPairs := ScheduleGlobalMaxMin(
 						alrt.Peer, // failed peer
 						CIDsSim4,  // failed shards
