@@ -385,6 +385,15 @@ func buildBestRepairPlanForPeer(
 		remoteHelpers = append(remoteHelpers, h)
 	}
 
+	fmt.Printf(
+		"DEBUG HELPERS shard=%s repairPeer=%s remoteHelpers=%d helperCandidates=%d localHelper=%v\n",
+		shard.Name,
+		repairPeer.String(),
+		len(remoteHelpers),
+		len(helperCandidates),
+		repairPeerLocalHelper,
+	)
+
 	neededRemoteHelpers := n
 	if repairPeerLocalHelper {
 		neededRemoteHelpers = n - 1
@@ -392,6 +401,14 @@ func buildBestRepairPlanForPeer(
 	if neededRemoteHelpers < 0 {
 		neededRemoteHelpers = 0
 	}
+
+	fmt.Printf(
+		"DEBUG NEEDED shard=%s repairPeer=%s neededRemote=%d remoteHelpers=%d\n",
+		shard.Name,
+		repairPeer.String(),
+		neededRemoteHelpers,
+		len(remoteHelpers),
+	)
 
 	uniqueMatches := buildUniqueMatches(peerMatchedCIDs)
 
@@ -449,6 +466,22 @@ func buildBestRepairPlanForPeer(
 				topology,
 				rs,
 			)
+			for _, h := range remoteHelpers {
+				fmt.Printf(
+					"DEBUG BW helper=%s -> repairPeer=%s bw=%d\n",
+					h.String(),
+					repairPeer.String(),
+					topology.EffectiveBandwidth(h, repairPeer),
+				)
+			}
+		}
+		for _, h := range remoteHelpers {
+			fmt.Printf(
+				"DEBUG BW helper=%s -> repairPeer=%s bw=%d\n",
+				h.String(),
+				repairPeer.String(),
+				topology.EffectiveBandwidth(h, repairPeer),
+			)
 		}
 
 		if len(hybridHelpers) >= neededRemoteHelpers {
@@ -481,6 +514,16 @@ func buildBestRepairPlanForPeer(
 	}
 
 	if hybridMissing > 0 && len(hybridHelpers) < neededRemoteHelpers {
+
+		fmt.Printf(
+			"UNSCHEDULABLE shard=%s repairPeer=%s hybridMissing=%d helpers=%d needed=%d\n",
+			shard.Name,
+			repairPeer.String(),
+			hybridMissing,
+			len(hybridHelpers),
+			neededRemoteHelpers,
+		)
+
 		hybridPlan.FinishTime = math.Inf(1)
 	} else {
 		hybridPlan.FinishTime = simulatePlanFinish(rs, topology, hybridPlan)
@@ -542,6 +585,14 @@ func buildBestRepairPlanForPeer(
 	} else {
 		reconstructOnlyPlan.FinishTime = math.Inf(1)
 	}
+
+	fmt.Printf(
+		"DEBUG PLAN RESULT shard=%s repairPeer=%s hybrid=%f reconstruct=%f\n",
+		shard.Name,
+		repairPeer.String(),
+		hybridPlan.FinishTime,
+		reconstructOnlyPlan.FinishTime,
+	)
 
 	if hybridPlan.FinishTime <= reconstructOnlyPlan.FinishTime {
 		return hybridPlan, !math.IsInf(hybridPlan.FinishTime, 1)
