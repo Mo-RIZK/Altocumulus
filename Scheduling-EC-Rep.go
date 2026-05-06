@@ -599,6 +599,14 @@ func ScheduleGlobalMaxMin(
 		if shardLength > 0 {
 			shardSize = shardLength
 		}
+		fmt.Printf(
+			"DEBUG SAME STRIPE shard=%s helperCandidates=%d n=%d shardLength=%d helpers=%v\n",
+			shard.Name,
+			len(helperCandidates),
+			n,
+			shardLength,
+			helperCandidates,
+		)
 
 		_, _, peerMatches, peerMatchedCIDs := getSimilarity(shard)
 
