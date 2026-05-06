@@ -1350,6 +1350,7 @@ func (c *Cluster) alertsHandler() {
 						logger.Warnf("could not load topology: %s", err)
 						continue
 					}
+					topology.PrintFull()
 
 					allpeers := distance.otherPeers
 					allpeers = append(allpeers, c.id)
