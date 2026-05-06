@@ -11,7 +11,9 @@ import (
 	_ "math/big"
 	"mime/multipart"
 	"os"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -922,42 +924,42 @@ func (c *Cluster) alertsHandler() {
 
 			}
 			// TODO check if the sim == 4 before checking the nearest peer to the sum of all of the shards CIDs
-			if sim == 4 && fff {
-				SortCIDs(CIDsSim4)
-				if distance.isClosest(CIDsSim4[0].Cid) {
-					fmt.Printf("AAAAAAAAAAAAA %d \n", len(CIDsSim4))
+			/*if sim == 4 && fff {
+			SortCIDs(CIDsSim4)
+			if distance.isClosest(CIDsSim4[0].Cid) {
+				fmt.Printf("AAAAAAAAAAAAA %d \n", len(CIDsSim4))
 
-					allpeers := distance.otherPeers
-					allpeers = append(allpeers, c.id)
+				allpeers := distance.otherPeers
+				allpeers = append(allpeers, c.id)
 
-					shardsSim := make([]ShardSim, 0)
-					peerLoad := make(map[peer.ID]int)
-					Toassign := make(map[peer.ID][]api.Pin)
+				shardsSim := make([]ShardSim, 0)
+				peerLoad := make(map[peer.ID]int)
+				Toassign := make(map[peer.ID][]api.Pin)
 
-					// ✅ NEW: track assignment per shard
-					assigned := make(map[string]bool)
-					var wg sync.WaitGroup
-					var mu sync.Mutex
-					// STEP 1: build ShardSim
-					for _, shard := range CIDsSim4 {
-						wg.Add(1)
-						go func() {
-							defer wg.Done()
-							cidString, _ := shard.Metadata["Cids"]
-							CIDs := strings.Split(cidString, ",")
+				// ✅ NEW: track assignment per shard
+				assigned := make(map[string]bool)
+				var wg sync.WaitGroup
+				var mu sync.Mutex
+				// STEP 1: build ShardSim
+				for _, shard := range CIDsSim4 {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						cidString, _ := shard.Metadata["Cids"]
+						CIDs := strings.Split(cidString, ",")
 
-							//peeer, simlocal, matches := c.similaritiessssss_New_Scheduler(c.ctx, shard)
-							peeer, matches, _ := c.similarities_new1(c.ctx, shard)
+						//peeer, simlocal, matches := c.similaritiessssss_New_Scheduler(c.ctx, shard)
+						peeer, matches, _ := c.similarities_new1(c.ctx, shard)
 
-							/*sh := ShardSim{
-								Shard:            shard,
-								Peer:             peeer,
-								Similarity_local: simlocal,
-								Similarity_other: len(matches) - simlocal,
-								TotalCids:        len(CIDs),
-								Matches:          matches,
-							}*/
-							sh := ShardSim{
+						/*sh := ShardSim{
+							Shard:            shard,
+							Peer:             peeer,
+							Similarity_local: simlocal,
+							Similarity_other: len(matches) - simlocal,
+							TotalCids:        len(CIDs),
+							Matches:          matches,
+						}*/
+			/*sh := ShardSim{
 								Shard:            shard,
 								Peer:             peeer,
 								Similarity_local: len(matches),
@@ -1132,7 +1134,7 @@ func (c *Cluster) alertsHandler() {
 						}
 					}
 				}
-			}
+			}*/
 
 			if sim == 5 && fff {
 				SortCIDs(CIDsSim4)
@@ -1339,15 +1341,9 @@ func (c *Cluster) alertsHandler() {
 					}
 				}
 			}
-			if (sim == 6 || sim == 7) && fff {
+			if (sim == 6) && fff {
 				SortCIDs(CIDsSim4)
-
 				if distance.isClosest(CIDsSim4[0].Cid) {
-					if sim == 6 {
-						fmt.Println("In Go Global Max-Min Repair Strategy !!!")
-					} else {
-						fmt.Println("In Go Global Sufferage Repair Strategy !!!")
-					}
 
 					topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
 					if err != nil {
@@ -1355,224 +1351,50 @@ func (c *Cluster) alertsHandler() {
 						continue
 					}
 
-					logger.Infof("loaded topology with %d peers", len(topology.NodesByPeer))
-					topology.PrintFull()
-
 					allpeers := distance.otherPeers
 					allpeers = append(allpeers, c.id)
 
-					shardsSim := make([]ShardSim, 0)
-					var wg sync.WaitGroup
-					var mu sync.Mutex
+					assignments, assignedPairs := ScheduleGlobalMaxMin(
+						alrt.Peer, // failed peer
+						CIDsSim4,  // failed shards
+						allpeers,  // candidate repair peers
+						topology,
+						1.0, // chunk size in MB
+						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
+							return c.get_shards_same_stripe(pin)
+						},
+						func(pin api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string) {
+							return c.similarities_Max_Min_Sauff(c.ctx, pin)
+						},
+					)
 
-					for _, shard := range CIDsSim4 {
-						shard := shard
-
-						wg.Add(1)
-						go func() {
-							defer wg.Done()
-
-							cidString, _ := shard.Metadata["Cids"]
-							CIDs := strings.Split(cidString, ",")
-
-							bestPeer, matches, peermatches := c.similarities_new1(c.ctx, shard)
-
-							sh := ShardSim{
-								Shard:            shard,
-								Peer:             bestPeer,
-								Similarity_local: len(matches),
-								Similarity_other: 0,
-								TotalCids:        len(CIDs),
-								Matches:          matches,
-								PeerMatches:      peermatches,
-							}
-
-							mu.Lock()
-							shardsSim = append(shardsSim, sh)
-							mu.Unlock()
-						}()
-					}
-
-					wg.Wait()
-
-					fmt.Printf("Number of repair shards: %d\n", len(shardsSim))
-
-					machineEndTime := make(map[peer.ID]float64)
-					Toassign := make(map[peer.ID][]api.Pin)
-
-					for _, p := range allpeers {
-						machineEndTime[p] = 0.0
-					}
-
-					unscheduled := make([]ShardSim, 0, len(shardsSim))
-					unscheduled = append(unscheduled, shardsSim...)
-
-					for len(unscheduled) > 0 {
-						chosenIndex := -1
-						chosenPeer := peer.ID("")
-						chosenProcessingTime := 0.0
-
-						if sim == 6 {
-							// -----------------------------
-							// Global Max-Min
-							// -----------------------------
-							worstBestCompletion := -1.0
-
-							for idx, shard := range unscheduled {
-								bestPeer := peer.ID("")
-								bestCompletion := math.Inf(1)
-								bestPij := math.Inf(1)
-
-								for _, p := range allpeers {
-									pij := estimateShardProcessingTime(
-										topology,
-										allpeers,
-										shard,
-										p,
-									)
-
-									if math.IsInf(pij, 1) {
-										continue
-									}
-
-									completion := machineEndTime[p] + pij
-
-									if completion < bestCompletion ||
-										(completion == bestCompletion && p.String() < bestPeer.String()) {
-										bestCompletion = completion
-										bestPeer = p
-										bestPij = pij
-									}
-								}
-
-								if bestPeer == "" {
-									continue
-								}
-
-								if bestCompletion > worstBestCompletion {
-									worstBestCompletion = bestCompletion
-									chosenIndex = idx
-									chosenPeer = bestPeer
-									chosenProcessingTime = bestPij
-								}
-							}
-						} else {
-							// -----------------------------
-							// Global Sufferage
-							// -----------------------------
-							bestScore := -1.0
-
-							for idx, shard := range unscheduled {
-								type option struct {
-									peer       peer.ID
-									pij        float64
-									completion float64
-								}
-
-								options := make([]option, 0)
-
-								for _, p := range allpeers {
-									pij := estimateShardProcessingTime(
-										topology,
-										allpeers,
-										shard,
-										p,
-									)
-
-									if math.IsInf(pij, 1) {
-										continue
-									}
-
-									options = append(options, option{
-										peer:       p,
-										pij:        pij,
-										completion: machineEndTime[p] + pij,
-									})
-								}
-
-								if len(options) == 0 {
-									continue
-								}
-
-								sort.Slice(options, func(i, j int) bool {
-									if options[i].completion == options[j].completion {
-										return options[i].peer.String() < options[j].peer.String()
-									}
-									return options[i].completion < options[j].completion
-								})
-
-								best := options[0]
-
-								secondCompletion := best.completion
-								if len(options) >= 2 {
-									secondCompletion = options[1].completion
-								}
-
-								minPij := options[0].pij
-								for _, opt := range options {
-									if opt.pij < minPij {
-										minPij = opt.pij
-									}
-								}
-
-								score := 0.0
-								if best.completion <= 0 {
-									score = math.Inf(1)
-								} else {
-									score = (secondCompletion - best.completion) * (minPij / best.completion)
-								}
-
-								if score > bestScore {
-									bestScore = score
-									chosenIndex = idx
-									chosenPeer = best.peer
-									chosenProcessingTime = best.pij
-								}
-							}
-						}
-
-						if chosenIndex == -1 || chosenPeer == "" {
-							fmt.Println("No schedulable shard found")
-							break
-						}
-
-						chosenShard := unscheduled[chosenIndex]
-
-						setCommonMetadata(&chosenShard.Shard, chosenShard.Matches)
-
-						Toassign[chosenPeer] = append(Toassign[chosenPeer], chosenShard.Shard)
-						machineEndTime[chosenPeer] += chosenProcessingTime
-
-						simCount := 0
-						if chosenShard.PeerMatches != nil {
-							simCount = chosenShard.PeerMatches[chosenPeer]
-						}
-
-						fmt.Printf(
-							"Shard %s -> Peer %s | similarities=%d/%d | estimated_time=%f | machine_end=%f\n",
-							chosenShard.Shard.Name,
-							chosenPeer,
-							simCount,
-							chosenShard.TotalCids,
-							chosenProcessingTime,
-							machineEndTime[chosenPeer],
-						)
-
-						unscheduled = append(
-							unscheduled[:chosenIndex],
-							unscheduled[chosenIndex+1:]...,
-						)
-					}
+					fmt.Printf("RESOURCE-AWARE MAX-MIN assigned %d shards\n", len(assignedPairs))
 
 					total := 0
-					for p, pins := range Toassign {
-						fmt.Printf("Peer %s -> %d pins\n", p, len(pins))
+					for peerID, pins := range assignments {
+						fmt.Printf("Repair peer %s -> %d shards\n", peerID.String(), len(pins))
 						total += len(pins)
 					}
-
 					fmt.Printf("TOTAL ASSIGNED: %d / %d\n", total, len(CIDsSim4))
 
-					executeAssignments(c, Toassign)
+					for peerID, pins := range assignments {
+						for _, pin := range pins {
+							if peerID == c.id {
+								c.Enqueue(c.ctx, pin)
+							} else {
+								var out bool
+								c.rpcClient.CallContext(
+									c.ctx,
+									peerID,
+									"Cluster",
+									"Enqueue",
+									&pin,
+									&out,
+								)
+							}
+						}
+					}
+
 				}
 			}
 			fmt.Fprintf(os.Stdout, "SSSSSHHHHHH : %d \n", kk)
@@ -4192,4 +4014,179 @@ func executeAssignments(
 			}
 		}
 	}
+}
+
+func (c *Cluster) get_shards_same_stripe(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
+	repairShards := make([]pinwithmeta, 0)
+	cidString := pin.Metadata["Cids"]
+	CIDs := strings.Split(cidString, ",")
+	f1 := strings.Split(pin.Name, "(")[1]
+	f2 := strings.Split(f1, ")")[0]
+	or, _ := strconv.Atoi(strings.Split(f2, ",")[0])
+	par, _ := strconv.Atoi(strings.Split(f2, ",")[1])
+
+	//here we want to recreate the missing shard
+	cState, err := c.consensus.State(c.ctx)
+	if err != nil {
+		logger.Warn(err)
+		return nil, nil, 0, 0
+	}
+	pinCh := make(chan api.Pin, 1024)
+	go func() {
+		err = cState.List(c.ctx, pinCh)
+		if err != nil {
+			logger.Warn(err)
+		}
+	}()
+	numpin, name, err := getShardNumber(pin.Name)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return nil, nil, 0, 0
+	}
+	mod := numpin % (or + par)
+	before := (numpin - 1) % (or + par)
+	after := (or + par - mod) % (or + par)
+	//fmt.Printf("taking shards between %d and %d \n", numpin-before, numpin+after)
+	for pinn := range pinCh {
+		if strings.Contains(pinn.Name, "-shard-") {
+			pinnShardNum, namee, err := getShardNumber(pinn.Name)
+			if err != nil {
+				fmt.Println("Error:", err)
+				continue
+			}
+			//fmt.Printf("Current shard number : %d\n", pinnShardNum)
+			if pinnShardNum >= numpin-before && pinnShardNum <= numpin+after && pinnShardNum != numpin && name == namee {
+				// This shard is within the range, proceed with retrieval logic
+				//fmt.Printf("Retrieving shard %d: %s with index: %d \n", pinnShardNum, pinn.Name, pinnShardNum%(c.or+c.par))
+				if slices.Contains(pinn.Allocations, c.id) {
+				}
+				pinnn := pinwithmeta{pin: pinn, index: pinnShardNum, cids: make([]string, 0)}
+				repairShards = append(repairShards, pinnn)
+			}
+		}
+	}
+	repairstripe := make([]api.Pin, 0)
+	for _, rs := range repairShards {
+		repairstripe = append(repairstripe, rs.pin)
+	}
+	allocs := make([]peer.ID, 0)
+	for _, rs := range repairShards {
+		allocs = append(allocs, rs.pin.Allocations...)
+	}
+
+	return repairstripe, allocs, or, len(CIDs)
+}
+
+func (c *Cluster) similarities_Max_Min_Sauff(ctx context.Context, pin api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string) {
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
+
+	peerSim := make(map[peer.ID]int)
+	peerMatchedCIDs := make(map[peer.ID][]string)
+
+	cidString, ok := pin.Metadata["Cids"]
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP %s \n", cidString)
+	if !ok || cidString == "" {
+		return "", nil, peerSim, peerMatchedCIDs
+	}
+
+	CIDs := strings.Split(cidString, ",")
+
+	peers, err := c.consensus.Peers(ctx)
+	if err != nil || len(peers) == 0 {
+		return "", nil, peerSim, peerMatchedCIDs
+	}
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 4444444444 \n")
+
+	CIDMatches := make([]string, 0)
+	var mu sync.Mutex
+
+	for _, cidStr := range CIDs {
+		cidStr = strings.TrimSpace(cidStr)
+		if cidStr == "" {
+			continue
+		}
+
+		apiCid, err := api.DecodeCid(cidStr)
+		if err != nil {
+			continue
+		}
+
+		cidObj, err := cid.Decode(apiCid.String())
+		if err != nil {
+			continue
+		}
+
+		rpcCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		responses := 0
+		found := false
+
+		for _, p := range peers {
+			go func(peerID peer.ID, cidValue cid.Cid, cidText string, C *Cluster) {
+				var exists bool
+				err := C.rpcClient.CallContext(
+					rpcCtx,
+					peerID,
+					"IPFSConnector",
+					"BlockLocalHas",
+					cidValue,
+					&exists,
+				)
+
+				mu.Lock()
+				defer mu.Unlock()
+
+				responses++
+
+				if err == nil && exists {
+					peerSim[peerID]++
+					peerMatchedCIDs[peerID] = append(peerMatchedCIDs[peerID], cidText)
+
+					if !found {
+						found = true
+						CIDMatches = append(CIDMatches, cidText)
+						cancel()
+						wg.Done()
+					}
+
+					return
+				}
+
+				if responses == len(peers) && !found {
+					wg.Done()
+				}
+			}(p, cidObj, cidStr, c)
+		}
+
+		wg.Wait()
+		cancel()
+	}
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 555555555555 \n")
+
+	maxSim := -1
+	var bestPeer peer.ID
+
+	for _, p := range peers {
+		count := peerSim[p]
+		fmt.Fprintf(os.Stdout, "Peer %s has %d similarities\n", p.String(), count)
+
+		if count > maxSim {
+			maxSim = count
+			bestPeer = p
+		}
+	}
+
+	fmt.Fprintf(os.Stdout, "Matched CIDs per peer:\n")
+	for p, cids := range peerMatchedCIDs {
+		fmt.Fprintf(os.Stdout, "Peer %s -> %s\n", p.String(), strings.Join(cids, ","))
+	}
+
+	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 666666666666 \n")
+
+	return bestPeer, CIDMatches, peerSim, peerMatchedCIDs
 }
