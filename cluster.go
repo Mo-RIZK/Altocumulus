@@ -1369,7 +1369,7 @@ func (c *Cluster) alertsHandler() {
 						CIDsSim4,  // failed shards
 						allpeers,  // candidate repair peers
 						topology,
-						1.0, // chunk size in MB
+						0.25, // chunk size in MB
 						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
 							return c.get_shards_same_stripe(pin)
 						},

@@ -2,11 +2,12 @@ package ipfscluster
 
 import (
 	"fmt"
-	"github.com/ipfs-cluster/ipfs-cluster/api"
-	"github.com/libp2p/go-libp2p/core/peer"
 	"math"
 	"sort"
 	"strings"
+
+	"github.com/ipfs-cluster/ipfs-cluster/api"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 type Transfer struct {
@@ -17,13 +18,15 @@ type Transfer struct {
 	CID    string
 }
 
-type RepairPlan struct {
-	Shard api.Pin
+type RepairStep struct {
+	Transfers []Transfer
+	Kind      string
+}
 
+type RepairJob struct {
+	Shard      api.Pin
 	RepairPeer peer.ID
-
-	Transfers  []Transfer
-	FinishTime float64
+	Steps      []RepairStep
 
 	LocalChunkCount   int
 	DirectChunkCount  int
@@ -34,17 +37,12 @@ type RepairPlan struct {
 
 	RepairPeerLocalHelper bool
 	NeededRemoteHelpers   int
-}
 
-type ResourceState struct {
-	NodeOutEnd map[peer.ID]float64
-	NodeInEnd  map[peer.ID]float64
-	LinkEnd    map[peer.ID]map[peer.ID]float64
+	FinishTime float64
 }
 
 type MaxMinEstimate struct {
-	Shard api.Pin
-
+	Shard      api.Pin
 	RepairPeer peer.ID
 
 	ProcessingTime float64
@@ -62,7 +60,7 @@ type MaxMinEstimate struct {
 	RepairPeerLocalHelper bool
 	NeededRemoteHelpers   int
 
-	Plan RepairPlan
+	Job RepairJob
 }
 
 type MaxMinAssignment struct {
@@ -70,126 +68,50 @@ type MaxMinAssignment struct {
 	Estimate MaxMinEstimate
 }
 
-func NewResourceState() *ResourceState {
-	return &ResourceState{
-		NodeOutEnd: make(map[peer.ID]float64),
-		NodeInEnd:  make(map[peer.ID]float64),
-		LinkEnd:    make(map[peer.ID]map[peer.ID]float64),
-	}
+type SimTransfer struct {
+	Src peer.ID
+	Dst peer.ID
+
+	SizeMB      float64
+	RemainingMB float64
+
+	JobIndex int
+	Step     int
+
+	Kind string
+	CID  string
 }
 
-func cloneResourceState(rs *ResourceState) *ResourceState {
-	cp := NewResourceState()
+type SimJobState struct {
+	Job        RepairJob
+	StepIndex  int
+	Finished   bool
+	FinishTime float64
+}
 
-	for p, v := range rs.NodeOutEnd {
-		cp.NodeOutEnd[p] = v
-	}
+type SimulationResult struct {
+	TotalFinishTime float64
+	JobFinishTimes  map[string]float64
+}
 
-	for p, v := range rs.NodeInEnd {
-		cp.NodeInEnd[p] = v
-	}
+func cleanCIDString(c string) string {
+	c = strings.TrimSpace(c)
+	c = strings.Trim(c, "<>")
+	return c
+}
 
-	for src, dsts := range rs.LinkEnd {
-		cp.LinkEnd[src] = make(map[peer.ID]float64)
-		for dst, v := range dsts {
-			cp.LinkEnd[src][dst] = v
+func cidListFromPin(pin api.Pin) []string {
+	cidString := pin.Metadata["Cids"]
+	parts := strings.Split(cidString, ",")
+
+	out := make([]string, 0, len(parts))
+	for _, c := range parts {
+		c = cleanCIDString(c)
+		if c != "" {
+			out = append(out, c)
 		}
 	}
-
-	return cp
-}
-
-func getLinkEnd(rs *ResourceState, src, dst peer.ID) float64 {
-	if rs.LinkEnd[src] == nil {
-		return 0.0
-	}
-	return rs.LinkEnd[src][dst]
-}
-
-func setLinkEnd(rs *ResourceState, src, dst peer.ID, t float64) {
-	if rs.LinkEnd[src] == nil {
-		rs.LinkEnd[src] = make(map[peer.ID]float64)
-	}
-	rs.LinkEnd[src][dst] = t
-}
-
-func max3Float(a, b, c float64) float64 {
-	m := a
-	if b > m {
-		m = b
-	}
-	if c > m {
-		m = c
-	}
-	return m
-}
-
-func scheduleTransfer(
-	rs *ResourceState,
-	topology *NetworkTopology,
-	tr Transfer,
-) float64 {
-	bw := topology.EffectiveBandwidth(tr.Src, tr.Dst)
-	if bw == 0 {
-		return math.Inf(1)
-	}
-
-	start := max3Float(
-		rs.NodeOutEnd[tr.Src],
-		rs.NodeInEnd[tr.Dst],
-		getLinkEnd(rs, tr.Src, tr.Dst),
-	)
-
-	duration := tr.SizeMB / float64(bw)
-	finish := start + duration
-
-	rs.NodeOutEnd[tr.Src] = finish
-	rs.NodeInEnd[tr.Dst] = finish
-	setLinkEnd(rs, tr.Src, tr.Dst, finish)
-
-	return finish
-}
-
-func simulatePlanFinish(
-	rs *ResourceState,
-	topology *NetworkTopology,
-	plan RepairPlan,
-) float64 {
-	tmp := cloneResourceState(rs)
-
-	finish := 0.0
-
-	for _, tr := range plan.Transfers {
-		f := scheduleTransfer(tmp, topology, tr)
-		if math.IsInf(f, 1) {
-			return math.Inf(1)
-		}
-		if f > finish {
-			finish = f
-		}
-	}
-
-	return finish
-}
-
-func commitPlan(
-	rs *ResourceState,
-	topology *NetworkTopology,
-	plan RepairPlan,
-) float64 {
-	finish := 0.0
-
-	for _, tr := range plan.Transfers {
-		f := scheduleTransfer(rs, topology, tr)
-		if math.IsInf(f, 1) {
-			return math.Inf(1)
-		}
-		if f > finish {
-			finish = f
-		}
-	}
-
-	return finish
+	return out
 }
 
 func buildUniqueMatches(peerMatchedCIDs map[peer.ID][]string) map[string]bool {
@@ -197,7 +119,7 @@ func buildUniqueMatches(peerMatchedCIDs map[peer.ID][]string) map[string]bool {
 
 	for _, cids := range peerMatchedCIDs {
 		for _, c := range cids {
-			c = strings.TrimSpace(c)
+			c = cleanCIDString(c)
 			if c != "" {
 				unique[c] = true
 			}
@@ -207,37 +129,51 @@ func buildUniqueMatches(peerMatchedCIDs map[peer.ID][]string) map[string]bool {
 	return unique
 }
 
-func cidListFromPin(pin api.Pin) []string {
-	cidString := pin.Metadata["Cids"]
-	parts := strings.Split(cidString, ",")
-
-	out := make([]string, 0, len(parts))
-
-	for _, c := range parts {
-		c = strings.TrimSpace(c)
-		if c != "" {
-			out = append(out, c)
-		}
-	}
-
-	return out
-}
-
 func peerHasCID(peerMatchedCIDs map[peer.ID][]string, p peer.ID, cidStr string) bool {
+	cidStr = cleanCIDString(cidStr)
+
 	for _, c := range peerMatchedCIDs[p] {
-		if c == cidStr {
+		if cleanCIDString(c) == cidStr {
 			return true
 		}
 	}
 	return false
 }
 
-func selectBestHelpersMaxMin(
+func topologyNodeOut(t *NetworkTopology, p peer.ID) uint64 {
+	if t == nil || t.NodesByPeer == nil {
+		return 0
+	}
+	n := t.NodesByPeer[p]
+	if n == nil {
+		return 0
+	}
+	return n.GlobalOut
+}
+
+func topologyNodeIn(t *NetworkTopology, p peer.ID) uint64 {
+	if t == nil || t.NodesByPeer == nil {
+		return 0
+	}
+	n := t.NodesByPeer[p]
+	if n == nil {
+		return 0
+	}
+	return n.GlobalIn
+}
+
+func topologyPairwise(t *NetworkTopology, src, dst peer.ID) uint64 {
+	if t == nil {
+		return 0
+	}
+	return t.PairwiseBandwidth(src, dst)
+}
+
+func selectBestHelpersByBandwidth(
 	helpers []peer.ID,
 	repairPeer peer.ID,
 	n int,
 	topology *NetworkTopology,
-	rs *ResourceState,
 ) []peer.ID {
 	filtered := make([]peer.ID, 0)
 	seen := make(map[peer.ID]bool)
@@ -254,33 +190,13 @@ func selectBestHelpersMaxMin(
 	}
 
 	sort.Slice(filtered, func(i, j int) bool {
-		ti := simulatePlanFinish(rs, topology, RepairPlan{
-			Transfers: []Transfer{
-				{
-					Src:    filtered[i],
-					Dst:    repairPeer,
-					SizeMB: 1.0,
-					Kind:   "helper-test",
-				},
-			},
-		})
+		bwi := topology.EffectiveBandwidth(filtered[i], repairPeer)
+		bwj := topology.EffectiveBandwidth(filtered[j], repairPeer)
 
-		tj := simulatePlanFinish(rs, topology, RepairPlan{
-			Transfers: []Transfer{
-				{
-					Src:    filtered[j],
-					Dst:    repairPeer,
-					SizeMB: 1.0,
-					Kind:   "helper-test",
-				},
-			},
-		})
-
-		if ti == tj {
+		if bwi == bwj {
 			return filtered[i].String() < filtered[j].String()
 		}
-
-		return ti < tj
+		return bwi > bwj
 	})
 
 	if len(filtered) > n {
@@ -290,17 +206,17 @@ func selectBestHelpersMaxMin(
 	return filtered
 }
 
-func chooseBestSourceForCIDResourceAware(
+func chooseBestSourceForCID(
 	cidStr string,
 	repairPeer peer.ID,
 	failedPeer peer.ID,
 	peerMatchedCIDs map[peer.ID][]string,
 	topology *NetworkTopology,
-	rs *ResourceState,
-	chunkMB float64,
 ) peer.ID {
+	cidStr = cleanCIDString(cidStr)
+
 	bestPeer := peer.ID("")
-	bestFinish := math.Inf(1)
+	bestBw := uint64(0)
 
 	for p, cids := range peerMatchedCIDs {
 		if p == failedPeer || p == repairPeer {
@@ -309,7 +225,7 @@ func chooseBestSourceForCIDResourceAware(
 
 		hasCID := false
 		for _, c := range cids {
-			if c == cidStr {
+			if cleanCIDString(c) == cidStr {
 				hasCID = true
 				break
 			}
@@ -319,32 +235,21 @@ func chooseBestSourceForCIDResourceAware(
 			continue
 		}
 
-		plan := RepairPlan{
-			Transfers: []Transfer{
-				{
-					Src:    p,
-					Dst:    repairPeer,
-					SizeMB: chunkMB,
-					Kind:   "direct-test",
-					CID:    cidStr,
-				},
-			},
+		bw := topology.EffectiveBandwidth(p, repairPeer)
+		if bw == 0 {
+			continue
 		}
 
-		finish := simulatePlanFinish(rs, topology, plan)
-
-		if bestPeer == "" ||
-			finish < bestFinish ||
-			(finish == bestFinish && p.String() < bestPeer.String()) {
+		if bestPeer == "" || bw > bestBw || (bw == bestBw && p.String() < bestPeer.String()) {
 			bestPeer = p
-			bestFinish = finish
+			bestBw = bw
 		}
 	}
 
 	return bestPeer
 }
 
-func buildBestRepairPlanForPeer(
+func buildRepairJobForPeer(
 	shard api.Pin,
 	repairPeer peer.ID,
 	failedPeer peer.ID,
@@ -355,9 +260,8 @@ func buildBestRepairPlanForPeer(
 	peerMatches map[peer.ID]int,
 	peerMatchedCIDs map[peer.ID][]string,
 	topology *NetworkTopology,
-	rs *ResourceState,
 	chunkMB float64,
-) (RepairPlan, bool) {
+) (RepairJob, bool) {
 	localChunkCount := 0
 	if peerMatches != nil {
 		localChunkCount = peerMatches[repairPeer]
@@ -385,15 +289,6 @@ func buildBestRepairPlanForPeer(
 		remoteHelpers = append(remoteHelpers, h)
 	}
 
-	fmt.Printf(
-		"DEBUG HELPERS shard=%s repairPeer=%s remoteHelpers=%d helperCandidates=%d localHelper=%v\n",
-		shard.Name,
-		repairPeer.String(),
-		len(remoteHelpers),
-		len(helperCandidates),
-		repairPeerLocalHelper,
-	)
-
 	neededRemoteHelpers := n
 	if repairPeerLocalHelper {
 		neededRemoteHelpers = n - 1
@@ -402,203 +297,316 @@ func buildBestRepairPlanForPeer(
 		neededRemoteHelpers = 0
 	}
 
-	fmt.Printf(
-		"DEBUG NEEDED shard=%s repairPeer=%s neededRemote=%d remoteHelpers=%d\n",
-		shard.Name,
-		repairPeer.String(),
-		neededRemoteHelpers,
-		len(remoteHelpers),
-	)
-
 	uniqueMatches := buildUniqueMatches(peerMatchedCIDs)
 
-	// Variant 1: direct available chunks + reconstruct missing chunks.
-	hybridTransfers := make([]Transfer, 0)
-	hybridSources := make([]peer.ID, 0)
-	hybridDirect := 0
+	steps := make([]RepairStep, 0)
+	otherElementSources := make([]peer.ID, 0)
+	selectedHelpers := make([]peer.ID, 0)
 
+	directCount := 0
+	missingCount := 0
+
+	// Direct chunks are sequential:
+	// one direct chunk = one step = one transfer.
 	for _, c := range shardCIDs {
+		c = cleanCIDString(c)
+		if c == "" {
+			continue
+		}
+
 		if peerHasCID(peerMatchedCIDs, repairPeer, c) {
 			continue
 		}
 
-		if !uniqueMatches[c] {
-			continue
+		if uniqueMatches[c] {
+			src := chooseBestSourceForCID(
+				c,
+				repairPeer,
+				failedPeer,
+				peerMatchedCIDs,
+				topology,
+			)
+
+			if src != "" {
+				directCount++
+				otherElementSources = append(otherElementSources, src)
+
+				steps = append(steps, RepairStep{
+					Kind: "direct",
+					Transfers: []Transfer{
+						{
+							Src:    src,
+							Dst:    repairPeer,
+							SizeMB: chunkMB,
+							Kind:   "direct",
+							CID:    c,
+						},
+					},
+				})
+				continue
+			}
 		}
 
-		src := chooseBestSourceForCIDResourceAware(
-			c,
+		missingCount++
+	}
+
+	if missingCount > 0 {
+		if len(remoteHelpers) < neededRemoteHelpers {
+			return RepairJob{}, false
+		}
+
+		selectedHelpers = selectBestHelpersByBandwidth(
+			remoteHelpers,
 			repairPeer,
-			failedPeer,
-			peerMatchedCIDs,
+			neededRemoteHelpers,
 			topology,
-			rs,
-			chunkMB,
 		)
 
-		if src != "" {
-			hybridDirect++
-			hybridSources = append(hybridSources, src)
+		if len(selectedHelpers) < neededRemoteHelpers {
+			return RepairJob{}, false
+		}
 
-			hybridTransfers = append(hybridTransfers, Transfer{
-				Src:    src,
-				Dst:    repairPeer,
-				SizeMB: chunkMB,
-				Kind:   "direct",
-				CID:    c,
+		for _, h := range selectedHelpers {
+			if topology.EffectiveBandwidth(h, repairPeer) == 0 {
+				return RepairJob{}, false
+			}
+		}
+
+		// Missing chunks are sequential.
+		// For each missing chunk:
+		// n helpers download in parallel in one step.
+		for i := 0; i < missingCount; i++ {
+			stepTransfers := make([]Transfer, 0)
+
+			for _, h := range selectedHelpers {
+				stepTransfers = append(stepTransfers, Transfer{
+					Src:    h,
+					Dst:    repairPeer,
+					SizeMB: chunkMB,
+					Kind:   "reconstruct",
+				})
+			}
+
+			steps = append(steps, RepairStep{
+				Kind:      "reconstruct",
+				Transfers: stepTransfers,
 			})
 		}
 	}
 
-	hybridMissing := shardSize - localChunkCount - hybridDirect
-	if hybridMissing < 0 {
-		hybridMissing = 0
-	}
-
-	hybridHelpers := make([]peer.ID, 0)
-
-	if hybridMissing > 0 {
-		if len(remoteHelpers) >= neededRemoteHelpers {
-			hybridHelpers = selectBestHelpersMaxMin(
-				remoteHelpers,
-				repairPeer,
-				neededRemoteHelpers,
-				topology,
-				rs,
-			)
-			for _, h := range remoteHelpers {
-				fmt.Printf(
-					"DEBUG BW helper=%s -> repairPeer=%s bw=%d\n",
-					h.String(),
-					repairPeer.String(),
-					topology.EffectiveBandwidth(h, repairPeer),
-				)
-			}
-		}
-		for _, h := range remoteHelpers {
-			fmt.Printf(
-				"DEBUG BW helper=%s -> repairPeer=%s bw=%d\n",
-				h.String(),
-				repairPeer.String(),
-				topology.EffectiveBandwidth(h, repairPeer),
-			)
-		}
-
-		if len(hybridHelpers) >= neededRemoteHelpers {
-			for _, h := range hybridHelpers {
-				hybridTransfers = append(hybridTransfers, Transfer{
-					Src:    h,
-					Dst:    repairPeer,
-					SizeMB: float64(hybridMissing) * chunkMB,
-					Kind:   "reconstruct",
-				})
-			}
-		}
-	}
-
-	hybridPlan := RepairPlan{
+	job := RepairJob{
 		Shard:      shard,
 		RepairPeer: repairPeer,
-
-		Transfers: hybridTransfers,
+		Steps:      steps,
 
 		LocalChunkCount:   localChunkCount,
-		DirectChunkCount:  hybridDirect,
-		MissingChunkCount: hybridMissing,
+		DirectChunkCount:  directCount,
+		MissingChunkCount: missingCount,
 
-		OtherElementSources: hybridSources,
-		SelectedHelpers:     hybridHelpers,
+		OtherElementSources: otherElementSources,
+		SelectedHelpers:     selectedHelpers,
 
 		RepairPeerLocalHelper: repairPeerLocalHelper,
 		NeededRemoteHelpers:   neededRemoteHelpers,
 	}
 
-	if hybridMissing > 0 && len(hybridHelpers) < neededRemoteHelpers {
+	return job, true
+}
 
-		fmt.Printf(
-			"UNSCHEDULABLE shard=%s repairPeer=%s hybridMissing=%d helpers=%d needed=%d\n",
-			shard.Name,
-			repairPeer.String(),
-			hybridMissing,
-			len(hybridHelpers),
-			neededRemoteHelpers,
-		)
-
-		hybridPlan.FinishTime = math.Inf(1)
-	} else {
-		hybridPlan.FinishTime = simulatePlanFinish(rs, topology, hybridPlan)
+func activateJobStep(jobIndex int, state *SimJobState) []SimTransfer {
+	if state.Finished {
+		return nil
 	}
 
-	// Variant 2: ignore direct chunks and reconstruct all non-local chunks.
-	reconstructCount := shardSize - localChunkCount
-	if reconstructCount < 0 {
-		reconstructCount = 0
+	for state.StepIndex < len(state.Job.Steps) &&
+		len(state.Job.Steps[state.StepIndex].Transfers) == 0 {
+		state.StepIndex++
 	}
 
-	reconstructTransfers := make([]Transfer, 0)
-	reconstructHelpers := make([]peer.ID, 0)
+	if state.StepIndex >= len(state.Job.Steps) {
+		state.Finished = true
+		return nil
+	}
 
-	if reconstructCount > 0 {
-		if len(remoteHelpers) >= neededRemoteHelpers {
-			reconstructHelpers = selectBestHelpersMaxMin(
-				remoteHelpers,
-				repairPeer,
-				neededRemoteHelpers,
-				topology,
-				rs,
-			)
+	step := state.Job.Steps[state.StepIndex]
+	active := make([]SimTransfer, 0, len(step.Transfers))
+
+	for _, tr := range step.Transfers {
+		active = append(active, SimTransfer{
+			Src:         tr.Src,
+			Dst:         tr.Dst,
+			SizeMB:      tr.SizeMB,
+			RemainingMB: tr.SizeMB,
+			JobIndex:    jobIndex,
+			Step:        state.StepIndex,
+			Kind:        tr.Kind,
+			CID:         tr.CID,
+		})
+	}
+
+	return active
+}
+
+func simulateRepairJobs(
+	jobs []RepairJob,
+	topology *NetworkTopology,
+) SimulationResult {
+	jobStates := make([]*SimJobState, 0, len(jobs))
+	active := make([]SimTransfer, 0)
+
+	for i, job := range jobs {
+		st := &SimJobState{
+			Job:       job,
+			StepIndex: 0,
+			Finished:  false,
+		}
+		jobStates = append(jobStates, st)
+
+		newTransfers := activateJobStep(i, st)
+		active = append(active, newTransfers...)
+
+		if len(job.Steps) == 0 {
+			st.Finished = true
+			st.FinishTime = 0
+		}
+	}
+
+	now := 0.0
+
+	const eps = 1e-9
+
+	for len(active) > 0 {
+		outCount := make(map[peer.ID]int)
+		inCount := make(map[peer.ID]int)
+		linkCount := make(map[peer.ID]map[peer.ID]int)
+
+		for _, tr := range active {
+			outCount[tr.Src]++
+			inCount[tr.Dst]++
+
+			if linkCount[tr.Src] == nil {
+				linkCount[tr.Src] = make(map[peer.ID]int)
+			}
+			linkCount[tr.Src][tr.Dst]++
 		}
 
-		if len(reconstructHelpers) >= neededRemoteHelpers {
-			for _, h := range reconstructHelpers {
-				reconstructTransfers = append(reconstructTransfers, Transfer{
-					Src:    h,
-					Dst:    repairPeer,
-					SizeMB: float64(reconstructCount) * chunkMB,
-					Kind:   "reconstruct-all",
-				})
+		rates := make([]float64, len(active))
+		minDelta := math.Inf(1)
+
+		for i, tr := range active {
+			srcOut := topologyNodeOut(topology, tr.Src)
+			dstIn := topologyNodeIn(topology, tr.Dst)
+			pair := topologyPairwise(topology, tr.Src, tr.Dst)
+
+			if srcOut == 0 || dstIn == 0 || pair == 0 {
+				return SimulationResult{
+					TotalFinishTime: math.Inf(1),
+					JobFinishTimes:  map[string]float64{},
+				}
+			}
+
+			srcShare := float64(srcOut) / float64(outCount[tr.Src])
+			dstShare := float64(dstIn) / float64(inCount[tr.Dst])
+			linkShare := float64(pair) / float64(linkCount[tr.Src][tr.Dst])
+
+			rate := srcShare
+			if dstShare < rate {
+				rate = dstShare
+			}
+			if linkShare < rate {
+				rate = linkShare
+			}
+
+			if rate <= 0 {
+				return SimulationResult{
+					TotalFinishTime: math.Inf(1),
+					JobFinishTimes:  map[string]float64{},
+				}
+			}
+
+			rates[i] = rate
+
+			delta := tr.RemainingMB / rate
+			if delta < minDelta {
+				minDelta = delta
 			}
 		}
+
+		if math.IsInf(minDelta, 1) {
+			return SimulationResult{
+				TotalFinishTime: math.Inf(1),
+				JobFinishTimes:  map[string]float64{},
+			}
+		}
+
+		now += minDelta
+
+		nextActive := make([]SimTransfer, 0)
+		completedJobs := make(map[int]bool)
+
+		for i := range active {
+			active[i].RemainingMB -= rates[i] * minDelta
+
+			if active[i].RemainingMB <= eps {
+				completedJobs[active[i].JobIndex] = true
+			} else {
+				nextActive = append(nextActive, active[i])
+			}
+		}
+
+		// A job step is complete only when no transfer from that same job+step remains active.
+		for jobIndex := range completedJobs {
+			st := jobStates[jobIndex]
+			if st.Finished {
+				continue
+			}
+
+			stepStillActive := false
+			for _, tr := range nextActive {
+				if tr.JobIndex == jobIndex && tr.Step == st.StepIndex {
+					stepStillActive = true
+					break
+				}
+			}
+
+			if !stepStillActive {
+				st.StepIndex++
+
+				if st.StepIndex >= len(st.Job.Steps) {
+					st.Finished = true
+					st.FinishTime = now
+				} else {
+					newTransfers := activateJobStep(jobIndex, st)
+					nextActive = append(nextActive, newTransfers...)
+				}
+			}
+		}
+
+		active = nextActive
 	}
 
-	reconstructOnlyPlan := RepairPlan{
-		Shard:      shard,
-		RepairPeer: repairPeer,
+	jobFinishTimes := make(map[string]float64)
+	total := 0.0
 
-		Transfers: reconstructTransfers,
+	for _, st := range jobStates {
+		key := st.Job.Shard.Cid.String()
 
-		LocalChunkCount:   localChunkCount,
-		DirectChunkCount:  0,
-		MissingChunkCount: reconstructCount,
+		if !st.Finished {
+			st.Finished = true
+			st.FinishTime = now
+		}
 
-		OtherElementSources: nil,
-		SelectedHelpers:     reconstructHelpers,
+		jobFinishTimes[key] = st.FinishTime
 
-		RepairPeerLocalHelper: repairPeerLocalHelper,
-		NeededRemoteHelpers:   neededRemoteHelpers,
+		if st.FinishTime > total {
+			total = st.FinishTime
+		}
 	}
 
-	if reconstructCount == 0 {
-		reconstructOnlyPlan.FinishTime = 0.0
-	} else if len(reconstructHelpers) >= neededRemoteHelpers {
-		reconstructOnlyPlan.FinishTime = simulatePlanFinish(rs, topology, reconstructOnlyPlan)
-	} else {
-		reconstructOnlyPlan.FinishTime = math.Inf(1)
+	return SimulationResult{
+		TotalFinishTime: total,
+		JobFinishTimes:  jobFinishTimes,
 	}
-
-	fmt.Printf(
-		"DEBUG PLAN RESULT shard=%s repairPeer=%s hybrid=%f reconstruct=%f\n",
-		shard.Name,
-		repairPeer.String(),
-		hybridPlan.FinishTime,
-		reconstructOnlyPlan.FinishTime,
-	)
-
-	if hybridPlan.FinishTime <= reconstructOnlyPlan.FinishTime {
-		return hybridPlan, !math.IsInf(hybridPlan.FinishTime, 1)
-	}
-
-	return reconstructOnlyPlan, !math.IsInf(reconstructOnlyPlan.FinishTime, 1)
 }
 
 func ScheduleGlobalMaxMin(
@@ -611,7 +619,7 @@ func ScheduleGlobalMaxMin(
 	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
 	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
 ) (map[peer.ID][]api.Pin, []MaxMinAssignment) {
-	fmt.Println("In RESOURCE-AWARE Go Global Max-Min Repair Strategy !!!")
+	fmt.Println("In PARALLEL-SIMULATION Max-Min Repair Strategy !!!")
 
 	assignments := make(map[peer.ID][]api.Pin)
 	assignedPairs := make([]MaxMinAssignment, 0)
@@ -635,13 +643,12 @@ func ScheduleGlobalMaxMin(
 
 	precomputed := make(map[string]ShardPrecompute)
 
-	// PHASE 0: precompute similarities once. No RPC during scheduling.
+	// Precompute once.
 	for _, shard := range failedShards {
 		shardKey := shard.Cid.String()
 
 		shardCIDs := cidListFromPin(shard)
 		shardSize := len(shardCIDs)
-
 		if shardSize == 0 {
 			continue
 		}
@@ -650,14 +657,6 @@ func ScheduleGlobalMaxMin(
 		if shardLength > 0 {
 			shardSize = shardLength
 		}
-		fmt.Printf(
-			"DEBUG SAME STRIPE shard=%s helperCandidates=%d n=%d shardLength=%d helpers=%v\n",
-			shard.Name,
-			len(helperCandidates),
-			n,
-			shardLength,
-			helperCandidates,
-		)
 
 		_, _, peerMatches, peerMatchedCIDs := getSimilarity(shard)
 
@@ -676,43 +675,38 @@ func ScheduleGlobalMaxMin(
 	}
 
 	unscheduled := make([]api.Pin, 0)
-
 	for _, shard := range failedShards {
 		if _, ok := precomputed[shard.Cid.String()]; ok {
 			unscheduled = append(unscheduled, shard)
 		}
 	}
 
-	if len(unscheduled) == 0 {
-		return assignments, assignedPairs
-	}
-
-	resourceState := NewResourceState()
+	scheduledJobs := make([]RepairJob, 0)
 
 	for len(unscheduled) > 0 {
-		type taskBestInfo struct {
-			Completion float64
-			Peer       peer.ID
-			Plan       RepairPlan
-			Estimate   MaxMinEstimate
+		type CandidateBest struct {
+			Shard api.Pin
+			Peer  peer.ID
+			Job   RepairJob
+
+			Makespan float64
 		}
 
-		taskBest := make(map[string]taskBestInfo)
+		bestForShard := make(map[string]CandidateBest)
 
 		for _, shard := range unscheduled {
-			shardKey := shard.Cid.String()
-			pc := precomputed[shardKey]
+			pc := precomputed[shard.Cid.String()]
 
 			bestPeer := peer.ID("")
-			bestCompletion := math.Inf(1)
-			var bestPlan RepairPlan
+			var bestJob RepairJob
+			bestMakespan := math.Inf(1)
 
 			for _, repairPeer := range candidatePeers {
 				if repairPeer == failedPeer {
 					continue
 				}
 
-				plan, ok := buildBestRepairPlanForPeer(
+				job, ok := buildRepairJobForPeer(
 					pc.Shard,
 					repairPeer,
 					failedPeer,
@@ -723,7 +717,6 @@ func ScheduleGlobalMaxMin(
 					pc.PeerMatches,
 					pc.PeerMatchedCIDs,
 					topology,
-					resourceState,
 					chunkMB,
 				)
 
@@ -731,77 +724,54 @@ func ScheduleGlobalMaxMin(
 					continue
 				}
 
-				completionTime := plan.FinishTime
+				testJobs := make([]RepairJob, 0, len(scheduledJobs)+1)
+				testJobs = append(testJobs, scheduledJobs...)
+				testJobs = append(testJobs, job)
 
-				if bestPeer == "" ||
-					completionTime < bestCompletion ||
-					(completionTime == bestCompletion && repairPeer.String() < bestPeer.String()) {
+				res := simulateRepairJobs(testJobs, topology)
+
+				if res.TotalFinishTime < bestMakespan ||
+					(res.TotalFinishTime == bestMakespan && repairPeer.String() < bestPeer.String()) {
+					bestMakespan = res.TotalFinishTime
 					bestPeer = repairPeer
-					bestCompletion = completionTime
-					bestPlan = plan
+					bestJob = job
 				}
 			}
 
-			if bestPeer != "" {
-				estimate := MaxMinEstimate{
-					Shard: pc.Shard,
-
-					RepairPeer: bestPeer,
-
-					ProcessingTime: bestPlan.FinishTime,
-					FinishTime:     bestPlan.FinishTime,
-
-					ShardSize: pc.ShardSize,
-
-					LocalChunkCount:   bestPlan.LocalChunkCount,
-					DirectChunkCount:  bestPlan.DirectChunkCount,
-					MissingChunkCount: bestPlan.MissingChunkCount,
-
-					OtherElementSources: bestPlan.OtherElementSources,
-					SelectedHelpers:     bestPlan.SelectedHelpers,
-
-					RepairPeerLocalHelper: bestPlan.RepairPeerLocalHelper,
-					NeededRemoteHelpers:   bestPlan.NeededRemoteHelpers,
-
-					Plan: bestPlan,
-				}
-
-				taskBest[shardKey] = taskBestInfo{
-					Completion: bestCompletion,
-					Peer:       bestPeer,
-					Plan:       bestPlan,
-					Estimate:   estimate,
+			if bestPeer != "" && !math.IsInf(bestMakespan, 1) {
+				bestForShard[shard.Cid.String()] = CandidateBest{
+					Shard:    shard,
+					Peer:     bestPeer,
+					Job:      bestJob,
+					Makespan: bestMakespan,
 				}
 			}
 		}
 
-		if len(taskBest) == 0 {
+		if len(bestForShard) == 0 {
 			break
 		}
 
 		chosenIndex := -1
-		chosenCompletion := -1.0
-		chosenShardSize := 0
-		chosenShardKey := ""
+		chosenMakespan := -1.0
+		chosenKey := ""
 
+		// Max-Min:
+		// for every shard, we already selected the peer with minimum makespan.
+		// now choose the shard whose best makespan is maximum.
 		for idx, shard := range unscheduled {
-			shardKey := shard.Cid.String()
-
-			info, ok := taskBest[shardKey]
+			key := shard.Cid.String()
+			cand, ok := bestForShard[key]
 			if !ok {
 				continue
 			}
 
-			shardSize := info.Estimate.ShardSize
-
 			if chosenIndex == -1 ||
-				info.Completion > chosenCompletion ||
-				(info.Completion == chosenCompletion && shardSize < chosenShardSize) ||
-				(info.Completion == chosenCompletion && shardSize == chosenShardSize && shardKey < chosenShardKey) {
+				cand.Makespan > chosenMakespan ||
+				(cand.Makespan == chosenMakespan && key < chosenKey) {
 				chosenIndex = idx
-				chosenCompletion = info.Completion
-				chosenShardSize = shardSize
-				chosenShardKey = shardKey
+				chosenMakespan = cand.Makespan
+				chosenKey = key
 			}
 		}
 
@@ -810,34 +780,53 @@ func ScheduleGlobalMaxMin(
 		}
 
 		chosenShard := unscheduled[chosenIndex]
-		chosenInfo := taskBest[chosenShard.Cid.String()]
-		chosenPlan := chosenInfo.Plan
-		chosenEstimate := chosenInfo.Estimate
-		repairPeer := chosenInfo.Peer
+		chosen := bestForShard[chosenShard.Cid.String()]
 
-		actualFinish := commitPlan(resourceState, topology, chosenPlan)
-		chosenEstimate.FinishTime = actualFinish
-		chosenEstimate.ProcessingTime = actualFinish
+		scheduledJobs = append(scheduledJobs, chosen.Job)
 
-		assignments[repairPeer] = append(assignments[repairPeer], chosenShard)
+		finalRes := simulateRepairJobs(scheduledJobs, topology)
+		jobFinish := finalRes.JobFinishTimes[chosenShard.Cid.String()]
+		chosen.Job.FinishTime = jobFinish
+
+		assignments[chosen.Peer] = append(assignments[chosen.Peer], chosenShard)
+
+		estimate := MaxMinEstimate{
+			Shard:      chosenShard,
+			RepairPeer: chosen.Peer,
+
+			ProcessingTime: jobFinish,
+			FinishTime:     jobFinish,
+
+			ShardSize: precomputed[chosenShard.Cid.String()].ShardSize,
+
+			LocalChunkCount:   chosen.Job.LocalChunkCount,
+			DirectChunkCount:  chosen.Job.DirectChunkCount,
+			MissingChunkCount: chosen.Job.MissingChunkCount,
+
+			OtherElementSources: chosen.Job.OtherElementSources,
+			SelectedHelpers:     chosen.Job.SelectedHelpers,
+
+			RepairPeerLocalHelper: chosen.Job.RepairPeerLocalHelper,
+			NeededRemoteHelpers:   chosen.Job.NeededRemoteHelpers,
+
+			Job: chosen.Job,
+		}
 
 		assignedPairs = append(assignedPairs, MaxMinAssignment{
 			Shard:    chosenShard,
-			Estimate: chosenEstimate,
+			Estimate: estimate,
 		})
 
 		fmt.Printf(
-			"RESOURCE-AWARE MAX-MIN assigned shard %s -> peer %s | finish=%f | local=%d direct=%d missing=%d helpers=%d localHelper=%v neededRemote=%d transfers=%d\n",
+			"MAX-MIN assigned shard=%s repairPeer=%s jobFinish=%f currentTotalMakespan=%f local=%d direct=%d missing=%d steps=%d\n",
 			chosenShard.Name,
-			repairPeer.String(),
-			actualFinish,
-			chosenEstimate.LocalChunkCount,
-			chosenEstimate.DirectChunkCount,
-			chosenEstimate.MissingChunkCount,
-			len(chosenEstimate.SelectedHelpers),
-			chosenEstimate.RepairPeerLocalHelper,
-			chosenEstimate.NeededRemoteHelpers,
-			len(chosenPlan.Transfers),
+			chosen.Peer.String(),
+			jobFinish,
+			finalRes.TotalFinishTime,
+			chosen.Job.LocalChunkCount,
+			chosen.Job.DirectChunkCount,
+			chosen.Job.MissingChunkCount,
+			len(chosen.Job.Steps),
 		)
 
 		unscheduled = append(
