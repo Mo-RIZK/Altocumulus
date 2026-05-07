@@ -1345,6 +1345,7 @@ func (c *Cluster) alertsHandler() {
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
 
+					fmt.Println("I am the responsible")
 					topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
 					if err != nil {
 						logger.Warnf("could not load topology: %s", err)
