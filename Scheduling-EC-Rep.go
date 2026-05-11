@@ -654,7 +654,7 @@ func chooseGreedyDynamicHelpers(
 	return selected, true
 }
 
-func buildDynamicRepairJobForPeer(
+func buildDynamicRepairJobForPeer_old(
 	scheduledJobs []RepairJob,
 	shard api.Pin,
 	repairPeer peer.ID,
@@ -1351,4 +1351,168 @@ func ScheduleGlobalSauff2(
 	}
 
 	return assignments, assignedPairs
+}
+
+func buildDynamicRepairJobForPeer(
+	scheduledJobs []RepairJob,
+	shard api.Pin,
+	repairPeer peer.ID,
+	failedPeer peer.ID,
+	helperCandidates []peer.ID,
+	n int,
+	shardSize int,
+	shardCIDs []string,
+	peerMatches map[peer.ID]int,
+	peerMatchedCIDs map[peer.ID][]string,
+	topology *NetworkTopology,
+	chunkMB float64,
+) (RepairJob, bool) {
+	localChunkCount := 0
+	if peerMatches != nil {
+		localChunkCount = peerMatches[repairPeer]
+	}
+
+	repairPeerLocalHelper := false
+	remoteHelpers := make([]peer.ID, 0)
+	seenHelpers := make(map[peer.ID]bool)
+
+	for _, h := range helperCandidates {
+		if h == failedPeer {
+			continue
+		}
+		if seenHelpers[h] {
+			continue
+		}
+		seenHelpers[h] = true
+
+		if h == repairPeer {
+			repairPeerLocalHelper = true
+			continue
+		}
+
+		if topologyPairwise(topology, h, repairPeer) > 0 {
+			remoteHelpers = append(remoteHelpers, h)
+		}
+	}
+
+	neededRemoteHelpers := n
+	if repairPeerLocalHelper {
+		neededRemoteHelpers = n - 1
+	}
+	if neededRemoteHelpers < 0 {
+		neededRemoteHelpers = 0
+	}
+
+	uniqueMatches := buildUniqueMatches(peerMatchedCIDs)
+
+	steps := make([]RepairStep, 0)
+	otherElementSources := make([]peer.ID, 0)
+	selectedHelpers := make([]peer.ID, 0)
+
+	directCount := 0
+	missingCount := 0
+
+	// Direct chunks are counted and their sources are stored,
+	// but they are NOT added as simulation steps.
+	for _, c := range shardCIDs {
+		c = cleanCIDString(c)
+		if c == "" {
+			continue
+		}
+
+		if peerHasCID(peerMatchedCIDs, repairPeer, c) {
+			continue
+		}
+
+		if uniqueMatches[c] {
+			possibleSources := sourcesForCID(
+				c,
+				repairPeer,
+				failedPeer,
+				peerMatchedCIDs,
+				topology,
+			)
+
+			if len(possibleSources) > 0 {
+				// Choose best source by pairwise bandwidth only.
+				// No simulation is done for direct chunks.
+				bestSrc := possibleSources[0]
+				bestBw := topologyPairwise(topology, bestSrc, repairPeer)
+
+				for _, src := range possibleSources[1:] {
+					bw := topologyPairwise(topology, src, repairPeer)
+					if bw > bestBw || (bw == bestBw && src.String() < bestSrc.String()) {
+						bestSrc = src
+						bestBw = bw
+					}
+				}
+
+				directCount++
+				otherElementSources = append(otherElementSources, bestSrc)
+
+				// IMPORTANT:
+				// No direct RepairStep is appended here.
+				continue
+			}
+		}
+
+		missingCount++
+	}
+
+	if missingCount > 0 {
+		if len(remoteHelpers) < neededRemoteHelpers {
+			return RepairJob{}, false
+		}
+
+		helpers, ok := chooseGreedyDynamicHelpers(
+			scheduledJobs,
+			shard,
+			repairPeer,
+			remoteHelpers,
+			neededRemoteHelpers,
+			steps,
+			localChunkCount,
+			directCount,
+			missingCount,
+			otherElementSources,
+			topology,
+			chunkMB,
+			repairPeerLocalHelper,
+		)
+
+		if !ok {
+			return RepairJob{}, false
+		}
+
+		selectedHelpers = helpers
+
+		// Only missing chunks are simulated.
+		// All missing chunks are aggregated into one reconstruction step.
+		steps = append(steps, buildAggregatedMissingStep(
+			selectedHelpers,
+			repairPeer,
+			missingCount,
+			chunkMB,
+		))
+	}
+
+	job := RepairJob{
+		Shard:      shard,
+		RepairPeer: repairPeer,
+		Steps:      steps,
+
+		LocalChunkCount:   localChunkCount,
+		DirectChunkCount:  directCount,
+		MissingChunkCount: missingCount,
+
+		OtherElementSources: otherElementSources,
+		SelectedHelpers:     selectedHelpers,
+
+		RepairPeerLocalHelper: repairPeerLocalHelper,
+		NeededRemoteHelpers:   neededRemoteHelpers,
+	}
+
+	_ = shardSize
+
+	return job, true
 }
