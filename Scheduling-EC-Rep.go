@@ -654,6 +654,28 @@ func chooseGreedyDynamicHelpers(
 	return selected, true
 }
 
+func setCommonMetadata_here(pin *api.Pin, common []string) {
+	cleaned := make([]string, 0, len(common))
+	seen := make(map[string]bool)
+
+	for _, c := range common {
+		c = cleanCIDString(c)
+
+		if c == "" || seen[c] {
+			continue
+		}
+
+		seen[c] = true
+		cleaned = append(cleaned, c)
+	}
+
+	if pin.Metadata == nil {
+		pin.Metadata = make(map[string]string)
+	}
+
+	pin.Metadata["common"] = strings.Join(cleaned, ",")
+}
+
 func buildDynamicRepairJobForPeer_old(
 	scheduledJobs []RepairJob,
 	shard api.Pin,
@@ -1380,9 +1402,11 @@ func buildDynamicRepairJobForPeer(
 		if h == failedPeer {
 			continue
 		}
+
 		if seenHelpers[h] {
 			continue
 		}
+
 		seenHelpers[h] = true
 
 		if h == repairPeer {
@@ -1396,9 +1420,11 @@ func buildDynamicRepairJobForPeer(
 	}
 
 	neededRemoteHelpers := n
+
 	if repairPeerLocalHelper {
 		neededRemoteHelpers = n - 1
 	}
+
 	if neededRemoteHelpers < 0 {
 		neededRemoteHelpers = 0
 	}
@@ -1406,24 +1432,33 @@ func buildDynamicRepairJobForPeer(
 	uniqueMatches := buildUniqueMatches(peerMatchedCIDs)
 
 	steps := make([]RepairStep, 0)
+
 	otherElementSources := make([]peer.ID, 0)
 	selectedHelpers := make([]peer.ID, 0)
 
 	directCount := 0
 	missingCount := 0
 
+	// NEW:
+	// Store all chunks already found locally or directly in the system.
+	commonCIDs := make([]string, 0)
+
 	// Direct chunks are counted and their sources are stored,
 	// but they are NOT added as simulation steps.
 	for _, c := range shardCIDs {
 		c = cleanCIDString(c)
+
 		if c == "" {
 			continue
 		}
 
+		// LOCAL CHUNK
 		if peerHasCID(peerMatchedCIDs, repairPeer, c) {
+			commonCIDs = append(commonCIDs, c)
 			continue
 		}
 
+		// DIRECT CHUNK
 		if uniqueMatches[c] {
 			possibleSources := sourcesForCID(
 				c,
@@ -1434,14 +1469,15 @@ func buildDynamicRepairJobForPeer(
 			)
 
 			if len(possibleSources) > 0 {
-				// Choose best source by pairwise bandwidth only.
-				// No simulation is done for direct chunks.
+				// Choose best source using highest pairwise bandwidth.
 				bestSrc := possibleSources[0]
 				bestBw := topologyPairwise(topology, bestSrc, repairPeer)
 
 				for _, src := range possibleSources[1:] {
 					bw := topologyPairwise(topology, src, repairPeer)
-					if bw > bestBw || (bw == bestBw && src.String() < bestSrc.String()) {
+
+					if bw > bestBw ||
+						(bw == bestBw && src.String() < bestSrc.String()) {
 						bestSrc = src
 						bestBw = bw
 					}
@@ -1450,12 +1486,17 @@ func buildDynamicRepairJobForPeer(
 				directCount++
 				otherElementSources = append(otherElementSources, bestSrc)
 
+				// NEW:
+				// Direct chunk found in the system.
+				commonCIDs = append(commonCIDs, c)
+
 				// IMPORTANT:
-				// No direct RepairStep is appended here.
+				// No direct RepairStep is appended.
 				continue
 			}
 		}
 
+		// MISSING CHUNK
 		missingCount++
 	}
 
@@ -1487,7 +1528,6 @@ func buildDynamicRepairJobForPeer(
 		selectedHelpers = helpers
 
 		// Only missing chunks are simulated.
-		// All missing chunks are aggregated into one reconstruction step.
 		steps = append(steps, buildAggregatedMissingStep(
 			selectedHelpers,
 			repairPeer,
@@ -1495,6 +1535,10 @@ func buildDynamicRepairJobForPeer(
 			chunkMB,
 		))
 	}
+
+	// NEW:
+	// Save local + direct chunks into shard metadata.
+	setCommonMetadata_here(&shard, commonCIDs)
 
 	job := RepairJob{
 		Shard:      shard,
