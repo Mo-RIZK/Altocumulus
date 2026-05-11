@@ -1365,7 +1365,7 @@ func (c *Cluster) alertsHandler() {
 					for _, p := range allpeers {
 						fmt.Printf("candidate peer=%s\n", p.String())
 					}
-					assignments, assignedPairs := ScheduleGlobalMaxMin(
+					assignments, assignedPairs := ScheduleGlobalMaxMinSimple(
 						alrt.Peer, // failed peer
 						CIDsSim4,  // failed shards
 						allpeers,  // candidate repair peers
@@ -1432,7 +1432,7 @@ func (c *Cluster) alertsHandler() {
 					for _, p := range allpeers {
 						fmt.Printf("candidate peer=%s\n", p.String())
 					}
-					assignments, assignedPairs := ScheduleGlobalSauff2(
+					assignments, assignedPairs := ScheduleGlobalSauff2Simple(
 						alrt.Peer, // failed peer
 						CIDsSim4,  // failed shards
 						allpeers,  // candidate repair peers
