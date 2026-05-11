@@ -733,7 +733,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 0 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based
+			sim := 7 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
@@ -904,7 +904,7 @@ func (c *Cluster) alertsHandler() {
 								c.Enqueue(c.ctx, pin)
 							}
 						}
-						if sim == 5 || sim == 6 {
+						if sim == 5 || sim == 6 || sim == 7 {
 							CIDsSim4 = append(CIDsSim4, pin)
 							fff = true
 						}
@@ -1380,6 +1380,73 @@ func (c *Cluster) alertsHandler() {
 					)
 
 					fmt.Printf("RESOURCE-AWARE MAX-MIN assigned %d shards\n", len(assignedPairs))
+
+					total := 0
+					for peerID, pins := range assignments {
+						fmt.Printf("Repair peer %s -> %d shards\n", peerID.String(), len(pins))
+						total += len(pins)
+					}
+					fmt.Printf("TOTAL ASSIGNED: %d / %d\n", total, len(CIDsSim4))
+
+					for peerID, pins := range assignments {
+						for _, pin := range pins {
+							if peerID == c.id {
+								c.Enqueue(c.ctx, pin)
+							} else {
+								var out bool
+								c.rpcClient.CallContext(
+									c.ctx,
+									peerID,
+									"Cluster",
+									"Enqueue",
+									&pin,
+									&out,
+								)
+							}
+						}
+					}
+
+				}
+			}
+			if (sim == 7) && fff {
+				SortCIDs(CIDsSim4)
+				if distance.isClosest(CIDsSim4[0].Cid) {
+
+					fmt.Println("I am the responsible")
+					topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
+					if err != nil {
+						logger.Warnf("could not load topology: %s", err)
+						continue
+					}
+					topology.PrintFull()
+
+					allpeers := distance.otherPeers
+					allpeers = append(allpeers, c.id)
+
+					fmt.Println("DEBUG topology peer IDs:")
+					for p, n := range topology.NodesByPeer {
+						fmt.Printf("topology peer=%s node=%s\n", p.String(), n.Name)
+					}
+
+					fmt.Println("DEBUG candidate peer IDs:")
+					for _, p := range allpeers {
+						fmt.Printf("candidate peer=%s\n", p.String())
+					}
+					assignments, assignedPairs := ScheduleGlobalSauff2(
+						alrt.Peer, // failed peer
+						CIDsSim4,  // failed shards
+						allpeers,  // candidate repair peers
+						topology,
+						0.25, // chunk size in MB
+						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
+							return c.get_shards_same_stripe(pin)
+						},
+						func(pin api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string) {
+							return c.similarities_Max_Min_Sauff(c.ctx, pin)
+						},
+					)
+
+					fmt.Printf("RESOURCE-AWARE SAUFF2 assigned %d shards\n", len(assignedPairs))
 
 					total := 0
 					for peerID, pins := range assignments {

@@ -1070,3 +1070,285 @@ func ScheduleGlobalMaxMin(
 
 	return assignments, assignedPairs
 }
+func ScheduleGlobalSauff2(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
+) (map[peer.ID][]api.Pin, []MaxMinAssignment) {
+	fmt.Println("In DYNAMIC BANDWIDTH-AWARE SAUFF2 Repair Strategy with Greedy Helpers and Aggregated Missing Step !!!")
+
+	assignments := make(map[peer.ID][]api.Pin)
+	assignedPairs := make([]MaxMinAssignment, 0)
+
+	if len(failedShards) == 0 || len(candidatePeers) == 0 {
+		return assignments, assignedPairs
+	}
+
+	candidatePeers = sortedUniquePeers(candidatePeers)
+
+	type ShardPrecompute struct {
+		Shard api.Pin
+
+		ShardCIDs []string
+		ShardSize int
+
+		HelperCandidates []peer.ID
+		N                int
+
+		PeerMatches     map[peer.ID]int
+		PeerMatchedCIDs map[peer.ID][]string
+	}
+
+	precomputed := make(map[string]ShardPrecompute)
+
+	for _, shard := range failedShards {
+		shardKey := shard.Cid.String()
+
+		shardCIDs := cidListFromPin(shard)
+		shardSize := len(shardCIDs)
+		if shardSize == 0 {
+			continue
+		}
+
+		_, helperCandidates, n, shardLength := getSameStripe(shard)
+		if shardLength > 0 {
+			shardSize = shardLength
+		}
+
+		_, _, peerMatches, peerMatchedCIDs := getSimilarity(shard)
+
+		precomputed[shardKey] = ShardPrecompute{
+			Shard: shard,
+
+			ShardCIDs: shardCIDs,
+			ShardSize: shardSize,
+
+			HelperCandidates: sortedUniquePeers(helperCandidates),
+			N:                n,
+
+			PeerMatches:     peerMatches,
+			PeerMatchedCIDs: peerMatchedCIDs,
+		}
+	}
+
+	unscheduled := make([]api.Pin, 0)
+	for _, shard := range failedShards {
+		if _, ok := precomputed[shard.Cid.String()]; ok {
+			unscheduled = append(unscheduled, shard)
+		}
+	}
+
+	scheduledJobs := make([]RepairJob, 0)
+
+	for len(unscheduled) > 0 {
+		type CandidateOption struct {
+			Peer     peer.ID
+			Job      RepairJob
+			Makespan float64
+		}
+
+		type SauffBest struct {
+			Shard api.Pin
+
+			BestPeer     peer.ID
+			BestJob      RepairJob
+			BestMakespan float64
+
+			SecondMakespan float64
+
+			MinProcessingTime float64
+			WeightedScore     float64
+		}
+
+		bestForShard := make(map[string]SauffBest)
+
+		for _, shard := range unscheduled {
+			pc := precomputed[shard.Cid.String()]
+
+			options := make([]CandidateOption, 0)
+
+			for _, repairPeer := range candidatePeers {
+				if repairPeer == failedPeer {
+					continue
+				}
+
+				if topologyNodeIn(topology, repairPeer) == 0 {
+					continue
+				}
+
+				job, ok := buildDynamicRepairJobForPeer(
+					scheduledJobs,
+					pc.Shard,
+					repairPeer,
+					failedPeer,
+					pc.HelperCandidates,
+					pc.N,
+					pc.ShardSize,
+					pc.ShardCIDs,
+					pc.PeerMatches,
+					pc.PeerMatchedCIDs,
+					topology,
+					chunkMB,
+				)
+
+				if !ok {
+					continue
+				}
+
+				res := simulateRepairJobs(appendJob(scheduledJobs, job), topology)
+
+				if math.IsInf(res.TotalFinishTime, 1) {
+					continue
+				}
+
+				options = append(options, CandidateOption{
+					Peer:     repairPeer,
+					Job:      job,
+					Makespan: res.TotalFinishTime,
+				})
+			}
+
+			if len(options) == 0 {
+				continue
+			}
+
+			sort.Slice(options, func(i, j int) bool {
+				if options[i].Makespan == options[j].Makespan {
+					return options[i].Peer.String() < options[j].Peer.String()
+				}
+				return options[i].Makespan < options[j].Makespan
+			})
+
+			best := options[0]
+			secondMakespan := best.Makespan
+
+			if len(options) >= 2 {
+				secondMakespan = options[1].Makespan
+			}
+
+			bestJobAlone := simulateRepairJobs([]RepairJob{best.Job}, topology)
+			minProcessingTime := bestJobAlone.TotalFinishTime
+
+			weightedScore := math.Inf(1)
+
+			if len(options) >= 2 && best.Makespan > 0 {
+				weightedScore =
+					(secondMakespan - best.Makespan) *
+						(minProcessingTime / best.Makespan)
+			}
+
+			bestForShard[shard.Cid.String()] = SauffBest{
+				Shard: shard,
+
+				BestPeer:     best.Peer,
+				BestJob:      best.Job,
+				BestMakespan: best.Makespan,
+
+				SecondMakespan: secondMakespan,
+
+				MinProcessingTime: minProcessingTime,
+				WeightedScore:     weightedScore,
+			}
+		}
+
+		if len(bestForShard) == 0 {
+			break
+		}
+
+		chosenIndex := -1
+		chosenKey := ""
+		chosenWeighted := -1.0
+		chosenBestMakespan := math.Inf(1)
+
+		for idx, shard := range unscheduled {
+			key := shard.Cid.String()
+			cand, ok := bestForShard[key]
+			if !ok {
+				continue
+			}
+
+			if chosenIndex == -1 ||
+				cand.WeightedScore > chosenWeighted ||
+				(cand.WeightedScore == chosenWeighted && cand.BestMakespan < chosenBestMakespan) ||
+				(cand.WeightedScore == chosenWeighted && cand.BestMakespan == chosenBestMakespan && key < chosenKey) {
+				chosenIndex = idx
+				chosenKey = key
+				chosenWeighted = cand.WeightedScore
+				chosenBestMakespan = cand.BestMakespan
+			}
+		}
+
+		if chosenIndex == -1 {
+			break
+		}
+
+		chosenShard := unscheduled[chosenIndex]
+		chosen := bestForShard[chosenShard.Cid.String()]
+
+		scheduledJobs = append(scheduledJobs, chosen.BestJob)
+
+		finalRes := simulateRepairJobs(scheduledJobs, topology)
+		jobFinish := finalRes.JobFinishTimes[chosenShard.Cid.String()]
+		chosen.BestJob.FinishTime = jobFinish
+
+		assignments[chosen.BestPeer] = append(assignments[chosen.BestPeer], chosenShard)
+
+		pc := precomputed[chosenShard.Cid.String()]
+
+		estimate := MaxMinEstimate{
+			Shard:      chosenShard,
+			RepairPeer: chosen.BestPeer,
+
+			ProcessingTime: jobFinish,
+			FinishTime:     jobFinish,
+
+			ShardSize: pc.ShardSize,
+
+			LocalChunkCount:   chosen.BestJob.LocalChunkCount,
+			DirectChunkCount:  chosen.BestJob.DirectChunkCount,
+			MissingChunkCount: chosen.BestJob.MissingChunkCount,
+
+			OtherElementSources: chosen.BestJob.OtherElementSources,
+			SelectedHelpers:     chosen.BestJob.SelectedHelpers,
+
+			RepairPeerLocalHelper: chosen.BestJob.RepairPeerLocalHelper,
+			NeededRemoteHelpers:   chosen.BestJob.NeededRemoteHelpers,
+
+			Job: chosen.BestJob,
+		}
+
+		assignedPairs = append(assignedPairs, MaxMinAssignment{
+			Shard:    chosenShard,
+			Estimate: estimate,
+		})
+
+		fmt.Printf(
+			"SAUFF2 assigned shard=%s repairPeer=%s jobFinish=%f currentTotalMakespan=%f weightedScore=%f bestMakespan=%f secondMakespan=%f minProcessingTime=%f local=%d direct=%d missing=%d steps=%d helpers=%d\n",
+			chosenShard.Name,
+			chosen.BestPeer.String(),
+			jobFinish,
+			finalRes.TotalFinishTime,
+			chosen.WeightedScore,
+			chosen.BestMakespan,
+			chosen.SecondMakespan,
+			chosen.MinProcessingTime,
+			chosen.BestJob.LocalChunkCount,
+			chosen.BestJob.DirectChunkCount,
+			chosen.BestJob.MissingChunkCount,
+			len(chosen.BestJob.Steps),
+			len(chosen.BestJob.SelectedHelpers),
+		)
+
+		unscheduled = append(
+			unscheduled[:chosenIndex],
+			unscheduled[chosenIndex+1:]...,
+		)
+	}
+
+	return assignments, assignedPairs
+}
