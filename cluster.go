@@ -733,7 +733,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 6 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based
+			sim := 6 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based --- 6:maxmin --- 7:sauff2
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
@@ -1342,6 +1342,7 @@ func (c *Cluster) alertsHandler() {
 				}
 			}
 			if (sim == 6) && fff {
+				sstt := time.Now()
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
 
@@ -1400,7 +1401,7 @@ func (c *Cluster) alertsHandler() {
 						fmt.Printf("Repair peer %s -> %d shards\n", peerID.String(), len(pins))
 						total += len(pins)
 					}
-					fmt.Printf("TOTAL ASSIGNED: %d / %d\n", total, len(CIDsSim4))
+					fmt.Printf("TOTAL ASSIGNED: %d / %d and it took %s \n", total, len(CIDsSim4), time.Now().Sub(sstt).String())
 
 					for peerID, pins := range assignments {
 						for _, pin := range pins {
@@ -1423,6 +1424,7 @@ func (c *Cluster) alertsHandler() {
 				}
 			}
 			if (sim == 7) && fff {
+				sstt := time.Now()
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
 
@@ -1480,7 +1482,7 @@ func (c *Cluster) alertsHandler() {
 						fmt.Printf("Repair peer %s -> %d shards\n", peerID.String(), len(pins))
 						total += len(pins)
 					}
-					fmt.Printf("TOTAL ASSIGNED: %d / %d\n", total, len(CIDsSim4))
+					fmt.Printf("TOTAL ASSIGNED: %d / %d and it took %s \n", total, len(CIDsSim4), time.Now().Sub(sstt).String())
 
 					for peerID, pins := range assignments {
 						for _, pin := range pins {
