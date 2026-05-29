@@ -1365,12 +1365,26 @@ func (c *Cluster) alertsHandler() {
 					for _, p := range allpeers {
 						fmt.Printf("candidate peer=%s\n", p.String())
 					}
-					assignments, assignedPairs := ScheduleGlobalMaxMinSimple(
+					/*assignments, assignedPairs := ScheduleGlobalMaxMinSimple(
 						alrt.Peer, // failed peer
 						CIDsSim4,  // failed shards
 						allpeers,  // candidate repair peers
 						topology,
 						0.25, // chunk size in MB
+						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
+							return c.get_shards_same_stripe(pin)
+						},
+						func(pin api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string) {
+							return c.similarities_Max_Min_Sauff(c.ctx, pin)
+						},
+					)*/
+
+					assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly(
+						alrt.Peer,
+						CIDsSim4,
+						allpeers,
+						topology,
+						0.25,
 						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
 							return c.get_shards_same_stripe(pin)
 						},
@@ -1432,12 +1446,25 @@ func (c *Cluster) alertsHandler() {
 					for _, p := range allpeers {
 						fmt.Printf("candidate peer=%s\n", p.String())
 					}
-					assignments, assignedPairs := ScheduleGlobalSauff2Simple(
+					/*assignments, assignedPairs := ScheduleGlobalSauff2Simple(
 						alrt.Peer, // failed peer
 						CIDsSim4,  // failed shards
 						allpeers,  // candidate repair peers
 						topology,
 						0.25, // chunk size in MB
+						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
+							return c.get_shards_same_stripe(pin)
+						},
+						func(pin api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string) {
+							return c.similarities_Max_Min_Sauff(c.ctx, pin)
+						},
+					)*/
+					assignments, assignedPairs := ScheduleGlobalSauff2IncomingOnly(
+						alrt.Peer,
+						CIDsSim4,
+						allpeers,
+						topology,
+						0.25,
 						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
 							return c.get_shards_same_stripe(pin)
 						},
@@ -4265,6 +4292,14 @@ func (c *Cluster) similarities_Max_Min_Sauff(ctx context.Context, pin api.Pin) (
 	}
 
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 666666666666 \n")
-
+	first := 1
+	for _, com := range CIDMatches {
+		if first == 1 {
+			pin.Metadata["common"] = com
+			first++
+		} else {
+			pin.Metadata["common"] = pin.Metadata["common"] + "," + com
+		}
+	}
 	return bestPeer, CIDMatches, peerSim, peerMatchedCIDs
 }

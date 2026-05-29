@@ -2424,3 +2424,1325 @@ func ScheduleGlobalSauff2Simple(
 
 	return assignments, assignedPairs
 }
+
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////v
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+type IndexedChunkKind string
+
+const (
+	IndexedLocal   IndexedChunkKind = "local"
+	IndexedDirect  IndexedChunkKind = "direct"
+	IndexedMissing IndexedChunkKind = "missing"
+)
+
+type IndexedChunkRepair struct {
+	Index int
+	CID   string
+	Kind  IndexedChunkKind
+	Cost  int // local=0, direct=1, missing=n
+}
+
+type IndexedRepairEstimate struct {
+	Shard      api.Pin
+	RepairPeer peer.ID
+
+	Timeline    []IndexedChunkRepair
+	LoadByIndex map[int]int
+
+	LocalChunkCount   int
+	DirectChunkCount  int
+	MissingChunkCount int
+
+	ProcessingTime float64
+	FinishTime     float64
+}
+
+func sourcesForCIDIncomingOnlyIndexing(
+	cidStr string,
+	repairPeer peer.ID,
+	failedPeer peer.ID,
+	peerMatchedCIDs map[peer.ID][]string,
+) []peer.ID {
+	cidStr = cleanCIDString(cidStr)
+
+	sources := make([]peer.ID, 0)
+
+	for p, cids := range peerMatchedCIDs {
+		if p == failedPeer || p == repairPeer {
+			continue
+		}
+
+		for _, c := range cids {
+			if cleanCIDString(c) == cidStr {
+				sources = append(sources, p)
+				break
+			}
+		}
+	}
+
+	return sortedUniquePeers(sources)
+}
+
+func buildIndexedRepairTimeline(
+	repairPeer peer.ID,
+	failedPeer peer.ID,
+	shardCIDs []string,
+	peerMatchedCIDs map[peer.ID][]string,
+	n int,
+) ([]IndexedChunkRepair, int, int, int) {
+	uniqueMatches := buildUniqueMatches(peerMatchedCIDs)
+
+	timeline := make([]IndexedChunkRepair, 0, len(shardCIDs))
+
+	localCount := 0
+	directCount := 0
+	missingCount := 0
+
+	for i, c := range shardCIDs {
+		c = cleanCIDString(c)
+		if c == "" {
+			continue
+		}
+
+		index := i + 1
+
+		if peerHasCID(peerMatchedCIDs, repairPeer, c) {
+			localCount++
+			timeline = append(timeline, IndexedChunkRepair{
+				Index: index,
+				CID:   c,
+				Kind:  IndexedLocal,
+				Cost:  0,
+			})
+			continue
+		}
+
+		if uniqueMatches[c] {
+			possibleSources := sourcesForCIDIncomingOnly(
+				c,
+				repairPeer,
+				failedPeer,
+				peerMatchedCIDs,
+			)
+
+			if len(possibleSources) > 0 {
+				directCount++
+				timeline = append(timeline, IndexedChunkRepair{
+					Index: index,
+					CID:   c,
+					Kind:  IndexedDirect,
+					Cost:  1,
+				})
+				continue
+			}
+		}
+
+		missingCount++
+		timeline = append(timeline, IndexedChunkRepair{
+			Index: index,
+			CID:   c,
+			Kind:  IndexedMissing,
+			Cost:  n,
+		})
+	}
+
+	return timeline, localCount, directCount, missingCount
+}
+
+func estimateIndexedIncomingOnlyTime(
+	loadByIndex map[int]int,
+	repairPeer peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+) float64 {
+	in := topologyNodeIn(topology, repairPeer)
+	if in == 0 {
+		return math.Inf(1)
+	}
+
+	total := 0.0
+
+	for _, incomingChunks := range loadByIndex {
+		total += float64(incomingChunks) * chunkMB / float64(in)
+	}
+
+	return total
+}
+
+func estimatePeerLoadWithCandidate(
+	existingLoad map[int]int,
+	candidateTimeline []IndexedChunkRepair,
+	repairPeer peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+) float64 {
+	combined := make(map[int]int)
+
+	for index, load := range existingLoad {
+		combined[index] = load
+	}
+
+	for _, item := range candidateTimeline {
+		combined[item.Index] += item.Cost
+	}
+
+	return estimateIndexedIncomingOnlyTime(
+		combined,
+		repairPeer,
+		topology,
+		chunkMB,
+	)
+}
+
+func copyLoadByIndex(load map[int]int) map[int]int {
+	out := make(map[int]int)
+
+	for index, value := range load {
+		out[index] = value
+	}
+
+	return out
+}
+
+func ScheduleGlobalMaxMinIndexedIncomingOnly(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
+) (map[peer.ID][]api.Pin, []IndexedRepairEstimate) {
+	fmt.Println("In INDEXED INCOMING-ONLY MAX-MIN Repair Strategy !!!")
+
+	assignments := make(map[peer.ID][]api.Pin)
+	estimates := make([]IndexedRepairEstimate, 0)
+
+	if len(failedShards) == 0 || len(candidatePeers) == 0 {
+		return assignments, estimates
+	}
+
+	candidatePeers = sortedUniquePeers(candidatePeers)
+
+	type ShardPrecompute struct {
+		Shard           api.Pin
+		ShardCIDs       []string
+		ShardSize       int
+		N               int
+		PeerMatchedCIDs map[peer.ID][]string
+	}
+
+	precomputed := make(map[string]ShardPrecompute)
+
+	for _, shard := range failedShards {
+		shardKey := shard.Cid.String()
+
+		shardCIDs := cidListFromPin(shard)
+		shardSize := len(shardCIDs)
+		if shardSize == 0 {
+			continue
+		}
+
+		_, _, n, shardLength := getSameStripe(shard)
+		if shardLength > 0 {
+			shardSize = shardLength
+		}
+
+		_, _, _, peerMatchedCIDs := getSimilarity(shard)
+
+		precomputed[shardKey] = ShardPrecompute{
+			Shard:           shard,
+			ShardCIDs:       shardCIDs,
+			ShardSize:       shardSize,
+			N:               n,
+			PeerMatchedCIDs: peerMatchedCIDs,
+		}
+	}
+
+	unscheduled := make([]api.Pin, 0)
+
+	for _, shard := range failedShards {
+		if _, ok := precomputed[shard.Cid.String()]; ok {
+			unscheduled = append(unscheduled, shard)
+		}
+	}
+
+	peerLoadByIndex := make(map[peer.ID]map[int]int)
+
+	for _, p := range candidatePeers {
+		peerLoadByIndex[p] = make(map[int]int)
+	}
+
+	for len(unscheduled) > 0 {
+		type CandidateBest struct {
+			Shard api.Pin
+			Peer  peer.ID
+
+			Timeline []IndexedChunkRepair
+
+			LocalChunkCount   int
+			DirectChunkCount  int
+			MissingChunkCount int
+
+			CompletionTime float64
+		}
+
+		bestForShard := make(map[string]CandidateBest)
+
+		for _, shard := range unscheduled {
+			pc := precomputed[shard.Cid.String()]
+
+			bestPeer := peer.ID("")
+			bestCompletion := math.Inf(1)
+			var bestTimeline []IndexedChunkRepair
+
+			bestLocal := 0
+			bestDirect := 0
+			bestMissing := 0
+
+			for _, repairPeer := range candidatePeers {
+				if repairPeer == failedPeer {
+					continue
+				}
+
+				if topologyNodeIn(topology, repairPeer) == 0 {
+					continue
+				}
+
+				timeline, localCount, directCount, missingCount :=
+					buildIndexedRepairTimeline(
+						repairPeer,
+						failedPeer,
+						pc.ShardCIDs,
+						pc.PeerMatchedCIDs,
+						pc.N,
+					)
+
+				completion := estimatePeerLoadWithCandidate(
+					peerLoadByIndex[repairPeer],
+					timeline,
+					repairPeer,
+					topology,
+					chunkMB,
+				)
+
+				if math.IsInf(completion, 1) {
+					continue
+				}
+
+				if completion < bestCompletion ||
+					(completion == bestCompletion &&
+						(bestPeer == "" || repairPeer.String() < bestPeer.String())) {
+					bestPeer = repairPeer
+					bestCompletion = completion
+					bestTimeline = timeline
+					bestLocal = localCount
+					bestDirect = directCount
+					bestMissing = missingCount
+				}
+			}
+
+			if bestPeer != "" && !math.IsInf(bestCompletion, 1) {
+				bestForShard[shard.Cid.String()] = CandidateBest{
+					Shard: shard,
+					Peer:  bestPeer,
+
+					Timeline: bestTimeline,
+
+					LocalChunkCount:   bestLocal,
+					DirectChunkCount:  bestDirect,
+					MissingChunkCount: bestMissing,
+
+					CompletionTime: bestCompletion,
+				}
+			}
+		}
+
+		if len(bestForShard) == 0 {
+			break
+		}
+
+		chosenIndex := -1
+		chosenCompletion := -1.0
+		chosenKey := ""
+
+		for idx, shard := range unscheduled {
+			key := shard.Cid.String()
+			cand, ok := bestForShard[key]
+			if !ok {
+				continue
+			}
+
+			if chosenIndex == -1 ||
+				cand.CompletionTime > chosenCompletion ||
+				(cand.CompletionTime == chosenCompletion && key < chosenKey) {
+				chosenIndex = idx
+				chosenCompletion = cand.CompletionTime
+				chosenKey = key
+			}
+		}
+
+		if chosenIndex == -1 {
+			break
+		}
+
+		chosenShard := unscheduled[chosenIndex]
+		chosen := bestForShard[chosenShard.Cid.String()]
+
+		for _, item := range chosen.Timeline {
+			peerLoadByIndex[chosen.Peer][item.Index] += item.Cost
+		}
+
+		assignments[chosen.Peer] = append(assignments[chosen.Peer], chosenShard)
+
+		finalLoad := copyLoadByIndex(peerLoadByIndex[chosen.Peer])
+
+		finalTime := estimateIndexedIncomingOnlyTime(
+			finalLoad,
+			chosen.Peer,
+			topology,
+			chunkMB,
+		)
+
+		estimate := IndexedRepairEstimate{
+			Shard:      chosenShard,
+			RepairPeer: chosen.Peer,
+
+			Timeline:    chosen.Timeline,
+			LoadByIndex: finalLoad,
+
+			LocalChunkCount:   chosen.LocalChunkCount,
+			DirectChunkCount:  chosen.DirectChunkCount,
+			MissingChunkCount: chosen.MissingChunkCount,
+
+			ProcessingTime: chosen.CompletionTime,
+			FinishTime:     finalTime,
+		}
+
+		estimates = append(estimates, estimate)
+
+		fmt.Printf(
+			"INDEXED INCOMING-ONLY assigned shard=%s repairPeer=%s finish=%f local=%d direct=%d missing=%d indexes=%d\n",
+			chosenShard.Name,
+			chosen.Peer.String(),
+			finalTime,
+			chosen.LocalChunkCount,
+			chosen.DirectChunkCount,
+			chosen.MissingChunkCount,
+			len(finalLoad),
+		)
+
+		unscheduled = append(
+			unscheduled[:chosenIndex],
+			unscheduled[chosenIndex+1:]...,
+		)
+	}
+
+	return assignments, estimates
+}
+
+func ScheduleGlobalSauff2IndexedIncomingOnly(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
+) (map[peer.ID][]api.Pin, []IndexedRepairEstimate) {
+	fmt.Println("In INDEXED INCOMING-ONLY SAUFF2 Repair Strategy !!!")
+
+	assignments := make(map[peer.ID][]api.Pin)
+	estimates := make([]IndexedRepairEstimate, 0)
+
+	if len(failedShards) == 0 || len(candidatePeers) == 0 {
+		return assignments, estimates
+	}
+
+	candidatePeers = sortedUniquePeers(candidatePeers)
+
+	type ShardPrecompute struct {
+		Shard           api.Pin
+		ShardCIDs       []string
+		ShardSize       int
+		N               int
+		PeerMatchedCIDs map[peer.ID][]string
+	}
+
+	precomputed := make(map[string]ShardPrecompute)
+
+	for _, shard := range failedShards {
+		shardKey := shard.Cid.String()
+
+		shardCIDs := cidListFromPin(shard)
+		shardSize := len(shardCIDs)
+		if shardSize == 0 {
+			continue
+		}
+
+		_, _, n, shardLength := getSameStripe(shard)
+		if shardLength > 0 {
+			shardSize = shardLength
+		}
+
+		_, _, _, peerMatchedCIDs := getSimilarity(shard)
+
+		precomputed[shardKey] = ShardPrecompute{
+			Shard:           shard,
+			ShardCIDs:       shardCIDs,
+			ShardSize:       shardSize,
+			N:               n,
+			PeerMatchedCIDs: peerMatchedCIDs,
+		}
+	}
+
+	unscheduled := make([]api.Pin, 0)
+	for _, shard := range failedShards {
+		if _, ok := precomputed[shard.Cid.String()]; ok {
+			unscheduled = append(unscheduled, shard)
+		}
+	}
+
+	peerLoadByIndex := make(map[peer.ID]map[int]int)
+	for _, p := range candidatePeers {
+		peerLoadByIndex[p] = make(map[int]int)
+	}
+
+	for len(unscheduled) > 0 {
+		type CandidateOption struct {
+			Peer peer.ID
+
+			Timeline []IndexedChunkRepair
+
+			LocalChunkCount   int
+			DirectChunkCount  int
+			MissingChunkCount int
+
+			CompletionTime float64
+			ProcessingTime float64
+		}
+
+		type SauffBest struct {
+			Shard api.Pin
+
+			BestPeer peer.ID
+			Best     CandidateOption
+
+			SecondCompletion float64
+			MinProcessing    float64
+			WeightedScore    float64
+		}
+
+		bestForShard := make(map[string]SauffBest)
+
+		for _, shard := range unscheduled {
+			pc := precomputed[shard.Cid.String()]
+
+			options := make([]CandidateOption, 0)
+
+			for _, repairPeer := range candidatePeers {
+				if repairPeer == failedPeer {
+					continue
+				}
+
+				if topologyNodeIn(topology, repairPeer) == 0 {
+					continue
+				}
+
+				timeline, localCount, directCount, missingCount :=
+					buildIndexedRepairTimeline(
+						repairPeer,
+						failedPeer,
+						pc.ShardCIDs,
+						pc.PeerMatchedCIDs,
+						pc.N,
+					)
+
+				completion := estimatePeerLoadWithCandidate(
+					peerLoadByIndex[repairPeer],
+					timeline,
+					repairPeer,
+					topology,
+					chunkMB,
+				)
+
+				standaloneLoad := aggregateIndexedLoad([][]IndexedChunkRepair{timeline})
+				processing := estimateIndexedIncomingOnlyTime(
+					standaloneLoad,
+					repairPeer,
+					topology,
+					chunkMB,
+				)
+
+				if math.IsInf(completion, 1) || math.IsInf(processing, 1) {
+					continue
+				}
+
+				options = append(options, CandidateOption{
+					Peer: repairPeer,
+
+					Timeline: timeline,
+
+					LocalChunkCount:   localCount,
+					DirectChunkCount:  directCount,
+					MissingChunkCount: missingCount,
+
+					CompletionTime: completion,
+					ProcessingTime: processing,
+				})
+			}
+
+			if len(options) == 0 {
+				continue
+			}
+
+			sort.Slice(options, func(i, j int) bool {
+				if options[i].CompletionTime == options[j].CompletionTime {
+					return options[i].Peer.String() < options[j].Peer.String()
+				}
+				return options[i].CompletionTime < options[j].CompletionTime
+			})
+
+			best := options[0]
+
+			secondCompletion := best.CompletionTime
+			if len(options) >= 2 {
+				secondCompletion = options[1].CompletionTime
+			}
+
+			minProcessing := math.Inf(1)
+			for _, opt := range options {
+				if opt.ProcessingTime < minProcessing {
+					minProcessing = opt.ProcessingTime
+				}
+			}
+
+			weightedScore := math.Inf(1)
+			if len(options) >= 2 && best.CompletionTime > 0 {
+				weightedScore =
+					(secondCompletion - best.CompletionTime) *
+						(minProcessing / best.CompletionTime)
+			}
+
+			bestForShard[shard.Cid.String()] = SauffBest{
+				Shard: shard,
+
+				BestPeer: best.Peer,
+				Best:     best,
+
+				SecondCompletion: secondCompletion,
+				MinProcessing:    minProcessing,
+				WeightedScore:    weightedScore,
+			}
+		}
+
+		if len(bestForShard) == 0 {
+			break
+		}
+
+		chosenIndex := -1
+		chosenKey := ""
+		chosenWeighted := -1.0
+		chosenBestCompletion := math.Inf(1)
+
+		for idx, shard := range unscheduled {
+			key := shard.Cid.String()
+			cand, ok := bestForShard[key]
+			if !ok {
+				continue
+			}
+
+			if chosenIndex == -1 ||
+				cand.WeightedScore > chosenWeighted ||
+				(cand.WeightedScore == chosenWeighted && cand.Best.CompletionTime < chosenBestCompletion) ||
+				(cand.WeightedScore == chosenWeighted && cand.Best.CompletionTime == chosenBestCompletion && key < chosenKey) {
+				chosenIndex = idx
+				chosenKey = key
+				chosenWeighted = cand.WeightedScore
+				chosenBestCompletion = cand.Best.CompletionTime
+			}
+		}
+
+		if chosenIndex == -1 {
+			break
+		}
+
+		chosenShard := unscheduled[chosenIndex]
+		chosen := bestForShard[chosenShard.Cid.String()]
+		best := chosen.Best
+
+		for _, item := range best.Timeline {
+			peerLoadByIndex[chosen.BestPeer][item.Index] += item.Cost
+		}
+
+		assignments[chosen.BestPeer] = append(assignments[chosen.BestPeer], chosenShard)
+
+		finalLoad := copyLoadByIndex(peerLoadByIndex[chosen.BestPeer])
+
+		finalTime := estimateIndexedIncomingOnlyTime(
+			finalLoad,
+			chosen.BestPeer,
+			topology,
+			chunkMB,
+		)
+
+		estimate := IndexedRepairEstimate{
+			Shard:      chosenShard,
+			RepairPeer: chosen.BestPeer,
+
+			Timeline:    best.Timeline,
+			LoadByIndex: finalLoad,
+
+			LocalChunkCount:   best.LocalChunkCount,
+			DirectChunkCount:  best.DirectChunkCount,
+			MissingChunkCount: best.MissingChunkCount,
+
+			ProcessingTime: best.ProcessingTime,
+			FinishTime:     finalTime,
+		}
+
+		estimates = append(estimates, estimate)
+
+		fmt.Printf(
+			"INDEXED INCOMING-ONLY SAUFF2 assigned shard=%s repairPeer=%s finish=%f weighted=%f bestCompletion=%f secondCompletion=%f local=%d direct=%d missing=%d indexes=%d\n",
+			chosenShard.Name,
+			chosen.BestPeer.String(),
+			finalTime,
+			chosen.WeightedScore,
+			best.CompletionTime,
+			chosen.SecondCompletion,
+			best.LocalChunkCount,
+			best.DirectChunkCount,
+			best.MissingChunkCount,
+			len(finalLoad),
+		)
+
+		unscheduled = append(
+			unscheduled[:chosenIndex],
+			unscheduled[chosenIndex+1:]...,
+		)
+	}
+
+	return assignments, estimates
+}
+
+// Merge one or more shard timelines into:
+// index -> total incoming chunks at that index
+func aggregateIndexedLoad(
+	timelines [][]IndexedChunkRepair,
+) map[int]int {
+
+	loadByIndex := make(map[int]int)
+
+	for _, timeline := range timelines {
+		for _, item := range timeline {
+
+			// local=0
+			// direct=1
+			// missing=n
+
+			loadByIndex[item.Index] += item.Cost
+		}
+	}
+
+	return loadByIndex
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+
+type IncomingOnlyEstimate struct {
+	Shard      api.Pin
+	RepairPeer peer.ID
+
+	LocalChunkCount   int
+	DirectChunkCount  int
+	MissingChunkCount int
+
+	IncomingChunkCount int
+
+	ProcessingTime float64
+	FinishTime     float64
+}
+
+func sourcesForCIDIncomingOnly(
+	cidStr string,
+	repairPeer peer.ID,
+	failedPeer peer.ID,
+	peerMatchedCIDs map[peer.ID][]string,
+) []peer.ID {
+	cidStr = cleanCIDString(cidStr)
+
+	sources := make([]peer.ID, 0)
+
+	for p, cids := range peerMatchedCIDs {
+		if p == failedPeer || p == repairPeer {
+			continue
+		}
+
+		for _, c := range cids {
+			if cleanCIDString(c) == cidStr {
+				sources = append(sources, p)
+				break
+			}
+		}
+	}
+
+	return sortedUniquePeers(sources)
+}
+
+func buildIncomingOnlyCounts(
+	repairPeer peer.ID,
+	failedPeer peer.ID,
+	shardCIDs []string,
+	peerMatchedCIDs map[peer.ID][]string,
+	n int,
+) (int, int, int, int) {
+	uniqueMatches := buildUniqueMatches(peerMatchedCIDs)
+
+	localCount := 0
+	directCount := 0
+	missingCount := 0
+
+	for _, c := range shardCIDs {
+		c = cleanCIDString(c)
+		if c == "" {
+			continue
+		}
+
+		if peerHasCID(peerMatchedCIDs, repairPeer, c) {
+			localCount++
+			continue
+		}
+
+		if uniqueMatches[c] {
+			possibleSources := sourcesForCIDIncomingOnly(
+				c,
+				repairPeer,
+				failedPeer,
+				peerMatchedCIDs,
+			)
+
+			if len(possibleSources) > 0 {
+				directCount++
+				continue
+			}
+		}
+
+		missingCount++
+	}
+
+	incomingChunkCount := directCount + (missingCount * n)
+
+	return localCount, directCount, missingCount, incomingChunkCount
+}
+
+func estimateIncomingOnlyProcessingTime(
+	incomingChunkCount int,
+	repairPeer peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+) float64 {
+	in := topologyNodeIn(topology, repairPeer)
+	if in == 0 {
+		return math.Inf(1)
+	}
+
+	return float64(incomingChunkCount) * chunkMB / float64(in)
+}
+func ScheduleGlobalMaxMinIncomingOnly(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
+) (map[peer.ID][]api.Pin, []IncomingOnlyEstimate) {
+	fmt.Println("In TOTAL INCOMING-ONLY MAX-MIN Repair Strategy !!!")
+
+	assignments := make(map[peer.ID][]api.Pin)
+	estimates := make([]IncomingOnlyEstimate, 0)
+
+	if len(failedShards) == 0 || len(candidatePeers) == 0 {
+		return assignments, estimates
+	}
+
+	candidatePeers = sortedUniquePeers(candidatePeers)
+
+	type ShardPrecompute struct {
+		Shard           api.Pin
+		ShardCIDs       []string
+		ShardSize       int
+		N               int
+		PeerMatchedCIDs map[peer.ID][]string
+	}
+
+	precomputed := make(map[string]ShardPrecompute)
+
+	for _, shard := range failedShards {
+		shardKey := shard.Cid.String()
+
+		shardCIDs := cidListFromPin(shard)
+		shardSize := len(shardCIDs)
+		if shardSize == 0 {
+			continue
+		}
+
+		_, _, n, shardLength := getSameStripe(shard)
+		if shardLength > 0 {
+			shardSize = shardLength
+		}
+
+		_, _, _, peerMatchedCIDs := getSimilarity(shard)
+
+		precomputed[shardKey] = ShardPrecompute{
+			Shard:           shard,
+			ShardCIDs:       shardCIDs,
+			ShardSize:       shardSize,
+			N:               n,
+			PeerMatchedCIDs: peerMatchedCIDs,
+		}
+	}
+
+	unscheduled := make([]api.Pin, 0)
+	for _, shard := range failedShards {
+		if _, ok := precomputed[shard.Cid.String()]; ok {
+			unscheduled = append(unscheduled, shard)
+		}
+	}
+
+	peerFinishTime := make(map[peer.ID]float64)
+	for _, p := range candidatePeers {
+		peerFinishTime[p] = 0
+	}
+
+	for len(unscheduled) > 0 {
+		type CandidateBest struct {
+			Shard api.Pin
+			Peer  peer.ID
+
+			LocalChunkCount    int
+			DirectChunkCount   int
+			MissingChunkCount  int
+			IncomingChunkCount int
+
+			ProcessingTime float64
+			CompletionTime float64
+		}
+
+		bestForShard := make(map[string]CandidateBest)
+
+		for _, shard := range unscheduled {
+			pc := precomputed[shard.Cid.String()]
+
+			bestPeer := peer.ID("")
+			bestProcessing := math.Inf(1)
+			bestCompletion := math.Inf(1)
+
+			bestLocal := 0
+			bestDirect := 0
+			bestMissing := 0
+			bestIncoming := 0
+
+			for _, repairPeer := range candidatePeers {
+				if repairPeer == failedPeer {
+					continue
+				}
+
+				if topologyNodeIn(topology, repairPeer) == 0 {
+					continue
+				}
+
+				localCount, directCount, missingCount, incomingCount :=
+					buildIncomingOnlyCounts(
+						repairPeer,
+						failedPeer,
+						pc.ShardCIDs,
+						pc.PeerMatchedCIDs,
+						pc.N,
+					)
+
+				processing := estimateIncomingOnlyProcessingTime(
+					incomingCount,
+					repairPeer,
+					topology,
+					chunkMB,
+				)
+
+				if math.IsInf(processing, 1) {
+					continue
+				}
+
+				completion := peerFinishTime[repairPeer] + processing
+
+				if completion < bestCompletion ||
+					(completion == bestCompletion &&
+						(bestPeer == "" || repairPeer.String() < bestPeer.String())) {
+					bestPeer = repairPeer
+					bestProcessing = processing
+					bestCompletion = completion
+
+					bestLocal = localCount
+					bestDirect = directCount
+					bestMissing = missingCount
+					bestIncoming = incomingCount
+				}
+			}
+
+			if bestPeer != "" && !math.IsInf(bestCompletion, 1) {
+				bestForShard[shard.Cid.String()] = CandidateBest{
+					Shard: shard,
+					Peer:  bestPeer,
+
+					LocalChunkCount:    bestLocal,
+					DirectChunkCount:   bestDirect,
+					MissingChunkCount:  bestMissing,
+					IncomingChunkCount: bestIncoming,
+
+					ProcessingTime: bestProcessing,
+					CompletionTime: bestCompletion,
+				}
+			}
+		}
+
+		if len(bestForShard) == 0 {
+			break
+		}
+
+		chosenIndex := -1
+		chosenCompletion := -1.0
+		chosenKey := ""
+
+		for idx, shard := range unscheduled {
+			key := shard.Cid.String()
+			cand, ok := bestForShard[key]
+			if !ok {
+				continue
+			}
+
+			if chosenIndex == -1 ||
+				cand.CompletionTime > chosenCompletion ||
+				(cand.CompletionTime == chosenCompletion && key < chosenKey) {
+				chosenIndex = idx
+				chosenCompletion = cand.CompletionTime
+				chosenKey = key
+			}
+		}
+
+		if chosenIndex == -1 {
+			break
+		}
+
+		chosenShard := unscheduled[chosenIndex]
+		chosen := bestForShard[chosenShard.Cid.String()]
+
+		peerFinishTime[chosen.Peer] = chosen.CompletionTime
+
+		assignments[chosen.Peer] = append(assignments[chosen.Peer], chosenShard)
+
+		estimates = append(estimates, IncomingOnlyEstimate{
+			Shard:      chosenShard,
+			RepairPeer: chosen.Peer,
+
+			LocalChunkCount:   chosen.LocalChunkCount,
+			DirectChunkCount:  chosen.DirectChunkCount,
+			MissingChunkCount: chosen.MissingChunkCount,
+
+			IncomingChunkCount: chosen.IncomingChunkCount,
+
+			ProcessingTime: chosen.ProcessingTime,
+			FinishTime:     chosen.CompletionTime,
+		})
+
+		fmt.Printf(
+			"INCOMING-ONLY MAX-MIN assigned shard=%s repairPeer=%s processing=%f finish=%f local=%d direct=%d missing=%d incoming=%d\n",
+			chosenShard.Name,
+			chosen.Peer.String(),
+			chosen.ProcessingTime,
+			chosen.CompletionTime,
+			chosen.LocalChunkCount,
+			chosen.DirectChunkCount,
+			chosen.MissingChunkCount,
+			chosen.IncomingChunkCount,
+		)
+
+		unscheduled = append(
+			unscheduled[:chosenIndex],
+			unscheduled[chosenIndex+1:]...,
+		)
+	}
+
+	return assignments, estimates
+}
+func ScheduleGlobalSauff2IncomingOnly(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
+) (map[peer.ID][]api.Pin, []IncomingOnlyEstimate) {
+	fmt.Println("In TOTAL INCOMING-ONLY SAUFF2 Repair Strategy !!!")
+
+	assignments := make(map[peer.ID][]api.Pin)
+	estimates := make([]IncomingOnlyEstimate, 0)
+
+	if len(failedShards) == 0 || len(candidatePeers) == 0 {
+		return assignments, estimates
+	}
+
+	candidatePeers = sortedUniquePeers(candidatePeers)
+
+	type ShardPrecompute struct {
+		Shard           api.Pin
+		ShardCIDs       []string
+		ShardSize       int
+		N               int
+		PeerMatchedCIDs map[peer.ID][]string
+	}
+
+	precomputed := make(map[string]ShardPrecompute)
+
+	for _, shard := range failedShards {
+		shardKey := shard.Cid.String()
+
+		shardCIDs := cidListFromPin(shard)
+		shardSize := len(shardCIDs)
+		if shardSize == 0 {
+			continue
+		}
+
+		_, _, n, shardLength := getSameStripe(shard)
+		if shardLength > 0 {
+			shardSize = shardLength
+		}
+
+		_, _, _, peerMatchedCIDs := getSimilarity(shard)
+
+		precomputed[shardKey] = ShardPrecompute{
+			Shard:           shard,
+			ShardCIDs:       shardCIDs,
+			ShardSize:       shardSize,
+			N:               n,
+			PeerMatchedCIDs: peerMatchedCIDs,
+		}
+	}
+
+	unscheduled := make([]api.Pin, 0)
+	for _, shard := range failedShards {
+		if _, ok := precomputed[shard.Cid.String()]; ok {
+			unscheduled = append(unscheduled, shard)
+		}
+	}
+
+	peerFinishTime := make(map[peer.ID]float64)
+	for _, p := range candidatePeers {
+		peerFinishTime[p] = 0
+	}
+
+	for len(unscheduled) > 0 {
+		type CandidateOption struct {
+			Peer peer.ID
+
+			LocalChunkCount    int
+			DirectChunkCount   int
+			MissingChunkCount  int
+			IncomingChunkCount int
+
+			ProcessingTime float64
+			CompletionTime float64
+		}
+
+		type SauffBest struct {
+			Shard api.Pin
+
+			Best CandidateOption
+
+			SecondCompletion float64
+			MinProcessing    float64
+			WeightedScore    float64
+		}
+
+		bestForShard := make(map[string]SauffBest)
+
+		for _, shard := range unscheduled {
+			pc := precomputed[shard.Cid.String()]
+
+			options := make([]CandidateOption, 0)
+
+			for _, repairPeer := range candidatePeers {
+				if repairPeer == failedPeer {
+					continue
+				}
+
+				if topologyNodeIn(topology, repairPeer) == 0 {
+					continue
+				}
+
+				localCount, directCount, missingCount, incomingCount :=
+					buildIncomingOnlyCounts(
+						repairPeer,
+						failedPeer,
+						pc.ShardCIDs,
+						pc.PeerMatchedCIDs,
+						pc.N,
+					)
+
+				processing := estimateIncomingOnlyProcessingTime(
+					incomingCount,
+					repairPeer,
+					topology,
+					chunkMB,
+				)
+
+				if math.IsInf(processing, 1) {
+					continue
+				}
+
+				completion := peerFinishTime[repairPeer] + processing
+
+				options = append(options, CandidateOption{
+					Peer: repairPeer,
+
+					LocalChunkCount:    localCount,
+					DirectChunkCount:   directCount,
+					MissingChunkCount:  missingCount,
+					IncomingChunkCount: incomingCount,
+
+					ProcessingTime: processing,
+					CompletionTime: completion,
+				})
+			}
+
+			if len(options) == 0 {
+				continue
+			}
+
+			sort.Slice(options, func(i, j int) bool {
+				if options[i].CompletionTime == options[j].CompletionTime {
+					return options[i].Peer.String() < options[j].Peer.String()
+				}
+				return options[i].CompletionTime < options[j].CompletionTime
+			})
+
+			best := options[0]
+
+			secondCompletion := best.CompletionTime
+			if len(options) >= 2 {
+				secondCompletion = options[1].CompletionTime
+			}
+
+			minProcessing := math.Inf(1)
+			for _, opt := range options {
+				if opt.ProcessingTime < minProcessing {
+					minProcessing = opt.ProcessingTime
+				}
+			}
+
+			weightedScore := math.Inf(1)
+			if len(options) >= 2 && best.CompletionTime > 0 {
+				weightedScore =
+					(secondCompletion - best.CompletionTime) *
+						(minProcessing / best.CompletionTime)
+			}
+
+			bestForShard[shard.Cid.String()] = SauffBest{
+				Shard: shard,
+				Best:  best,
+
+				SecondCompletion: secondCompletion,
+				MinProcessing:    minProcessing,
+				WeightedScore:    weightedScore,
+			}
+		}
+
+		if len(bestForShard) == 0 {
+			break
+		}
+
+		chosenIndex := -1
+		chosenKey := ""
+		chosenWeighted := -1.0
+		chosenBestCompletion := math.Inf(1)
+
+		for idx, shard := range unscheduled {
+			key := shard.Cid.String()
+			cand, ok := bestForShard[key]
+			if !ok {
+				continue
+			}
+
+			if chosenIndex == -1 ||
+				cand.WeightedScore > chosenWeighted ||
+				(cand.WeightedScore == chosenWeighted && cand.Best.CompletionTime < chosenBestCompletion) ||
+				(cand.WeightedScore == chosenWeighted && cand.Best.CompletionTime == chosenBestCompletion && key < chosenKey) {
+				chosenIndex = idx
+				chosenKey = key
+				chosenWeighted = cand.WeightedScore
+				chosenBestCompletion = cand.Best.CompletionTime
+			}
+		}
+
+		if chosenIndex == -1 {
+			break
+		}
+
+		chosenShard := unscheduled[chosenIndex]
+		chosen := bestForShard[chosenShard.Cid.String()]
+		best := chosen.Best
+
+		peerFinishTime[best.Peer] = best.CompletionTime
+
+		assignments[best.Peer] = append(assignments[best.Peer], chosenShard)
+
+		estimates = append(estimates, IncomingOnlyEstimate{
+			Shard:      chosenShard,
+			RepairPeer: best.Peer,
+
+			LocalChunkCount:   best.LocalChunkCount,
+			DirectChunkCount:  best.DirectChunkCount,
+			MissingChunkCount: best.MissingChunkCount,
+
+			IncomingChunkCount: best.IncomingChunkCount,
+
+			ProcessingTime: best.ProcessingTime,
+			FinishTime:     best.CompletionTime,
+		})
+
+		fmt.Printf(
+			"INCOMING-ONLY SAUFF2 assigned shard=%s repairPeer=%s processing=%f finish=%f weighted=%f bestCompletion=%f secondCompletion=%f local=%d direct=%d missing=%d incoming=%d\n",
+			chosenShard.Name,
+			best.Peer.String(),
+			best.ProcessingTime,
+			best.CompletionTime,
+			chosen.WeightedScore,
+			best.CompletionTime,
+			chosen.SecondCompletion,
+			best.LocalChunkCount,
+			best.DirectChunkCount,
+			best.MissingChunkCount,
+			best.IncomingChunkCount,
+		)
+
+		unscheduled = append(
+			unscheduled[:chosenIndex],
+			unscheduled[chosenIndex+1:]...,
+		)
+	}
+
+	return assignments, estimates
+}
