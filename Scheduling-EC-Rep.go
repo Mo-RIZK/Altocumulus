@@ -3291,8 +3291,7 @@ func ScheduleGlobalMaxMinIncomingOnly(
 	}
 
 	precomputed := make(map[string]ShardPrecompute)
-
-	/*for _, shard := range failedShards {
+	for _, shard := range failedShards {
 		shardKey := shard.Cid.String()
 
 		shardCIDs := cidListFromPin(shard)
@@ -3315,47 +3314,47 @@ func ScheduleGlobalMaxMinIncomingOnly(
 			N:               n,
 			PeerMatchedCIDs: peerMatchedCIDs,
 		}
-	}*/
-
-	var preMu sync.Mutex
-	var wg sync.WaitGroup
-
-	for _, shard := range failedShards {
-		shard := shard
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			shardKey := shard.Cid.String()
-
-			shardCIDs := cidListFromPin(shard)
-			shardSize := len(shardCIDs)
-			if shardSize == 0 {
-				return
-			}
-
-			_, _, n, shardLength := getSameStripe(shard)
-			if shardLength > 0 {
-				shardSize = shardLength
-			}
-
-			_, _, _, peerMatchedCIDs := getSimilarity(shard)
-
-			preMu.Lock()
-			precomputed[shardKey] = ShardPrecompute{
-				Shard:           shard,
-				ShardCIDs:       shardCIDs,
-				ShardSize:       shardSize,
-				N:               n,
-				PeerMatchedCIDs: peerMatchedCIDs,
-			}
-			preMu.Unlock()
-		}()
 	}
+	/*
+		var preMu sync.Mutex
+		var wg sync.WaitGroup
 
-	wg.Wait()
+		for _, shard := range failedShards {
+			shard := shard
 
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				shardKey := shard.Cid.String()
+
+				shardCIDs := cidListFromPin(shard)
+				shardSize := len(shardCIDs)
+				if shardSize == 0 {
+					return
+				}
+
+				_, _, n, shardLength := getSameStripe(shard)
+				if shardLength > 0 {
+					shardSize = shardLength
+				}
+
+				_, _, _, peerMatchedCIDs := getSimilarity(shard)
+
+				preMu.Lock()
+				precomputed[shardKey] = ShardPrecompute{
+					Shard:           shard,
+					ShardCIDs:       shardCIDs,
+					ShardSize:       shardSize,
+					N:               n,
+					PeerMatchedCIDs: peerMatchedCIDs,
+				}
+				preMu.Unlock()
+			}()
+		}
+
+		wg.Wait()
+	*/
 	unscheduled := make([]api.Pin, 0)
 	for _, shard := range failedShards {
 		if _, ok := precomputed[shard.Cid.String()]; ok {
@@ -3557,7 +3556,7 @@ func ScheduleGlobalSauff2IncomingOnly(
 
 	precomputed := make(map[string]ShardPrecompute)
 
-	for _, shard := range failedShards {
+	/*for _, shard := range failedShards {
 		shardKey := shard.Cid.String()
 
 		shardCIDs := cidListFromPin(shard)
@@ -3580,8 +3579,46 @@ func ScheduleGlobalSauff2IncomingOnly(
 			N:               n,
 			PeerMatchedCIDs: peerMatchedCIDs,
 		}
+	}*/
+
+	var preMu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, shard := range failedShards {
+		shard := shard
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			shardKey := shard.Cid.String()
+
+			shardCIDs := cidListFromPin(shard)
+			shardSize := len(shardCIDs)
+			if shardSize == 0 {
+				return
+			}
+
+			_, _, n, shardLength := getSameStripe(shard)
+			if shardLength > 0 {
+				shardSize = shardLength
+			}
+
+			_, _, _, peerMatchedCIDs := getSimilarity(shard)
+
+			preMu.Lock()
+			precomputed[shardKey] = ShardPrecompute{
+				Shard:           shard,
+				ShardCIDs:       shardCIDs,
+				ShardSize:       shardSize,
+				N:               n,
+				PeerMatchedCIDs: peerMatchedCIDs,
+			}
+			preMu.Unlock()
+		}()
 	}
 
+	wg.Wait()
 	unscheduled := make([]api.Pin, 0)
 	for _, shard := range failedShards {
 		if _, ok := precomputed[shard.Cid.String()]; ok {
