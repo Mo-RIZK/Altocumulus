@@ -1487,3 +1487,61 @@ func (ipfs *Connector) BlockLocalHas(ctx context.Context, c cid.Cid) (bool, erro
 
 	return exists, nil
 }
+
+func (ipfs *Connector) BlocksLocalHas(ctx context.Context, shard api.Pin) ([]string, error) {
+	ctx, span := trace.StartSpan(ctx, "ipfsconn/ipfshttp/BlocksLocalHas")
+	defer span.End()
+
+	ctx, cancel := context.WithTimeout(ctx, ipfs.config.IPFSRequestTimeout)
+	defer cancel()
+
+	cidString, ok := shard.Metadata["Cids"]
+	if !ok || cidString == "" {
+		return nil, nil
+	}
+
+	cidStrings := strings.Split(cidString, ",")
+
+	availableCIDs := make([]string, 0)
+
+	// Cache local availability so duplicate CIDs are not checked repeatedly.
+	checked := make(map[string]bool)
+
+	for _, cidStr := range cidStrings {
+		cidStr = strings.TrimSpace(cidStr)
+		if cidStr == "" {
+			continue
+		}
+
+		exists, alreadyChecked := checked[cidStr]
+
+		if !alreadyChecked {
+			apiCid, err := api.DecodeCid(cidStr)
+			if err != nil {
+				checked[cidStr] = false
+				continue
+			}
+
+			cidObj, err := cid.Decode(apiCid.String())
+			if err != nil {
+				checked[cidStr] = false
+				continue
+			}
+
+			exists, err = ipfs.BlockLocalHas(ctx, cidObj)
+			if err != nil {
+				checked[cidStr] = false
+				continue
+			}
+
+			checked[cidStr] = exists
+		}
+
+		// Append every occurrence, so duplicates are preserved.
+		if exists {
+			availableCIDs = append(availableCIDs, cidStr)
+		}
+	}
+
+	return availableCIDs, nil
+}

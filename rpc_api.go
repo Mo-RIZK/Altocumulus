@@ -666,6 +666,24 @@ func (rpcapi *IPFSConnectorRPCAPI) BlockLocalHas(ctx context.Context, in cid.Cid
 	*out = exists
 	return nil
 }
+func (rpcapi *IPFSConnectorRPCAPI) BlocksLocalHas(
+	ctx context.Context,
+	in api.Pin,
+	out *[]string,
+) error {
+
+	if out == nil {
+		return fmt.Errorf("BlocksLocalHas: output pointer is nil")
+	}
+
+	cids, err := rpcapi.ipfs.BlocksLocalHas(ctx, in)
+	if err != nil {
+		return err
+	}
+
+	*out = cids
+	return nil
+}
 
 /*
    Consensus component methods
