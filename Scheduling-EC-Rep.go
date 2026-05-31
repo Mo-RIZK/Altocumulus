@@ -2,13 +2,11 @@ package ipfscluster
 
 import (
 	"fmt"
+	"github.com/ipfs-cluster/ipfs-cluster/api"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"math"
 	"sort"
 	"strings"
-	"sync"
-
-	"github.com/ipfs-cluster/ipfs-cluster/api"
-	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 type Transfer struct {
@@ -3556,7 +3554,7 @@ func ScheduleGlobalSauff2IncomingOnly(
 
 	precomputed := make(map[string]ShardPrecompute)
 
-	/*for _, shard := range failedShards {
+	for _, shard := range failedShards {
 		shardKey := shard.Cid.String()
 
 		shardCIDs := cidListFromPin(shard)
@@ -3579,9 +3577,9 @@ func ScheduleGlobalSauff2IncomingOnly(
 			N:               n,
 			PeerMatchedCIDs: peerMatchedCIDs,
 		}
-	}*/
+	}
 
-	var preMu sync.Mutex
+	/*var preMu sync.Mutex
 	var wg sync.WaitGroup
 
 	for _, shard := range failedShards {
@@ -3619,6 +3617,7 @@ func ScheduleGlobalSauff2IncomingOnly(
 	}
 
 	wg.Wait()
+	*/
 	unscheduled := make([]api.Pin, 0)
 	for _, shard := range failedShards {
 		if _, ok := precomputed[shard.Cid.String()]; ok {
