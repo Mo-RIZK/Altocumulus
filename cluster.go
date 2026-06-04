@@ -1390,7 +1390,7 @@ func (c *Cluster) alertsHandler() {
 							return c.get_shards_same_stripe(pin)
 						},
 						func(pin api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string) {
-							return c.similarities_Max_Min_Sauff(c.ctx, pin)
+							return c.s_Max_Min_Sauff(c.ctx, pin)
 						},
 					)
 
@@ -1461,7 +1461,7 @@ func (c *Cluster) alertsHandler() {
 							return c.similarities_Max_Min_Sauff(c.ctx, pin)
 						},
 					)*/
-					assignments, assignedPairs := ScheduleGlobalSauff2IncomingOnly(
+					assignments, assignedPairs := ScheduleGlobalSauff2IncomingOnly_new(
 						alrt.Peer,
 						CIDsSim4,
 						allpeers,
