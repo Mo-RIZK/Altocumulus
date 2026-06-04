@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 )
 
 type Transfer struct {
@@ -3289,6 +3290,7 @@ func ScheduleGlobalMaxMinIncomingOnly(
 	}
 
 	precomputed := make(map[string]ShardPrecompute)
+	start := time.Now()
 	for _, shard := range failedShards {
 		shardKey := shard.Cid.String()
 
@@ -3313,6 +3315,7 @@ func ScheduleGlobalMaxMinIncomingOnly(
 			PeerMatchedCIDs: peerMatchedCIDs,
 		}
 	}
+	fmt.Printf("Collecting similarities took : %s \n", time.Now().Sub(start).String())
 	/*
 		var preMu sync.Mutex
 		var wg sync.WaitGroup
@@ -3554,6 +3557,7 @@ func ScheduleGlobalSauff2IncomingOnly(
 
 	precomputed := make(map[string]ShardPrecompute)
 
+	start := time.Now()
 	for _, shard := range failedShards {
 		shardKey := shard.Cid.String()
 
@@ -3578,6 +3582,7 @@ func ScheduleGlobalSauff2IncomingOnly(
 			PeerMatchedCIDs: peerMatchedCIDs,
 		}
 	}
+	fmt.Printf("Collecting similarities took : %s \n", time.Now().Sub(start).String())
 
 	/*var preMu sync.Mutex
 	var wg sync.WaitGroup
