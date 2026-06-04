@@ -1342,7 +1342,7 @@ func (c *Cluster) alertsHandler() {
 				}
 			}
 			if (sim == 6) && fff {
-				sstt := time.Now()
+
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
 
@@ -1379,8 +1379,8 @@ func (c *Cluster) alertsHandler() {
 							return c.similarities_Max_Min_Sauff(c.ctx, pin)
 						},
 					)*/
-
-					assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly(
+					sstt := time.Now()
+					assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly_new(
 						alrt.Peer,
 						CIDsSim4,
 						allpeers,
