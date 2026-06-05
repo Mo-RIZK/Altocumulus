@@ -1471,7 +1471,7 @@ func (c *Cluster) alertsHandler() {
 						},
 					)*/
 					sstt := time.Now()
-					assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly(
+					assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly_new_logs(
 						alrt.Peer,
 						CIDsSim4,
 						allpeers,

@@ -3832,7 +3832,439 @@ func ScheduleGlobalSauff2IncomingOnly(
 
 	return assignments, estimates
 }
+func ScheduleGlobalMaxMinIncomingOnly_new_logs(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
 
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
+) (map[peer.ID][]api.Pin, []IncomingOnlyEstimate) {
+	fmt.Println("In TOTAL INCOMING-ONLY MAX-MIN Repair Strategy !!!")
+
+	totalStart := time.Now()
+
+	assignments := make(map[peer.ID][]api.Pin)
+	estimates := make([]IncomingOnlyEstimate, 0)
+
+	if len(failedShards) == 0 || len(candidatePeers) == 0 {
+		fmt.Printf("[TOTAL] function exited early in %v\n", time.Since(totalStart))
+		return assignments, estimates
+	}
+
+	candidatePeers = sortedUniquePeers(candidatePeers)
+
+	type ShardPrecompute struct {
+		Shard           api.Pin
+		ShardCIDs       []string
+		ShardSize       int
+		N               int
+		PeerMatchedCIDs map[peer.ID][]string
+	}
+
+	type CandidateCost struct {
+		LocalChunkCount    int
+		DirectChunkCount   int
+		MissingChunkCount  int
+		IncomingChunkCount int
+		ProcessingTime     float64
+	}
+
+	var (
+		totalCidListFromPin       time.Duration
+		totalGetSameStripe        time.Duration
+		totalGetSimilarity        time.Duration
+		totalBuildCounts          time.Duration
+		totalEstimateProcessing   time.Duration
+		totalBestForShard         time.Duration
+		totalChooseShard          time.Duration
+		totalAssignmentUpdate     time.Duration
+		totalRemoveScheduledShard time.Duration
+	)
+
+	precomputed := make(map[string]ShardPrecompute)
+
+	start := time.Now()
+	fmt.Println("[PHASE] Starting shard precompute / similarity collection")
+
+	for shardIdx, shard := range failedShards {
+		shardStart := time.Now()
+
+		shardKey := shard.Cid.String()
+
+		t := time.Now()
+		shardCIDs := cidListFromPin(shard)
+		totalCidListFromPin += time.Since(t)
+
+		shardSize := len(shardCIDs)
+		if shardSize == 0 {
+			fmt.Printf(
+				"[PRECOMPUTE] shard %d/%d name=%s skipped because shardSize=0 took=%v\n",
+				shardIdx+1,
+				len(failedShards),
+				shard.Name,
+				time.Since(shardStart),
+			)
+			continue
+		}
+
+		t = time.Now()
+		_, _, n, shardLength := getSameStripe(shard)
+		totalGetSameStripe += time.Since(t)
+
+		if shardLength > 0 {
+			shardSize = shardLength
+		}
+
+		t = time.Now()
+		_, _, _, peerMatchedCIDs := getSimilarity(shard)
+		totalGetSimilarity += time.Since(t)
+
+		precomputed[shardKey] = ShardPrecompute{
+			Shard:           shard,
+			ShardCIDs:       shardCIDs,
+			ShardSize:       shardSize,
+			N:               n,
+			PeerMatchedCIDs: peerMatchedCIDs,
+		}
+
+		fmt.Printf(
+			"[PRECOMPUTE] shard %d/%d name=%s cid=%s shardSize=%d N=%d matchedPeers=%d took=%v\n",
+			shardIdx+1,
+			len(failedShards),
+			shard.Name,
+			shardKey,
+			shardSize,
+			n,
+			len(peerMatchedCIDs),
+			time.Since(shardStart),
+		)
+	}
+
+	fmt.Printf("[PHASE DONE] Collecting similarities took: %v\n", time.Since(start))
+	fmt.Printf("[DETAIL] cidListFromPin total: %v\n", totalCidListFromPin)
+	fmt.Printf("[DETAIL] getSameStripe total: %v\n", totalGetSameStripe)
+	fmt.Printf("[DETAIL] getSimilarity total: %v\n", totalGetSimilarity)
+
+	unscheduled := make([]api.Pin, 0)
+	start = time.Now()
+	fmt.Println("[PHASE] Building unscheduled shard list")
+
+	for _, shard := range failedShards {
+		if _, ok := precomputed[shard.Cid.String()]; ok {
+			unscheduled = append(unscheduled, shard)
+		}
+	}
+
+	fmt.Printf(
+		"[PHASE DONE] Building unscheduled list took: %v, validUnscheduled=%d\n",
+		time.Since(start),
+		len(unscheduled),
+	)
+
+	peerFinishTime := make(map[peer.ID]float64)
+	start = time.Now()
+	fmt.Println("[PHASE] Initializing peer finish times")
+
+	for _, p := range candidatePeers {
+		peerFinishTime[p] = 0
+	}
+
+	fmt.Printf(
+		"[PHASE DONE] Initializing peer finish times took: %v, candidatePeers=%d\n",
+		time.Since(start),
+		len(candidatePeers),
+	)
+
+	start = time.Now()
+	fmt.Println("[PHASE] Starting candidate cost precomputation")
+
+	candidateCosts := make(map[string]map[peer.ID]CandidateCost)
+
+	for shardIdx, shard := range unscheduled {
+		shardStart := time.Now()
+
+		shardKey := shard.Cid.String()
+		pc := precomputed[shardKey]
+
+		candidateCosts[shardKey] = make(map[peer.ID]CandidateCost)
+
+		checkedPeers := 0
+		skippedFailedPeer := 0
+		skippedNoTopology := 0
+		skippedInfiniteProcessing := 0
+		validCosts := 0
+
+		for _, repairPeer := range candidatePeers {
+			checkedPeers++
+
+			if repairPeer == failedPeer {
+				skippedFailedPeer++
+				continue
+			}
+
+			if topologyNodeIn(topology, repairPeer) == 0 {
+				skippedNoTopology++
+				continue
+			}
+
+			t := time.Now()
+			localCount, directCount, missingCount, incomingCount :=
+				buildIncomingOnlyCounts(
+					repairPeer,
+					failedPeer,
+					pc.ShardCIDs,
+					pc.PeerMatchedCIDs,
+					pc.N,
+				)
+			totalBuildCounts += time.Since(t)
+
+			t = time.Now()
+			processing := estimateIncomingOnlyProcessingTime(
+				incomingCount,
+				repairPeer,
+				topology,
+				chunkMB,
+			)
+			totalEstimateProcessing += time.Since(t)
+
+			if math.IsInf(processing, 1) {
+				skippedInfiniteProcessing++
+				continue
+			}
+
+			candidateCosts[shardKey][repairPeer] = CandidateCost{
+				LocalChunkCount:    localCount,
+				DirectChunkCount:   directCount,
+				MissingChunkCount:  missingCount,
+				IncomingChunkCount: incomingCount,
+				ProcessingTime:     processing,
+			}
+
+			validCosts++
+		}
+
+		fmt.Printf(
+			"[COSTS] shard %d/%d name=%s cid=%s checkedPeers=%d validCosts=%d skippedFailedPeer=%d skippedNoTopology=%d skippedInfProcessing=%d took=%v\n",
+			shardIdx+1,
+			len(unscheduled),
+			shard.Name,
+			shardKey,
+			checkedPeers,
+			validCosts,
+			skippedFailedPeer,
+			skippedNoTopology,
+			skippedInfiniteProcessing,
+			time.Since(shardStart),
+		)
+	}
+
+	fmt.Printf("[PHASE DONE] Precomputing candidate costs took: %v\n", time.Since(start))
+	fmt.Printf("[DETAIL] buildIncomingOnlyCounts total: %v\n", totalBuildCounts)
+	fmt.Printf("[DETAIL] estimateIncomingOnlyProcessingTime total: %v\n", totalEstimateProcessing)
+
+	fmt.Println("[PHASE] Starting max-min scheduling loop")
+
+	schedulingStart := time.Now()
+	iteration := 0
+
+	for len(unscheduled) > 0 {
+		iteration++
+		iterationStart := time.Now()
+
+		type CandidateBest struct {
+			Shard api.Pin
+			Peer  peer.ID
+
+			LocalChunkCount    int
+			DirectChunkCount   int
+			MissingChunkCount  int
+			IncomingChunkCount int
+
+			ProcessingTime float64
+			CompletionTime float64
+		}
+
+		bestForShard := make(map[string]CandidateBest)
+
+		bestForShardStart := time.Now()
+
+		for _, shard := range unscheduled {
+			shardKey := shard.Cid.String()
+
+			bestPeer := peer.ID("")
+			bestProcessing := math.Inf(1)
+			bestCompletion := math.Inf(1)
+
+			bestLocal := 0
+			bestDirect := 0
+			bestMissing := 0
+			bestIncoming := 0
+
+			for _, repairPeer := range candidatePeers {
+				cost, ok := candidateCosts[shardKey][repairPeer]
+				if !ok {
+					continue
+				}
+
+				completion := peerFinishTime[repairPeer] + cost.ProcessingTime
+
+				if completion < bestCompletion ||
+					(completion == bestCompletion &&
+						(bestPeer == "" || repairPeer.String() < bestPeer.String())) {
+					bestPeer = repairPeer
+					bestProcessing = cost.ProcessingTime
+					bestCompletion = completion
+
+					bestLocal = cost.LocalChunkCount
+					bestDirect = cost.DirectChunkCount
+					bestMissing = cost.MissingChunkCount
+					bestIncoming = cost.IncomingChunkCount
+				}
+			}
+
+			if bestPeer != "" && !math.IsInf(bestCompletion, 1) {
+				bestForShard[shardKey] = CandidateBest{
+					Shard: shard,
+					Peer:  bestPeer,
+
+					LocalChunkCount:    bestLocal,
+					DirectChunkCount:   bestDirect,
+					MissingChunkCount:  bestMissing,
+					IncomingChunkCount: bestIncoming,
+
+					ProcessingTime: bestProcessing,
+					CompletionTime: bestCompletion,
+				}
+			}
+		}
+
+		bestForShardDuration := time.Since(bestForShardStart)
+		totalBestForShard += bestForShardDuration
+
+		if len(bestForShard) == 0 {
+			fmt.Printf(
+				"[SCHEDULER] iteration=%d no valid bestForShard found, breaking. remaining=%d iterationTook=%v\n",
+				iteration,
+				len(unscheduled),
+				time.Since(iterationStart),
+			)
+			break
+		}
+
+		chosenIndex := -1
+		chosenCompletion := -1.0
+		chosenKey := ""
+
+		chooseStart := time.Now()
+
+		for idx, shard := range unscheduled {
+			key := shard.Cid.String()
+			cand, ok := bestForShard[key]
+			if !ok {
+				continue
+			}
+
+			if chosenIndex == -1 ||
+				cand.CompletionTime > chosenCompletion ||
+				(cand.CompletionTime == chosenCompletion && key < chosenKey) {
+				chosenIndex = idx
+				chosenCompletion = cand.CompletionTime
+				chosenKey = key
+			}
+		}
+
+		chooseDuration := time.Since(chooseStart)
+		totalChooseShard += chooseDuration
+
+		if chosenIndex == -1 {
+			fmt.Printf(
+				"[SCHEDULER] iteration=%d no chosen shard found, breaking. remaining=%d iterationTook=%v\n",
+				iteration,
+				len(unscheduled),
+				time.Since(iterationStart),
+			)
+			break
+		}
+
+		chosenShard := unscheduled[chosenIndex]
+		chosen := bestForShard[chosenShard.Cid.String()]
+
+		t := time.Now()
+
+		peerFinishTime[chosen.Peer] = chosen.CompletionTime
+		assignments[chosen.Peer] = append(assignments[chosen.Peer], chosenShard)
+
+		estimates = append(estimates, IncomingOnlyEstimate{
+			Shard:      chosenShard,
+			RepairPeer: chosen.Peer,
+
+			LocalChunkCount:   chosen.LocalChunkCount,
+			DirectChunkCount:  chosen.DirectChunkCount,
+			MissingChunkCount: chosen.MissingChunkCount,
+
+			IncomingChunkCount: chosen.IncomingChunkCount,
+
+			ProcessingTime: chosen.ProcessingTime,
+			FinishTime:     chosen.CompletionTime,
+		})
+
+		totalAssignmentUpdate += time.Since(t)
+
+		fmt.Printf(
+			"INCOMING-ONLY MAX-MIN assigned shard=%s repairPeer=%s processing=%f finish=%f local=%d direct=%d missing=%d incoming=%d\n",
+			chosenShard.Name,
+			chosen.Peer.String(),
+			chosen.ProcessingTime,
+			chosen.CompletionTime,
+			chosen.LocalChunkCount,
+			chosen.DirectChunkCount,
+			chosen.MissingChunkCount,
+			chosen.IncomingChunkCount,
+		)
+
+		t = time.Now()
+
+		unscheduled = append(
+			unscheduled[:chosenIndex],
+			unscheduled[chosenIndex+1:]...,
+		)
+
+		removeDuration := time.Since(t)
+		totalRemoveScheduledShard += removeDuration
+
+		fmt.Printf(
+			"[SCHEDULER] iteration=%d remaining=%d bestForShard=%v chooseShard=%v removeShard=%v iterationTook=%v\n",
+			iteration,
+			len(unscheduled),
+			bestForShardDuration,
+			chooseDuration,
+			removeDuration,
+			time.Since(iterationStart),
+		)
+	}
+
+	fmt.Printf("[PHASE DONE] Scheduling loop took: %v, iterations=%d\n", time.Since(schedulingStart), iteration)
+
+	fmt.Println("========================================")
+	fmt.Println("TIMING BREAKDOWN")
+	fmt.Println("========================================")
+	fmt.Printf("TOTAL function time                         : %v\n", time.Since(totalStart))
+	fmt.Printf("cidListFromPin total                        : %v\n", totalCidListFromPin)
+	fmt.Printf("getSameStripe total                         : %v\n", totalGetSameStripe)
+	fmt.Printf("getSimilarity total                         : %v\n", totalGetSimilarity)
+	fmt.Printf("buildIncomingOnlyCounts total               : %v\n", totalBuildCounts)
+	fmt.Printf("estimateIncomingOnlyProcessingTime total    : %v\n", totalEstimateProcessing)
+	fmt.Printf("bestForShard total                          : %v\n", totalBestForShard)
+	fmt.Printf("chooseShard total                           : %v\n", totalChooseShard)
+	fmt.Printf("assignment/estimate update total            : %v\n", totalAssignmentUpdate)
+	fmt.Printf("remove scheduled shard total                : %v\n", totalRemoveScheduledShard)
+	fmt.Println("========================================")
+
+	return assignments, estimates
+}
 func ScheduleGlobalMaxMinIncomingOnly_new(
 	failedPeer peer.ID,
 	failedShards []api.Pin,
@@ -3964,6 +4396,7 @@ func ScheduleGlobalMaxMinIncomingOnly_new(
 
 	fmt.Printf("Precomputing candidate costs took : %s \n", time.Since(start).String())
 
+	var a, b time.Duration
 	for len(unscheduled) > 0 {
 		type CandidateBest struct {
 			Shard api.Pin
