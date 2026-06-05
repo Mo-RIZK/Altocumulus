@@ -733,7 +733,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 2 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based --- 6:maxmin --- 7:sauff2
+			sim := 6 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based --- 6:maxmin --- 7:sauff2
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
@@ -1380,7 +1380,7 @@ func (c *Cluster) alertsHandler() {
 						},
 					)*/
 					sstt := time.Now()
-					assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly_new(
+					assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly_Heap(
 						alrt.Peer,
 						CIDsSim4,
 						allpeers,
@@ -1405,6 +1405,17 @@ func (c *Cluster) alertsHandler() {
 
 					for peerID, pins := range assignments {
 						for _, pin := range pins {
+							pin.Metadata["Strategy"] = ""
+							pin.Metadata["Strategy"] = "MAXMIN"
+							top14Peers := topology.TopPeersByGlobalIn(14)
+							pin.Metadata["allocs"] = ""
+							allocs := make([]string, 0, len(top14Peers))
+
+							for _, p := range top14Peers {
+								allocs = append(allocs, p.String())
+							}
+
+							pin.Metadata["allocs"] = strings.Join(allocs, ",")
 							if peerID == c.id {
 								c.Enqueue(c.ctx, pin)
 							} else {

@@ -1,6 +1,7 @@
 package ipfscluster
 
 import (
+	"container/heap"
 	"fmt"
 	"github.com/ipfs-cluster/ipfs-cluster/api"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -4390,6 +4391,387 @@ func ScheduleGlobalSauff2IncomingOnly_new(
 			unscheduled[chosenIndex+1:]...,
 		)
 	}
+
+	return assignments, estimates
+}
+
+type IncomingOnlyPeerHeapEntry struct {
+	Peer           peer.ID
+	ProcessingTime float64
+	CompletionTime float64
+	Version        int
+}
+
+type IncomingOnlyPeerMinHeap []IncomingOnlyPeerHeapEntry
+
+func (h IncomingOnlyPeerMinHeap) Len() int { return len(h) }
+
+func (h IncomingOnlyPeerMinHeap) Less(i, j int) bool {
+	if h[i].CompletionTime == h[j].CompletionTime {
+		return h[i].Peer.String() < h[j].Peer.String()
+	}
+	return h[i].CompletionTime < h[j].CompletionTime
+}
+
+func (h IncomingOnlyPeerMinHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *IncomingOnlyPeerMinHeap) Push(x interface{}) {
+	*h = append(*h, x.(IncomingOnlyPeerHeapEntry))
+}
+
+func (h *IncomingOnlyPeerMinHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+type IncomingOnlyShardHeapEntry struct {
+	ShardKey       string
+	CompletionTime float64
+	Version        int
+}
+
+type IncomingOnlyShardMaxHeap []IncomingOnlyShardHeapEntry
+
+func (h IncomingOnlyShardMaxHeap) Len() int { return len(h) }
+
+func (h IncomingOnlyShardMaxHeap) Less(i, j int) bool {
+	if h[i].CompletionTime == h[j].CompletionTime {
+		return h[i].ShardKey < h[j].ShardKey
+	}
+	return h[i].CompletionTime > h[j].CompletionTime
+}
+
+func (h IncomingOnlyShardMaxHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *IncomingOnlyShardMaxHeap) Push(x interface{}) {
+	*h = append(*h, x.(IncomingOnlyShardHeapEntry))
+}
+
+func (h *IncomingOnlyShardMaxHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+func ScheduleGlobalMaxMinIncomingOnly_Heap(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
+) (map[peer.ID][]api.Pin, []IncomingOnlyEstimate) {
+	fmt.Println("In TOTAL INCOMING-ONLY MAX-MIN Repair Strategy HEAP OPTIMIZED !!!")
+
+	assignments := make(map[peer.ID][]api.Pin)
+	estimates := make([]IncomingOnlyEstimate, 0)
+
+	if len(failedShards) == 0 || len(candidatePeers) == 0 {
+		return assignments, estimates
+	}
+
+	candidatePeers = sortedUniquePeers(candidatePeers)
+
+	type ShardPrecompute struct {
+		Shard           api.Pin
+		ShardCIDs       []string
+		ShardSize       int
+		N               int
+		PeerMatchedCIDs map[peer.ID][]string
+	}
+
+	type CandidateCost struct {
+		LocalChunkCount    int
+		DirectChunkCount   int
+		MissingChunkCount  int
+		IncomingChunkCount int
+		ProcessingTime     float64
+	}
+
+	type CandidateBest struct {
+		Shard api.Pin
+		Peer  peer.ID
+
+		LocalChunkCount    int
+		DirectChunkCount   int
+		MissingChunkCount  int
+		IncomingChunkCount int
+
+		ProcessingTime float64
+		CompletionTime float64
+	}
+
+	precomputed := make(map[string]ShardPrecompute)
+
+	start := time.Now()
+
+	for _, shard := range failedShards {
+		shardKey := shard.Cid.String()
+
+		shardCIDs := cidListFromPin(shard)
+		shardSize := len(shardCIDs)
+		if shardSize == 0 {
+			continue
+		}
+
+		_, _, n, shardLength := getSameStripe(shard)
+		if shardLength > 0 {
+			shardSize = shardLength
+		}
+
+		_, _, _, peerMatchedCIDs := getSimilarity(shard)
+
+		precomputed[shardKey] = ShardPrecompute{
+			Shard:           shard,
+			ShardCIDs:       shardCIDs,
+			ShardSize:       shardSize,
+			N:               n,
+			PeerMatchedCIDs: peerMatchedCIDs,
+		}
+	}
+
+	fmt.Printf("Collecting similarities took : %s \n", time.Since(start).String())
+
+	unscheduledSet := make(map[string]bool)
+
+	for _, shard := range failedShards {
+		shardKey := shard.Cid.String()
+		if _, ok := precomputed[shardKey]; ok {
+			unscheduledSet[shardKey] = true
+		}
+	}
+
+	peerFinishTime := make(map[peer.ID]float64)
+	peerVersion := make(map[peer.ID]int)
+
+	for _, p := range candidatePeers {
+		peerFinishTime[p] = 0
+		peerVersion[p] = 0
+	}
+
+	start = time.Now()
+
+	candidateCosts := make(map[string]map[peer.ID]CandidateCost)
+
+	for shardKey, pc := range precomputed {
+		candidateCosts[shardKey] = make(map[peer.ID]CandidateCost)
+
+		for _, repairPeer := range candidatePeers {
+			if repairPeer == failedPeer {
+				continue
+			}
+
+			if topologyNodeIn(topology, repairPeer) == 0 {
+				continue
+			}
+
+			localCount, directCount, missingCount, incomingCount :=
+				buildIncomingOnlyCounts(
+					repairPeer,
+					failedPeer,
+					pc.ShardCIDs,
+					pc.PeerMatchedCIDs,
+					pc.N,
+				)
+
+			processing := estimateIncomingOnlyProcessingTime(
+				incomingCount,
+				repairPeer,
+				topology,
+				chunkMB,
+			)
+
+			if math.IsInf(processing, 1) {
+				continue
+			}
+
+			candidateCosts[shardKey][repairPeer] = CandidateCost{
+				LocalChunkCount:    localCount,
+				DirectChunkCount:   directCount,
+				MissingChunkCount:  missingCount,
+				IncomingChunkCount: incomingCount,
+				ProcessingTime:     processing,
+			}
+		}
+	}
+
+	fmt.Printf("Precomputing candidate costs took : %s \n", time.Since(start).String())
+
+	peerHeaps := make(map[string]*IncomingOnlyPeerMinHeap)
+
+	for shardKey, costs := range candidateCosts {
+		h := &IncomingOnlyPeerMinHeap{}
+
+		for p, cost := range costs {
+			heap.Push(h, IncomingOnlyPeerHeapEntry{
+				Peer:           p,
+				ProcessingTime: cost.ProcessingTime,
+				CompletionTime: peerFinishTime[p] + cost.ProcessingTime,
+				Version:        peerVersion[p],
+			})
+		}
+
+		heap.Init(h)
+		peerHeaps[shardKey] = h
+	}
+
+	globalHeap := &IncomingOnlyShardMaxHeap{}
+	heap.Init(globalHeap)
+
+	currentBest := make(map[string]CandidateBest)
+	shardVersion := make(map[string]int)
+	bestByPeer := make(map[peer.ID]map[string]bool)
+
+	addBestByPeer := func(p peer.ID, shardKey string) {
+		if bestByPeer[p] == nil {
+			bestByPeer[p] = make(map[string]bool)
+		}
+		bestByPeer[p][shardKey] = true
+	}
+
+	removeBestByPeer := func(p peer.ID, shardKey string) {
+		if bestByPeer[p] != nil {
+			delete(bestByPeer[p], shardKey)
+		}
+	}
+
+	recomputeBest := func(shardKey string) bool {
+		h := peerHeaps[shardKey]
+
+		for h.Len() > 0 {
+			top := (*h)[0]
+
+			expectedCompletion := peerFinishTime[top.Peer] + top.ProcessingTime
+			expectedVersion := peerVersion[top.Peer]
+
+			if top.Version == expectedVersion && top.CompletionTime == expectedCompletion {
+				cost := candidateCosts[shardKey][top.Peer]
+				pc := precomputed[shardKey]
+
+				old, hadOld := currentBest[shardKey]
+				if hadOld {
+					removeBestByPeer(old.Peer, shardKey)
+				}
+
+				best := CandidateBest{
+					Shard:              pc.Shard,
+					Peer:               top.Peer,
+					LocalChunkCount:    cost.LocalChunkCount,
+					DirectChunkCount:   cost.DirectChunkCount,
+					MissingChunkCount:  cost.MissingChunkCount,
+					IncomingChunkCount: cost.IncomingChunkCount,
+					ProcessingTime:     cost.ProcessingTime,
+					CompletionTime:     top.CompletionTime,
+				}
+
+				currentBest[shardKey] = best
+				addBestByPeer(best.Peer, shardKey)
+
+				shardVersion[shardKey]++
+
+				heap.Push(globalHeap, IncomingOnlyShardHeapEntry{
+					ShardKey:       shardKey,
+					CompletionTime: best.CompletionTime,
+					Version:        shardVersion[shardKey],
+				})
+
+				return true
+			}
+
+			heap.Pop(h)
+
+			heap.Push(h, IncomingOnlyPeerHeapEntry{
+				Peer:           top.Peer,
+				ProcessingTime: top.ProcessingTime,
+				CompletionTime: expectedCompletion,
+				Version:        expectedVersion,
+			})
+		}
+
+		old, hadOld := currentBest[shardKey]
+		if hadOld {
+			removeBestByPeer(old.Peer, shardKey)
+		}
+
+		delete(currentBest, shardKey)
+		return false
+	}
+
+	for shardKey := range unscheduledSet {
+		recomputeBest(shardKey)
+	}
+
+	start = time.Now()
+
+	for len(unscheduledSet) > 0 && globalHeap.Len() > 0 {
+		top := heap.Pop(globalHeap).(IncomingOnlyShardHeapEntry)
+
+		if !unscheduledSet[top.ShardKey] {
+			continue
+		}
+
+		if top.Version != shardVersion[top.ShardKey] {
+			continue
+		}
+
+		chosen, ok := currentBest[top.ShardKey]
+		if !ok {
+			continue
+		}
+
+		delete(unscheduledSet, top.ShardKey)
+		removeBestByPeer(chosen.Peer, top.ShardKey)
+		delete(currentBest, top.ShardKey)
+
+		peerFinishTime[chosen.Peer] = chosen.CompletionTime
+		peerVersion[chosen.Peer]++
+
+		assignments[chosen.Peer] = append(assignments[chosen.Peer], chosen.Shard)
+
+		estimates = append(estimates, IncomingOnlyEstimate{
+			Shard:              chosen.Shard,
+			RepairPeer:         chosen.Peer,
+			LocalChunkCount:    chosen.LocalChunkCount,
+			DirectChunkCount:   chosen.DirectChunkCount,
+			MissingChunkCount:  chosen.MissingChunkCount,
+			IncomingChunkCount: chosen.IncomingChunkCount,
+			ProcessingTime:     chosen.ProcessingTime,
+			FinishTime:         chosen.CompletionTime,
+		})
+
+		fmt.Printf(
+			"INCOMING-ONLY MAX-MIN HEAP assigned shard=%s repairPeer=%s processing=%f finish=%f local=%d direct=%d missing=%d incoming=%d\n",
+			chosen.Shard.Name,
+			chosen.Peer.String(),
+			chosen.ProcessingTime,
+			chosen.CompletionTime,
+			chosen.LocalChunkCount,
+			chosen.DirectChunkCount,
+			chosen.MissingChunkCount,
+			chosen.IncomingChunkCount,
+		)
+
+		affected := make([]string, 0)
+
+		for shardKey := range bestByPeer[chosen.Peer] {
+			if unscheduledSet[shardKey] {
+				affected = append(affected, shardKey)
+			}
+		}
+
+		for _, shardKey := range affected {
+			recomputeBest(shardKey)
+		}
+	}
+
+	fmt.Printf("Heap scheduling took : %s \n", time.Since(start).String())
 
 	return assignments, estimates
 }

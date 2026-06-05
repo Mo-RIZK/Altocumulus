@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -245,4 +246,32 @@ func short(p peer.ID) string {
 		return s[:8]
 	}
 	return s
+}
+
+func (t *NetworkTopology) TopPeersByGlobalIn(limit int) []peer.ID {
+	if t == nil || limit <= 0 {
+		return nil
+	}
+
+	nodes := make([]*NodeInfo, 0, len(t.NodesByPeer))
+
+	for _, n := range t.NodesByPeer {
+		nodes = append(nodes, n)
+	}
+
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].GlobalIn > nodes[j].GlobalIn
+	})
+
+	if limit > len(nodes) {
+		limit = len(nodes)
+	}
+
+	result := make([]peer.ID, limit)
+
+	for i := 0; i < limit; i++ {
+		result[i] = nodes[i].PeerID
+	}
+
+	return result
 }
