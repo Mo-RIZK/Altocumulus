@@ -4396,7 +4396,6 @@ func ScheduleGlobalMaxMinIncomingOnly_new(
 
 	fmt.Printf("Precomputing candidate costs took : %s \n", time.Since(start).String())
 
-	var a, b time.Duration
 	for len(unscheduled) > 0 {
 		type CandidateBest struct {
 			Shard api.Pin
