@@ -3280,6 +3280,8 @@ func ScheduleGlobalMaxMinIncomingOnly(
 		return assignments, estimates
 	}
 
+	start := time.Now()
+
 	candidatePeers = sortedUniquePeers(candidatePeers)
 
 	type ShardPrecompute struct {
@@ -3291,7 +3293,7 @@ func ScheduleGlobalMaxMinIncomingOnly(
 	}
 
 	precomputed := make(map[string]ShardPrecompute)
-	start := time.Now()
+
 	for _, shard := range failedShards {
 		shardKey := shard.Cid.String()
 
@@ -3357,6 +3359,7 @@ func ScheduleGlobalMaxMinIncomingOnly(
 
 		wg.Wait()
 	*/
+	var a, b time.Duration
 	unscheduled := make([]api.Pin, 0)
 	for _, shard := range failedShards {
 		if _, ok := precomputed[shard.Cid.String()]; ok {
@@ -3405,7 +3408,7 @@ func ScheduleGlobalMaxMinIncomingOnly(
 				if topologyNodeIn(topology, repairPeer) == 0 {
 					continue
 				}
-
+				st := time.Now()
 				localCount, directCount, missingCount, incomingCount :=
 					buildIncomingOnlyCounts(
 						repairPeer,
@@ -3414,14 +3417,15 @@ func ScheduleGlobalMaxMinIncomingOnly(
 						pc.PeerMatchedCIDs,
 						pc.N,
 					)
-
+				a += time.Since(st)
+				st1 := time.Now()
 				processing := estimateIncomingOnlyProcessingTime(
 					incomingCount,
 					repairPeer,
 					topology,
 					chunkMB,
 				)
-
+				b += time.Since(st1)
 				if math.IsInf(processing, 1) {
 					continue
 				}
@@ -3524,7 +3528,7 @@ func ScheduleGlobalMaxMinIncomingOnly(
 			unscheduled[chosenIndex+1:]...,
 		)
 	}
-
+	fmt.Printf("Countss time : %s and Processing time is : %s \n", a.String(), b.String())
 	return assignments, estimates
 }
 func ScheduleGlobalSauff2IncomingOnly(
