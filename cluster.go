@@ -733,7 +733,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 6 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based --- 6:maxmin --- 7:sauff2
+			sim := 2 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based --- 6:maxmin --- 7:sauff2
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
@@ -807,17 +807,17 @@ func (c *Cluster) alertsHandler() {
 										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
 									}
 								}
-								pin.Metadata["Strategy"] = ""
-								pin.Metadata["Strategy"] = "MAXMIN"
-								top14Peers := topology.TopPeersByGlobalIn(14)
-								pin.Metadata["allocs"] = ""
-								allocs := make([]string, 0, len(top14Peers))
+								//pin.Metadata["Strategy"] = ""
+								//pin.Metadata["Strategy"] = "MAXMIN"
+								//top14Peers := topology.TopPeersByGlobalIn(14)
+								//pin.Metadata["allocs"] = ""
+								//allocs := make([]string, 0, len(top14Peers))
 
-								for _, p := range top14Peers {
-									allocs = append(allocs, p.String())
-								}
+								//for _, p := range top14Peers {
+								//	allocs = append(allocs, p.String())
+								//}
 
-								pin.Metadata["allocs"] = strings.Join(allocs, ",")
+								//pin.Metadata["allocs"] = strings.Join(allocs, ",")
 								c.Enqueue(c.ctx, pin)
 							}
 						}
@@ -890,7 +890,7 @@ func (c *Cluster) alertsHandler() {
 									ss := time.Now()
 
 									//ppp, common := c.similarities(c.ctx, pin)
-									ppp, common, _ := c.similarities_new1(c.ctx, pin)
+									ppp, common, _, _ := c.s_Max_Min_Sauff(c.ctx, pin)
 									//ppp, common := c.similaritiessssss(c.ctx, pin)
 									fmt.Fprintf(os.Stdout, "Checkingggg %s\n", time.Now().Sub(ss).String())
 									first := 1
@@ -902,9 +902,9 @@ func (c *Cluster) alertsHandler() {
 											pin.Metadata["common"] = pin.Metadata["common"] + "," + com
 										}
 									}
-									pin.Metadata["Strategy"] = ""
-									pin.Metadata["Strategy"] = "MAXMIN"
-									top14Peers := topology.TopPeersByGlobalIn(14)
+									//pin.Metadata["Strategy"] = ""
+									//pin.Metadata["Strategy"] = "MAXMIN"
+									/*top14Peers := topology.TopPeersByGlobalIn(14)
 									pin.Metadata["allocs"] = ""
 									allocs := make([]string, 0, len(top14Peers))
 
@@ -912,7 +912,7 @@ func (c *Cluster) alertsHandler() {
 										allocs = append(allocs, p.String())
 									}
 
-									pin.Metadata["allocs"] = strings.Join(allocs, ",")
+									pin.Metadata["allocs"] = strings.Join(allocs, ",")*/
 									/*first = 1
 									for _, com := range allmatches {
 										if first == 1 {
@@ -981,7 +981,7 @@ func (c *Cluster) alertsHandler() {
 										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
 									}
 								}
-								pin.Metadata["Strategy"] = ""
+								/*pin.Metadata["Strategy"] = ""
 								pin.Metadata["Strategy"] = "MAXMIN"
 								top14Peers := topology.TopPeersByGlobalIn(14)
 								pin.Metadata["allocs"] = ""
@@ -991,7 +991,7 @@ func (c *Cluster) alertsHandler() {
 									allocs = append(allocs, p.String())
 								}
 
-								pin.Metadata["allocs"] = strings.Join(allocs, ",")
+								pin.Metadata["allocs"] = strings.Join(allocs, ",")*/
 								c.Enqueue(c.ctx, pin)
 							}
 						}
