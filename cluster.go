@@ -4492,7 +4492,7 @@ func (c *Cluster) s_Max_Min_Sauff(ctx context.Context, pin api.Pin) (peer.ID, []
 
 	for _, p := range peers {
 		count := peerSim[p]
-		fmt.Fprintf(os.Stdout, "Peer %s has %d similarities\n", p.String(), count)
+		fmt.Fprintf(os.Stdout, "Peersimisimi %s has %d similarities\n", p.String(), count)
 
 		if count > maxSim {
 			maxSim = count
