@@ -753,21 +753,9 @@ func (c *Cluster) alertsHandler() {
 					kk++
 					if strings.Contains(pin.Name, "EC") && len(pin.Allocations) < 2 {
 						if sim == 0 {
-							topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
-							if err != nil {
-								logger.Warnf("could not load topology: %s", err)
-								continue
-							}
-							topology.PrintFull()
 
 							allpeers := distance.otherPeers
 							allpeers = append(allpeers, c.id)
-
-							fmt.Println("DEBUG topology peer IDs:")
-							for p, n := range topology.NodesByPeer {
-								fmt.Printf("topology peer=%s node=%s\n", p.String(), n.Name)
-							}
-
 							fmt.Println("DEBUG candidate peer IDs:")
 							for _, p := range allpeers {
 								fmt.Printf("candidate peer=%s\n", p.String())
@@ -866,20 +854,9 @@ func (c *Cluster) alertsHandler() {
 						}
 						if sim == 2 {
 							/////////////// simialrities newwwwwwww
-							topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
-							if err != nil {
-								logger.Warnf("could not load topology: %s", err)
-								continue
-							}
-							topology.PrintFull()
 
 							allpeers := distance.otherPeers
 							allpeers = append(allpeers, c.id)
-
-							fmt.Println("DEBUG topology peer IDs:")
-							for p, n := range topology.NodesByPeer {
-								fmt.Printf("topology peer=%s node=%s\n", p.String(), n.Name)
-							}
 
 							fmt.Println("DEBUG candidate peer IDs:")
 							for _, p := range allpeers {
@@ -939,20 +916,9 @@ func (c *Cluster) alertsHandler() {
 							}
 						}
 						if sim == 3 {
-							topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
-							if err != nil {
-								logger.Warnf("could not load topology: %s", err)
-								continue
-							}
-							topology.PrintFull()
 
 							allpeers := distance.otherPeers
 							allpeers = append(allpeers, c.id)
-
-							fmt.Println("DEBUG topology peer IDs:")
-							for p, n := range topology.NodesByPeer {
-								fmt.Printf("topology peer=%s node=%s\n", p.String(), n.Name)
-							}
 
 							fmt.Println("DEBUG candidate peer IDs:")
 							for _, p := range allpeers {
