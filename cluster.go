@@ -761,6 +761,12 @@ func (c *Cluster) alertsHandler() {
 								fmt.Printf("candidate peer=%s\n", p.String())
 							}
 							//      BALANCED ////
+							topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
+							if err != nil {
+								logger.Warnf("could not load topology: %s", err)
+								continue
+							}
+							topology.PrintFull()
 							/*cidStr := "QmYwAPJzv5CZsnAzt8auVZRnGi2C4dYh9N7VDaRao7tAor"
 
 							ci, err := cid.Decode(cidStr)
@@ -795,15 +801,15 @@ func (c *Cluster) alertsHandler() {
 										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
 									}
 								}
-								//pin.Metadata["Strategy"] = ""
-								//pin.Metadata["Strategy"] = "MAXMIN"
-								//top14Peers := topology.TopPeersByGlobalIn(14)
-								//pin.Metadata["allocs"] = ""
-								//allocs := make([]string, 0, len(top14Peers))
+								pin.Metadata["Strategy"] = ""
+								pin.Metadata["Strategy"] = "MAXMIN"
+								top14Peers := topology.TopPeersByGlobalIn(14)
+								pin.Metadata["allocs"] = ""
+								allocs := make([]string, 0, len(top14Peers))
 
-								//for _, p := range top14Peers {
-								//	allocs = append(allocs, p.String())
-								//}
+								for _, p := range top14Peers {
+									allocs = append(allocs, p.String())
+								}
 
 								//pin.Metadata["allocs"] = strings.Join(allocs, ",")
 								c.Enqueue(c.ctx, pin)
@@ -854,7 +860,12 @@ func (c *Cluster) alertsHandler() {
 						}
 						if sim == 2 {
 							/////////////// simialrities newwwwwwww
-
+							topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
+							if err != nil {
+								logger.Warnf("could not load topology: %s", err)
+								continue
+							}
+							topology.PrintFull()
 							allpeers := distance.otherPeers
 							allpeers = append(allpeers, c.id)
 
@@ -879,9 +890,9 @@ func (c *Cluster) alertsHandler() {
 											pin.Metadata["common"] = pin.Metadata["common"] + "," + com
 										}
 									}
-									//pin.Metadata["Strategy"] = ""
-									//pin.Metadata["Strategy"] = "MAXMIN"
-									/*top14Peers := topology.TopPeersByGlobalIn(14)
+									pin.Metadata["Strategy"] = ""
+									pin.Metadata["Strategy"] = "MAXMIN"
+									top14Peers := topology.TopPeersByGlobalIn(14)
 									pin.Metadata["allocs"] = ""
 									allocs := make([]string, 0, len(top14Peers))
 
@@ -889,7 +900,7 @@ func (c *Cluster) alertsHandler() {
 										allocs = append(allocs, p.String())
 									}
 
-									pin.Metadata["allocs"] = strings.Join(allocs, ",")*/
+									pin.Metadata["allocs"] = strings.Join(allocs, ",")
 									/*first = 1
 									for _, com := range allmatches {
 										if first == 1 {
@@ -926,6 +937,12 @@ func (c *Cluster) alertsHandler() {
 							}
 
 							////////// XORRRRR
+							topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
+							if err != nil {
+								logger.Warnf("could not load topology: %s", err)
+								continue
+							}
+							topology.PrintFull()
 							if distance.isClosest(pin.Cid) {
 								common := make([]string, 0)
 								cidString, _ := pin.Metadata["Cids"]
@@ -947,7 +964,7 @@ func (c *Cluster) alertsHandler() {
 										pin.Metadata["common"] = pin.Metadata["common"] + "," + com
 									}
 								}
-								/*pin.Metadata["Strategy"] = ""
+								pin.Metadata["Strategy"] = ""
 								pin.Metadata["Strategy"] = "MAXMIN"
 								top14Peers := topology.TopPeersByGlobalIn(14)
 								pin.Metadata["allocs"] = ""
@@ -957,7 +974,7 @@ func (c *Cluster) alertsHandler() {
 									allocs = append(allocs, p.String())
 								}
 
-								pin.Metadata["allocs"] = strings.Join(allocs, ",")*/
+								pin.Metadata["allocs"] = strings.Join(allocs, ",")
 								c.Enqueue(c.ctx, pin)
 							}
 						}
