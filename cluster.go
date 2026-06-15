@@ -1454,7 +1454,9 @@ func (c *Cluster) alertsHandler() {
 						},
 					)*/
 					sstt := time.Now()
-					assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly_Precomputed(
+					//assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly_Precomputed(
+					//assignments, allocs_of_repairs := ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocation(
+					assignments, allocs_of_repairs := ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 						alrt.Peer,
 						CIDsSim4,
 						allpeers,
@@ -1468,7 +1470,7 @@ func (c *Cluster) alertsHandler() {
 						},
 					)
 
-					fmt.Printf("RESOURCE-AWARE MAX-MIN assigned %d shards\n", len(assignedPairs))
+					fmt.Printf("RESOURCE-AWARE MAX-MIN assigned %d shards\n", len(allocs_of_repairs))
 
 					total := 0
 					for peerID, pins := range assignments {
@@ -1477,17 +1479,17 @@ func (c *Cluster) alertsHandler() {
 					}
 					fmt.Printf("TOTAL ASSIGNED: %d / %d and it took %s \n", total, len(CIDsSim4), time.Now().Sub(sstt).String())
 
-					for peerID, pins := range assignments {
+					/*for peerID, pins := range assignments {
 						for _, pin := range pins {
-							//pin.Metadata["Strategy"] = ""
-							//pin.Metadata["Strategy"] = "MAXMIN"
-							//top14Peers := topology.TopPeersByGlobalIn(14)
-							//pin.Metadata["allocs"] = ""
-							//allocs := make([]string, 0, len(top14Peers))
+							pin.Metadata["Strategy"] = ""
+							pin.Metadata["Strategy"] = "MAXMIN"
+							top14Peers := topology.TopPeersByGlobalIn(14)
+							pin.Metadata["allocs"] = ""
+							allocs := make([]string, 0, len(top14Peers))
 
-							//for _, p := range top14Peers {
-							//	allocs = append(allocs, p.String())
-							//}
+							for _, p := range top14Peers {
+								allocs = append(allocs, p.String())
+							}
 
 							//pin.Metadata["allocs"] = strings.Join(allocs, ",")
 							if peerID == c.id {
@@ -1504,6 +1506,30 @@ func (c *Cluster) alertsHandler() {
 								)
 							}
 						}
+					}*/
+
+					/////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+					for _, alloc := range allocs_of_repairs {
+						if alloc.Relocated {
+							alloc.Shard.Metadata["Strategy"] = ""
+							alloc.Shard.Metadata["Strategy"] = "MAXMIN"
+							alloc.Shard.Metadata["allocs"] = alloc.FinalPeer.String()
+						}
+						if alloc.RepairPeer == c.id {
+							c.Enqueue(c.ctx, alloc.Shard)
+						} else {
+							var out bool
+							c.rpcClient.CallContext(
+								c.ctx,
+								alloc.RepairPeer,
+								"Cluster",
+								"Enqueue",
+								&alloc.Shard,
+								&out,
+							)
+						}
+
 					}
 
 				}

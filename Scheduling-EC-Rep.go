@@ -5593,3 +5593,1329 @@ func ScheduleGlobalMaxMinIncomingOnly_Precomputed(
 
 	return assignments, estimates
 }
+
+func copyPeerIncomingLoadRelocation(load map[peer.ID]int) map[peer.ID]int {
+	out := make(map[peer.ID]int)
+	for p, v := range load {
+		out[p] = v
+	}
+	return out
+}
+
+func maxPeerIncomingTimeRelocation(
+	load map[peer.ID]int,
+	topology *NetworkTopology,
+	chunkMB float64,
+) float64 {
+	maxTime := 0.0
+
+	for p, chunks := range load {
+		if chunks == 0 {
+			continue
+		}
+
+		in := topologyNodeIn(topology, p)
+		if in == 0 {
+			return math.Inf(1)
+		}
+
+		t := float64(chunks) * chunkMB / float64(in)
+		if t > maxTime {
+			maxTime = t
+		}
+	}
+
+	return maxTime
+}
+
+func peerSetRelocation(peers []peer.ID) map[peer.ID]bool {
+	out := make(map[peer.ID]bool)
+	for _, p := range peers {
+		if p != "" {
+			out[p] = true
+		}
+	}
+	return out
+}
+
+type IncomingOnlyRelocationEstimate struct {
+	Shard api.Pin
+
+	RepairPeer peer.ID
+	FinalPeer  peer.ID
+	Relocated  bool
+
+	LocalChunkCount   int
+	DirectChunkCount  int
+	MissingChunkCount int
+
+	IncomingChunkCount int
+
+	RepairIncomingChunkCount     int
+	RelocationIncomingChunkCount int
+
+	ProcessingTime float64
+	FinishTime     float64
+}
+
+func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocation(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
+) (map[peer.ID][]api.Pin, []IncomingOnlyRelocationEstimate) {
+	fmt.Println("In PRECOMPUTED INCOMING-ONLY MAX-MIN Repair Strategy with Relocation !!!")
+
+	totalStart := time.Now()
+
+	assignments := make(map[peer.ID][]api.Pin)
+	estimates := make([]IncomingOnlyRelocationEstimate, 0)
+
+	if len(failedShards) == 0 || len(candidatePeers) == 0 {
+		fmt.Printf("[TOTAL] exited early in %v\n", time.Since(totalStart))
+		return assignments, estimates
+	}
+
+	candidatePeers = sortedUniquePeers(candidatePeers)
+
+	type ShardPrecompute struct {
+		Shard           api.Pin
+		ShardCIDs       []string
+		ShardSize       int
+		N               int
+		SameStripePeers map[peer.ID]bool
+		PeerMatchedCIDs map[peer.ID][]string
+		Index           IncomingOnlyShardIndex
+	}
+
+	type CandidateCost struct {
+		LocalChunkCount    int
+		DirectChunkCount   int
+		MissingChunkCount  int
+		IncomingChunkCount int
+		ProcessingTime     float64
+	}
+
+	precomputed := make(map[string]ShardPrecompute)
+
+	start := time.Now()
+
+	for _, shard := range failedShards {
+		shardKey := shard.Cid.String()
+
+		shardCIDs := cidListFromPin(shard)
+		shardSize := len(shardCIDs)
+		if shardSize == 0 {
+			continue
+		}
+
+		_, sameStripePeers, n, shardLength := getSameStripe(shard)
+		if shardLength > 0 {
+			shardSize = shardLength
+		}
+
+		_, _, _, peerMatchedCIDs := getSimilarity(shard)
+		index := buildIncomingOnlyShardIndex(peerMatchedCIDs)
+
+		precomputed[shardKey] = ShardPrecompute{
+			Shard:           shard,
+			ShardCIDs:       shardCIDs,
+			ShardSize:       shardSize,
+			N:               n,
+			SameStripePeers: peerSetRelocation(sameStripePeers),
+			PeerMatchedCIDs: peerMatchedCIDs,
+			Index:           index,
+		}
+	}
+
+	fmt.Printf("[PHASE] precompute similarities + indexes took: %v\n", time.Since(start))
+
+	unscheduled := make([]api.Pin, 0)
+	for _, shard := range failedShards {
+		if _, ok := precomputed[shard.Cid.String()]; ok {
+			unscheduled = append(unscheduled, shard)
+		}
+	}
+
+	peerIncomingLoad := make(map[peer.ID]int)
+	for _, p := range candidatePeers {
+		peerIncomingLoad[p] = 0
+	}
+
+	start = time.Now()
+
+	candidateCosts := make(map[string]map[peer.ID]CandidateCost)
+
+	for _, shard := range unscheduled {
+		shardKey := shard.Cid.String()
+		pc := precomputed[shardKey]
+
+		candidateCosts[shardKey] = make(map[peer.ID]CandidateCost)
+
+		for _, repairPeer := range candidatePeers {
+			if repairPeer == failedPeer {
+				continue
+			}
+
+			if topologyNodeIn(topology, repairPeer) == 0 {
+				continue
+			}
+
+			localCount, directCount, missingCount, incomingCount :=
+				buildIncomingOnlyCountsFast(
+					repairPeer,
+					failedPeer,
+					pc.ShardCIDs,
+					pc.Index,
+					pc.N,
+				)
+
+			processing := estimateIncomingOnlyProcessingTime(
+				incomingCount,
+				repairPeer,
+				topology,
+				chunkMB,
+			)
+
+			if math.IsInf(processing, 1) {
+				continue
+			}
+
+			candidateCosts[shardKey][repairPeer] = CandidateCost{
+				LocalChunkCount:    localCount,
+				DirectChunkCount:   directCount,
+				MissingChunkCount:  missingCount,
+				IncomingChunkCount: incomingCount,
+				ProcessingTime:     processing,
+			}
+		}
+	}
+
+	fmt.Printf("[PHASE] precompute candidate costs took: %v\n", time.Since(start))
+
+	start = time.Now()
+
+	for len(unscheduled) > 0 {
+		type CandidateBest struct {
+			Shard api.Pin
+
+			RepairPeer peer.ID
+			FinalPeer  peer.ID
+			Relocated  bool
+
+			LocalChunkCount   int
+			DirectChunkCount  int
+			MissingChunkCount int
+
+			RepairIncomingChunkCount     int
+			RelocationIncomingChunkCount int
+
+			ProcessingTime float64
+			CompletionTime float64
+		}
+
+		bestForShard := make(map[string]CandidateBest)
+
+		for _, shard := range unscheduled {
+			shardKey := shard.Cid.String()
+			pc := precomputed[shardKey]
+
+			bestRepairPeer := peer.ID("")
+			bestFinalPeer := peer.ID("")
+			bestRelocated := false
+
+			bestProcessing := math.Inf(1)
+			bestCompletion := math.Inf(1)
+
+			bestLocal := 0
+			bestDirect := 0
+			bestMissing := 0
+			bestRepairIncoming := 0
+			bestRelocationIncoming := 0
+
+			for _, repairPeer := range candidatePeers {
+				cost, ok := candidateCosts[shardKey][repairPeer]
+				if !ok {
+					continue
+				}
+
+				repairPeerHasSameStripeShard := pc.SameStripePeers[repairPeer]
+
+				if !repairPeerHasSameStripeShard {
+					testLoad := copyPeerIncomingLoadRelocation(peerIncomingLoad)
+					testLoad[repairPeer] += cost.IncomingChunkCount
+
+					completion := maxPeerIncomingTimeRelocation(testLoad, topology, chunkMB)
+					if math.IsInf(completion, 1) {
+						continue
+					}
+
+					if completion < bestCompletion ||
+						(completion == bestCompletion &&
+							(bestRepairPeer == "" || repairPeer.String() < bestRepairPeer.String())) {
+						bestRepairPeer = repairPeer
+						bestFinalPeer = repairPeer
+						bestRelocated = false
+
+						bestProcessing = cost.ProcessingTime
+						bestCompletion = completion
+
+						bestLocal = cost.LocalChunkCount
+						bestDirect = cost.DirectChunkCount
+						bestMissing = cost.MissingChunkCount
+						bestRepairIncoming = cost.IncomingChunkCount
+						bestRelocationIncoming = 0
+					}
+
+					continue
+				}
+
+				for _, finalPeer := range candidatePeers {
+					if finalPeer == failedPeer || finalPeer == repairPeer {
+						continue
+					}
+
+					if topologyNodeIn(topology, finalPeer) == 0 {
+						continue
+					}
+
+					if pc.SameStripePeers[finalPeer] {
+						continue
+					}
+
+					testLoad := copyPeerIncomingLoadRelocation(peerIncomingLoad)
+					testLoad[repairPeer] += cost.IncomingChunkCount
+					testLoad[finalPeer] += pc.ShardSize
+
+					completion := maxPeerIncomingTimeRelocation(testLoad, topology, chunkMB)
+					if math.IsInf(completion, 1) {
+						continue
+					}
+
+					if completion < bestCompletion ||
+						(completion == bestCompletion &&
+							(bestRepairPeer == "" ||
+								repairPeer.String() < bestRepairPeer.String() ||
+								(repairPeer.String() == bestRepairPeer.String() &&
+									finalPeer.String() < bestFinalPeer.String()))) {
+						bestRepairPeer = repairPeer
+						bestFinalPeer = finalPeer
+						bestRelocated = true
+
+						bestProcessing = cost.ProcessingTime
+						bestCompletion = completion
+
+						bestLocal = cost.LocalChunkCount
+						bestDirect = cost.DirectChunkCount
+						bestMissing = cost.MissingChunkCount
+						bestRepairIncoming = cost.IncomingChunkCount
+						bestRelocationIncoming = pc.ShardSize
+					}
+				}
+			}
+
+			if bestRepairPeer != "" && bestFinalPeer != "" && !math.IsInf(bestCompletion, 1) {
+				bestForShard[shardKey] = CandidateBest{
+					Shard: shard,
+
+					RepairPeer: bestRepairPeer,
+					FinalPeer:  bestFinalPeer,
+					Relocated:  bestRelocated,
+
+					LocalChunkCount:   bestLocal,
+					DirectChunkCount:  bestDirect,
+					MissingChunkCount: bestMissing,
+
+					RepairIncomingChunkCount:     bestRepairIncoming,
+					RelocationIncomingChunkCount: bestRelocationIncoming,
+
+					ProcessingTime: bestProcessing,
+					CompletionTime: bestCompletion,
+				}
+			}
+		}
+
+		if len(bestForShard) == 0 {
+			break
+		}
+
+		chosenIndex := -1
+		chosenCompletion := -1.0
+		chosenKey := ""
+
+		for idx, shard := range unscheduled {
+			key := shard.Cid.String()
+			cand, ok := bestForShard[key]
+			if !ok {
+				continue
+			}
+
+			if chosenIndex == -1 ||
+				cand.CompletionTime > chosenCompletion ||
+				(cand.CompletionTime == chosenCompletion && key < chosenKey) {
+				chosenIndex = idx
+				chosenCompletion = cand.CompletionTime
+				chosenKey = key
+			}
+		}
+
+		if chosenIndex == -1 {
+			break
+		}
+
+		chosenShard := unscheduled[chosenIndex]
+		chosen := bestForShard[chosenShard.Cid.String()]
+
+		peerIncomingLoad[chosen.RepairPeer] += chosen.RepairIncomingChunkCount
+
+		if chosen.Relocated {
+			peerIncomingLoad[chosen.FinalPeer] += chosen.RelocationIncomingChunkCount
+		}
+
+		assignments[chosen.FinalPeer] = append(assignments[chosen.FinalPeer], chosenShard)
+
+		estimates = append(estimates, IncomingOnlyRelocationEstimate{
+			Shard:      chosenShard,
+			RepairPeer: chosen.RepairPeer,
+
+			FinalPeer: chosen.FinalPeer,
+			Relocated: chosen.Relocated,
+
+			LocalChunkCount:   chosen.LocalChunkCount,
+			DirectChunkCount:  chosen.DirectChunkCount,
+			MissingChunkCount: chosen.MissingChunkCount,
+
+			IncomingChunkCount: chosen.RepairIncomingChunkCount,
+
+			RepairIncomingChunkCount:     chosen.RepairIncomingChunkCount,
+			RelocationIncomingChunkCount: chosen.RelocationIncomingChunkCount,
+
+			ProcessingTime: chosen.ProcessingTime,
+			FinishTime:     chosen.CompletionTime,
+		})
+
+		fmt.Printf(
+			"PRECOMPUTED INCOMING-ONLY MAX-MIN RELOCATION assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v processing=%f finish=%f local=%d direct=%d missing=%d repairIncoming=%d relocationIncoming=%d\n",
+			chosenShard.Name,
+			chosen.RepairPeer.String(),
+			chosen.FinalPeer.String(),
+			chosen.Relocated,
+			chosen.ProcessingTime,
+			chosen.CompletionTime,
+			chosen.LocalChunkCount,
+			chosen.DirectChunkCount,
+			chosen.MissingChunkCount,
+			chosen.RepairIncomingChunkCount,
+			chosen.RelocationIncomingChunkCount,
+		)
+
+		unscheduled = append(
+			unscheduled[:chosenIndex],
+			unscheduled[chosenIndex+1:]...,
+		)
+	}
+
+	fmt.Printf("[PHASE] scheduling loop took: %v\n", time.Since(start))
+	fmt.Printf("[TOTAL] ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocation took: %v\n", time.Since(totalStart))
+
+	return assignments, estimates
+}
+
+func peerIncomingTimeRelocation(
+	p peer.ID,
+	chunks int,
+	topology *NetworkTopology,
+	chunkMB float64,
+) float64 {
+	if chunks == 0 {
+		return 0
+	}
+
+	in := topologyNodeIn(topology, p)
+	if in == 0 {
+		return math.Inf(1)
+	}
+
+	return float64(chunks) * chunkMB / float64(in)
+}
+
+func max3Relocation(a, b, c float64) float64 {
+	if b > a {
+		a = b
+	}
+	if c > a {
+		a = c
+	}
+	return a
+}
+
+func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationOptimized(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
+) (map[peer.ID][]api.Pin, []IncomingOnlyRelocationEstimate) {
+	fmt.Println("In OPTIMIZED PRECOMPUTED INCOMING-ONLY MAX-MIN Repair Strategy with Relocation !!!")
+
+	totalStart := time.Now()
+
+	assignments := make(map[peer.ID][]api.Pin)
+	estimates := make([]IncomingOnlyRelocationEstimate, 0)
+
+	if len(failedShards) == 0 || len(candidatePeers) == 0 {
+		fmt.Printf("[TOTAL] exited early in %v\n", time.Since(totalStart))
+		return assignments, estimates
+	}
+
+	candidatePeers = sortedUniquePeers(candidatePeers)
+
+	type ShardPrecompute struct {
+		Shard           api.Pin
+		ShardCIDs       []string
+		ShardSize       int
+		N               int
+		SameStripePeers map[peer.ID]bool
+		PeerMatchedCIDs map[peer.ID][]string
+		Index           IncomingOnlyShardIndex
+	}
+
+	type CandidateCost struct {
+		LocalChunkCount    int
+		DirectChunkCount   int
+		MissingChunkCount  int
+		IncomingChunkCount int
+		ProcessingTime     float64
+	}
+
+	precomputed := make(map[string]ShardPrecompute)
+
+	start := time.Now()
+
+	for _, shard := range failedShards {
+		shardKey := shard.Cid.String()
+
+		shardCIDs := cidListFromPin(shard)
+		shardSize := len(shardCIDs)
+		if shardSize == 0 {
+			continue
+		}
+
+		_, sameStripePeers, n, shardLength := getSameStripe(shard)
+		if shardLength > 0 {
+			shardSize = shardLength
+		}
+
+		_, _, _, peerMatchedCIDs := getSimilarity(shard)
+		index := buildIncomingOnlyShardIndex(peerMatchedCIDs)
+
+		precomputed[shardKey] = ShardPrecompute{
+			Shard:           shard,
+			ShardCIDs:       shardCIDs,
+			ShardSize:       shardSize,
+			N:               n,
+			SameStripePeers: peerSetRelocation(sameStripePeers),
+			PeerMatchedCIDs: peerMatchedCIDs,
+			Index:           index,
+		}
+	}
+
+	fmt.Printf("[PHASE] precompute similarities + indexes took: %v\n", time.Since(start))
+
+	unscheduled := make([]api.Pin, 0)
+	for _, shard := range failedShards {
+		if _, ok := precomputed[shard.Cid.String()]; ok {
+			unscheduled = append(unscheduled, shard)
+		}
+	}
+
+	peerIncomingLoad := make(map[peer.ID]int)
+	for _, p := range candidatePeers {
+		peerIncomingLoad[p] = 0
+	}
+
+	start = time.Now()
+
+	candidateCosts := make(map[string]map[peer.ID]CandidateCost)
+
+	for _, shard := range unscheduled {
+		shardKey := shard.Cid.String()
+		pc := precomputed[shardKey]
+
+		candidateCosts[shardKey] = make(map[peer.ID]CandidateCost)
+
+		for _, repairPeer := range candidatePeers {
+			if repairPeer == failedPeer {
+				continue
+			}
+
+			if topologyNodeIn(topology, repairPeer) == 0 {
+				continue
+			}
+
+			localCount, directCount, missingCount, incomingCount :=
+				buildIncomingOnlyCountsFast(
+					repairPeer,
+					failedPeer,
+					pc.ShardCIDs,
+					pc.Index,
+					pc.N,
+				)
+
+			processing := estimateIncomingOnlyProcessingTime(
+				incomingCount,
+				repairPeer,
+				topology,
+				chunkMB,
+			)
+
+			if math.IsInf(processing, 1) {
+				continue
+			}
+
+			candidateCosts[shardKey][repairPeer] = CandidateCost{
+				LocalChunkCount:    localCount,
+				DirectChunkCount:   directCount,
+				MissingChunkCount:  missingCount,
+				IncomingChunkCount: incomingCount,
+				ProcessingTime:     processing,
+			}
+		}
+	}
+
+	fmt.Printf("[PHASE] precompute candidate costs took: %v\n", time.Since(start))
+
+	start = time.Now()
+
+	for len(unscheduled) > 0 {
+		type CandidateBest struct {
+			Shard api.Pin
+
+			RepairPeer peer.ID
+			FinalPeer  peer.ID
+			Relocated  bool
+
+			LocalChunkCount   int
+			DirectChunkCount  int
+			MissingChunkCount int
+
+			RepairIncomingChunkCount     int
+			RelocationIncomingChunkCount int
+
+			ProcessingTime float64
+			CompletionTime float64
+		}
+
+		bestForShard := make(map[string]CandidateBest)
+
+		currentGlobalMax := maxPeerIncomingTimeRelocation(
+			peerIncomingLoad,
+			topology,
+			chunkMB,
+		)
+
+		for _, shard := range unscheduled {
+			shardKey := shard.Cid.String()
+			pc := precomputed[shardKey]
+
+			bestRepairPeer := peer.ID("")
+			bestFinalPeer := peer.ID("")
+			bestRelocated := false
+
+			bestProcessing := math.Inf(1)
+			bestCompletion := math.Inf(1)
+
+			bestLocal := 0
+			bestDirect := 0
+			bestMissing := 0
+			bestRepairIncoming := 0
+			bestRelocationIncoming := 0
+
+			repairTimeAfter := make(map[peer.ID]float64)
+			destTimeAfter := make(map[peer.ID]float64)
+
+			for _, repairPeer := range candidatePeers {
+				cost, ok := candidateCosts[shardKey][repairPeer]
+				if !ok {
+					continue
+				}
+
+				repairTimeAfter[repairPeer] = peerIncomingTimeRelocation(
+					repairPeer,
+					peerIncomingLoad[repairPeer]+cost.IncomingChunkCount,
+					topology,
+					chunkMB,
+				)
+			}
+
+			for _, finalPeer := range candidatePeers {
+				if finalPeer == failedPeer {
+					continue
+				}
+
+				if topologyNodeIn(topology, finalPeer) == 0 {
+					continue
+				}
+
+				if pc.SameStripePeers[finalPeer] {
+					continue
+				}
+
+				destTimeAfter[finalPeer] = peerIncomingTimeRelocation(
+					finalPeer,
+					peerIncomingLoad[finalPeer]+pc.ShardSize,
+					topology,
+					chunkMB,
+				)
+			}
+
+			for _, repairPeer := range candidatePeers {
+				cost, ok := candidateCosts[shardKey][repairPeer]
+				if !ok {
+					continue
+				}
+
+				repairTime := repairTimeAfter[repairPeer]
+				if math.IsInf(repairTime, 1) {
+					continue
+				}
+
+				repairPeerHasSameStripeShard := pc.SameStripePeers[repairPeer]
+
+				if !repairPeerHasSameStripeShard {
+					completion := currentGlobalMax
+					if repairTime > completion {
+						completion = repairTime
+					}
+
+					if completion < bestCompletion ||
+						(completion == bestCompletion &&
+							(bestRepairPeer == "" || repairPeer.String() < bestRepairPeer.String())) {
+						bestRepairPeer = repairPeer
+						bestFinalPeer = repairPeer
+						bestRelocated = false
+
+						bestProcessing = cost.ProcessingTime
+						bestCompletion = completion
+
+						bestLocal = cost.LocalChunkCount
+						bestDirect = cost.DirectChunkCount
+						bestMissing = cost.MissingChunkCount
+						bestRepairIncoming = cost.IncomingChunkCount
+						bestRelocationIncoming = 0
+					}
+
+					continue
+				}
+
+				for _, finalPeer := range candidatePeers {
+					if finalPeer == failedPeer || finalPeer == repairPeer {
+						continue
+					}
+
+					if pc.SameStripePeers[finalPeer] {
+						continue
+					}
+
+					destTime, ok := destTimeAfter[finalPeer]
+					if !ok || math.IsInf(destTime, 1) {
+						continue
+					}
+
+					completion := max3Relocation(
+						currentGlobalMax,
+						repairTime,
+						destTime,
+					)
+
+					if completion < bestCompletion ||
+						(completion == bestCompletion &&
+							(bestRepairPeer == "" ||
+								repairPeer.String() < bestRepairPeer.String() ||
+								(repairPeer.String() == bestRepairPeer.String() &&
+									finalPeer.String() < bestFinalPeer.String()))) {
+						bestRepairPeer = repairPeer
+						bestFinalPeer = finalPeer
+						bestRelocated = true
+
+						bestProcessing = cost.ProcessingTime
+						bestCompletion = completion
+
+						bestLocal = cost.LocalChunkCount
+						bestDirect = cost.DirectChunkCount
+						bestMissing = cost.MissingChunkCount
+						bestRepairIncoming = cost.IncomingChunkCount
+						bestRelocationIncoming = pc.ShardSize
+					}
+				}
+			}
+
+			if bestRepairPeer != "" && bestFinalPeer != "" && !math.IsInf(bestCompletion, 1) {
+				bestForShard[shardKey] = CandidateBest{
+					Shard: shard,
+
+					RepairPeer: bestRepairPeer,
+					FinalPeer:  bestFinalPeer,
+					Relocated:  bestRelocated,
+
+					LocalChunkCount:   bestLocal,
+					DirectChunkCount:  bestDirect,
+					MissingChunkCount: bestMissing,
+
+					RepairIncomingChunkCount:     bestRepairIncoming,
+					RelocationIncomingChunkCount: bestRelocationIncoming,
+
+					ProcessingTime: bestProcessing,
+					CompletionTime: bestCompletion,
+				}
+			}
+		}
+
+		if len(bestForShard) == 0 {
+			break
+		}
+
+		chosenIndex := -1
+		chosenCompletion := -1.0
+		chosenKey := ""
+
+		for idx, shard := range unscheduled {
+			key := shard.Cid.String()
+			cand, ok := bestForShard[key]
+			if !ok {
+				continue
+			}
+
+			if chosenIndex == -1 ||
+				cand.CompletionTime > chosenCompletion ||
+				(cand.CompletionTime == chosenCompletion && key < chosenKey) {
+				chosenIndex = idx
+				chosenCompletion = cand.CompletionTime
+				chosenKey = key
+			}
+		}
+
+		if chosenIndex == -1 {
+			break
+		}
+
+		chosenShard := unscheduled[chosenIndex]
+		chosen := bestForShard[chosenShard.Cid.String()]
+
+		peerIncomingLoad[chosen.RepairPeer] += chosen.RepairIncomingChunkCount
+
+		if chosen.Relocated {
+			peerIncomingLoad[chosen.FinalPeer] += chosen.RelocationIncomingChunkCount
+		}
+
+		assignments[chosen.FinalPeer] = append(assignments[chosen.FinalPeer], chosenShard)
+
+		estimates = append(estimates, IncomingOnlyRelocationEstimate{
+			Shard:      chosenShard,
+			RepairPeer: chosen.RepairPeer,
+
+			FinalPeer: chosen.FinalPeer,
+			Relocated: chosen.Relocated,
+
+			LocalChunkCount:   chosen.LocalChunkCount,
+			DirectChunkCount:  chosen.DirectChunkCount,
+			MissingChunkCount: chosen.MissingChunkCount,
+
+			IncomingChunkCount: chosen.RepairIncomingChunkCount,
+
+			RepairIncomingChunkCount:     chosen.RepairIncomingChunkCount,
+			RelocationIncomingChunkCount: chosen.RelocationIncomingChunkCount,
+
+			ProcessingTime: chosen.ProcessingTime,
+			FinishTime:     chosen.CompletionTime,
+		})
+
+		fmt.Printf(
+			"OPTIMIZED PRECOMPUTED INCOMING-ONLY MAX-MIN RELOCATION assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v processing=%f finish=%f local=%d direct=%d missing=%d repairIncoming=%d relocationIncoming=%d\n",
+			chosenShard.Name,
+			chosen.RepairPeer.String(),
+			chosen.FinalPeer.String(),
+			chosen.Relocated,
+			chosen.ProcessingTime,
+			chosen.CompletionTime,
+			chosen.LocalChunkCount,
+			chosen.DirectChunkCount,
+			chosen.MissingChunkCount,
+			chosen.RepairIncomingChunkCount,
+			chosen.RelocationIncomingChunkCount,
+		)
+
+		unscheduled = append(
+			unscheduled[:chosenIndex],
+			unscheduled[chosenIndex+1:]...,
+		)
+	}
+
+	fmt.Printf("[PHASE] scheduling loop took: %v\n", time.Since(start))
+	fmt.Printf("[TOTAL] ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationOptimized took: %v\n", time.Since(totalStart))
+
+	return assignments, estimates
+}
+
+func peerSetRelocationFast(peers []peer.ID) map[peer.ID]bool {
+	out := make(map[peer.ID]bool)
+	for _, p := range peers {
+		if p != "" {
+			out[p] = true
+		}
+	}
+	return out
+}
+
+func peerIncomingTimeRelocationFast(
+	p peer.ID,
+	chunks int,
+	topology *NetworkTopology,
+	chunkMB float64,
+) float64 {
+	if chunks == 0 {
+		return 0
+	}
+
+	in := topologyNodeIn(topology, p)
+	if in == 0 {
+		return math.Inf(1)
+	}
+
+	return float64(chunks) * chunkMB / float64(in)
+}
+
+func max2RelocationFast(a, b float64) float64 {
+	if b > a {
+		return b
+	}
+	return a
+}
+
+func max3RelocationFast(a, b, c float64) float64 {
+	if b > a {
+		a = b
+	}
+	if c > a {
+		a = c
+	}
+	return a
+}
+
+func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
+) (map[peer.ID][]api.Pin, []IncomingOnlyRelocationEstimate) {
+	fmt.Println("In FAST PRECOMPUTED INCOMING-ONLY MAX-MIN Repair Strategy with Relocation !!!")
+
+	totalStart := time.Now()
+
+	assignments := make(map[peer.ID][]api.Pin)
+	estimates := make([]IncomingOnlyRelocationEstimate, 0)
+
+	if len(failedShards) == 0 || len(candidatePeers) == 0 {
+		fmt.Printf("[TOTAL] exited early in %v\n", time.Since(totalStart))
+		return assignments, estimates
+	}
+
+	candidatePeers = sortedUniquePeers(candidatePeers)
+
+	type ShardPrecompute struct {
+		Shard           api.Pin
+		ShardCIDs       []string
+		ShardSize       int
+		N               int
+		SameStripePeers map[peer.ID]bool
+		PeerMatchedCIDs map[peer.ID][]string
+		Index           IncomingOnlyShardIndex
+	}
+
+	type CandidateCost struct {
+		LocalChunkCount    int
+		DirectChunkCount   int
+		MissingChunkCount  int
+		IncomingChunkCount int
+		ProcessingTime     float64
+	}
+
+	precomputed := make(map[string]ShardPrecompute)
+
+	start := time.Now()
+
+	for _, shard := range failedShards {
+		shardKey := shard.Cid.String()
+
+		shardCIDs := cidListFromPin(shard)
+		shardSize := len(shardCIDs)
+		if shardSize == 0 {
+			continue
+		}
+
+		_, sameStripePeers, n, shardLength := getSameStripe(shard)
+		if shardLength > 0 {
+			shardSize = shardLength
+		}
+
+		_, _, _, peerMatchedCIDs := getSimilarity(shard)
+		index := buildIncomingOnlyShardIndex(peerMatchedCIDs)
+
+		precomputed[shardKey] = ShardPrecompute{
+			Shard:           shard,
+			ShardCIDs:       shardCIDs,
+			ShardSize:       shardSize,
+			N:               n,
+			SameStripePeers: peerSetRelocationFast(sameStripePeers),
+			PeerMatchedCIDs: peerMatchedCIDs,
+			Index:           index,
+		}
+	}
+
+	fmt.Printf("[PHASE] precompute similarities + indexes took: %v\n", time.Since(start))
+
+	unscheduled := make([]api.Pin, 0)
+	for _, shard := range failedShards {
+		if _, ok := precomputed[shard.Cid.String()]; ok {
+			unscheduled = append(unscheduled, shard)
+		}
+	}
+
+	peerIncomingLoad := make(map[peer.ID]int)
+	for _, p := range candidatePeers {
+		peerIncomingLoad[p] = 0
+	}
+
+	start = time.Now()
+
+	candidateCosts := make(map[string]map[peer.ID]CandidateCost)
+
+	for _, shard := range unscheduled {
+		shardKey := shard.Cid.String()
+		pc := precomputed[shardKey]
+
+		candidateCosts[shardKey] = make(map[peer.ID]CandidateCost)
+
+		for _, repairPeer := range candidatePeers {
+			if repairPeer == failedPeer {
+				continue
+			}
+
+			if topologyNodeIn(topology, repairPeer) == 0 {
+				continue
+			}
+
+			localCount, directCount, missingCount, incomingCount :=
+				buildIncomingOnlyCountsFast(
+					repairPeer,
+					failedPeer,
+					pc.ShardCIDs,
+					pc.Index,
+					pc.N,
+				)
+
+			processing := estimateIncomingOnlyProcessingTime(
+				incomingCount,
+				repairPeer,
+				topology,
+				chunkMB,
+			)
+
+			if math.IsInf(processing, 1) {
+				continue
+			}
+
+			candidateCosts[shardKey][repairPeer] = CandidateCost{
+				LocalChunkCount:    localCount,
+				DirectChunkCount:   directCount,
+				MissingChunkCount:  missingCount,
+				IncomingChunkCount: incomingCount,
+				ProcessingTime:     processing,
+			}
+		}
+	}
+
+	fmt.Printf("[PHASE] precompute candidate costs took: %v\n", time.Since(start))
+
+	start = time.Now()
+
+	for len(unscheduled) > 0 {
+		type CandidateBest struct {
+			Shard api.Pin
+
+			RepairPeer peer.ID
+			FinalPeer  peer.ID
+			Relocated  bool
+
+			LocalChunkCount   int
+			DirectChunkCount  int
+			MissingChunkCount int
+
+			RepairIncomingChunkCount     int
+			RelocationIncomingChunkCount int
+
+			ProcessingTime float64
+			CompletionTime float64
+		}
+
+		bestForShard := make(map[string]CandidateBest)
+
+		currentGlobalMax := maxPeerIncomingTimeRelocation(
+			peerIncomingLoad,
+			topology,
+			chunkMB,
+		)
+
+		for _, shard := range unscheduled {
+			shardKey := shard.Cid.String()
+			pc := precomputed[shardKey]
+
+			bestRepairPeer := peer.ID("")
+			bestFinalPeer := peer.ID("")
+			bestRelocated := false
+
+			bestProcessing := math.Inf(1)
+			bestCompletion := math.Inf(1)
+
+			bestLocal := 0
+			bestDirect := 0
+			bestMissing := 0
+			bestRepairIncoming := 0
+			bestRelocationIncoming := 0
+
+			// ------------------------------------------------------------
+			// Compute best destination peer ONCE for this shard.
+			// This is valid because relocation cost is shardSize and does
+			// not depend on the repair peer.
+			// ------------------------------------------------------------
+			bestDestPeer := peer.ID("")
+			bestDestTime := math.Inf(1)
+
+			for _, finalPeer := range candidatePeers {
+				if finalPeer == failedPeer {
+					continue
+				}
+
+				if topologyNodeIn(topology, finalPeer) == 0 {
+					continue
+				}
+
+				// Destination peer must not already hold a shard
+				// belonging to the same stripe.
+				if pc.SameStripePeers[finalPeer] {
+					continue
+				}
+
+				destTime := peerIncomingTimeRelocationFast(
+					finalPeer,
+					peerIncomingLoad[finalPeer]+pc.ShardSize,
+					topology,
+					chunkMB,
+				)
+
+				if math.IsInf(destTime, 1) {
+					continue
+				}
+
+				if destTime < bestDestTime ||
+					(destTime == bestDestTime &&
+						(bestDestPeer == "" || finalPeer.String() < bestDestPeer.String())) {
+					bestDestPeer = finalPeer
+					bestDestTime = destTime
+				}
+			}
+
+			// ------------------------------------------------------------
+			// Evaluate each repair peer once.
+			// No nested finalPeer loop is needed anymore.
+			// ------------------------------------------------------------
+			for _, repairPeer := range candidatePeers {
+				cost, ok := candidateCosts[shardKey][repairPeer]
+				if !ok {
+					continue
+				}
+
+				repairTime := peerIncomingTimeRelocationFast(
+					repairPeer,
+					peerIncomingLoad[repairPeer]+cost.IncomingChunkCount,
+					topology,
+					chunkMB,
+				)
+
+				if math.IsInf(repairTime, 1) {
+					continue
+				}
+
+				repairPeerHasSameStripeShard := pc.SameStripePeers[repairPeer]
+
+				var finalPeer peer.ID
+				relocated := false
+				relocationIncoming := 0
+				completion := math.Inf(1)
+
+				if !repairPeerHasSameStripeShard {
+					// Repair peer can keep the repaired shard.
+					finalPeer = repairPeer
+					relocated = false
+					relocationIncoming = 0
+
+					completion = max2RelocationFast(
+						currentGlobalMax,
+						repairTime,
+					)
+				} else {
+					// Repair peer already has another shard from this stripe.
+					// It can repair, but the result must be relocated.
+					if bestDestPeer == "" {
+						continue
+					}
+
+					finalPeer = bestDestPeer
+					relocated = true
+					relocationIncoming = pc.ShardSize
+
+					completion = max3RelocationFast(
+						currentGlobalMax,
+						repairTime,
+						bestDestTime,
+					)
+				}
+
+				if completion < bestCompletion ||
+					(completion == bestCompletion &&
+						(bestRepairPeer == "" ||
+							repairPeer.String() < bestRepairPeer.String() ||
+							(repairPeer.String() == bestRepairPeer.String() &&
+								finalPeer.String() < bestFinalPeer.String()))) {
+					bestRepairPeer = repairPeer
+					bestFinalPeer = finalPeer
+					bestRelocated = relocated
+
+					bestProcessing = cost.ProcessingTime
+					bestCompletion = completion
+
+					bestLocal = cost.LocalChunkCount
+					bestDirect = cost.DirectChunkCount
+					bestMissing = cost.MissingChunkCount
+					bestRepairIncoming = cost.IncomingChunkCount
+					bestRelocationIncoming = relocationIncoming
+				}
+			}
+
+			if bestRepairPeer != "" && bestFinalPeer != "" && !math.IsInf(bestCompletion, 1) {
+				bestForShard[shardKey] = CandidateBest{
+					Shard: shard,
+
+					RepairPeer: bestRepairPeer,
+					FinalPeer:  bestFinalPeer,
+					Relocated:  bestRelocated,
+
+					LocalChunkCount:   bestLocal,
+					DirectChunkCount:  bestDirect,
+					MissingChunkCount: bestMissing,
+
+					RepairIncomingChunkCount:     bestRepairIncoming,
+					RelocationIncomingChunkCount: bestRelocationIncoming,
+
+					ProcessingTime: bestProcessing,
+					CompletionTime: bestCompletion,
+				}
+			}
+		}
+
+		if len(bestForShard) == 0 {
+			break
+		}
+
+		chosenIndex := -1
+		chosenCompletion := -1.0
+		chosenKey := ""
+
+		for idx, shard := range unscheduled {
+			key := shard.Cid.String()
+			cand, ok := bestForShard[key]
+			if !ok {
+				continue
+			}
+
+			if chosenIndex == -1 ||
+				cand.CompletionTime > chosenCompletion ||
+				(cand.CompletionTime == chosenCompletion && key < chosenKey) {
+				chosenIndex = idx
+				chosenCompletion = cand.CompletionTime
+				chosenKey = key
+			}
+		}
+
+		if chosenIndex == -1 {
+			break
+		}
+
+		chosenShard := unscheduled[chosenIndex]
+		chosen := bestForShard[chosenShard.Cid.String()]
+
+		peerIncomingLoad[chosen.RepairPeer] += chosen.RepairIncomingChunkCount
+
+		if chosen.Relocated {
+			peerIncomingLoad[chosen.FinalPeer] += chosen.RelocationIncomingChunkCount
+		}
+
+		assignments[chosen.FinalPeer] = append(assignments[chosen.FinalPeer], chosenShard)
+
+		estimates = append(estimates, IncomingOnlyRelocationEstimate{
+			Shard:      chosenShard,
+			RepairPeer: chosen.RepairPeer,
+
+			FinalPeer: chosen.FinalPeer,
+			Relocated: chosen.Relocated,
+
+			LocalChunkCount:   chosen.LocalChunkCount,
+			DirectChunkCount:  chosen.DirectChunkCount,
+			MissingChunkCount: chosen.MissingChunkCount,
+
+			IncomingChunkCount: chosen.RepairIncomingChunkCount,
+
+			RepairIncomingChunkCount:     chosen.RepairIncomingChunkCount,
+			RelocationIncomingChunkCount: chosen.RelocationIncomingChunkCount,
+
+			ProcessingTime: chosen.ProcessingTime,
+			FinishTime:     chosen.CompletionTime,
+		})
+
+		fmt.Printf(
+			"FAST PRECOMPUTED INCOMING-ONLY MAX-MIN RELOCATION assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v processing=%f finish=%f local=%d direct=%d missing=%d repairIncoming=%d relocationIncoming=%d\n",
+			chosenShard.Name,
+			chosen.RepairPeer.String(),
+			chosen.FinalPeer.String(),
+			chosen.Relocated,
+			chosen.ProcessingTime,
+			chosen.CompletionTime,
+			chosen.LocalChunkCount,
+			chosen.DirectChunkCount,
+			chosen.MissingChunkCount,
+			chosen.RepairIncomingChunkCount,
+			chosen.RelocationIncomingChunkCount,
+		)
+
+		unscheduled = append(
+			unscheduled[:chosenIndex],
+			unscheduled[chosenIndex+1:]...,
+		)
+	}
+
+	fmt.Printf("[PHASE] scheduling loop took: %v\n", time.Since(start))
+	fmt.Printf("[TOTAL] ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast took: %v\n", time.Since(totalStart))
+
+	return assignments, estimates
+}
