@@ -267,7 +267,7 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 			if len(last) == 0 {
 				if len(ToEncode) == or {
 					//encode the data and clear to Encode
-					parity, timetakn = encodeTest(ToEncode, enc, or, timetakn)
+					parity, timetakn = RSencode(ToEncode, enc, or, timetakn)
 					ToEncode = [][]byte{}
 				}
 				// Base case: add leaf node with data.
@@ -297,7 +297,7 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 						}
 						endd := time.Now()
 						timetaknpad += endd.Sub(startt)
-						parity, timetakn = encodeTest(ToEncode, enc, or, timetakn)
+						parity, timetakn = RSencode(ToEncode, enc, or, timetakn)
 						last = append(last, parity...)
 						parity = [][]byte{}
 						ToEncode = [][]byte{}
@@ -327,7 +327,7 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 				return nil, 0, nil, nil, nil, 0, 0, err
 			}
 		}
-		fmt.Fprintf(os.Stdout, "Node CID is %s:\n",childNode.Cid().String())
+		fmt.Fprintf(os.Stdout, "Node CID is %s:\n", childNode.Cid().String())
 		if pp != 0 {
 			err = node.AddPChild(childNode, childFileSize, db)
 			if err != nil {
@@ -352,7 +352,7 @@ func fillNodeRec(db *DagBuilderHelper, node *FSNodeOverDag, depth int, ToEncode 
 	return filledNode, nodeFileSize, parity, ToEncode, last, timetakn, timetaknpad, nil
 }
 
-func encodeTest(data [][]byte, enc reedsolomon.Encoder, or int, timetaken time.Duration) ([][]byte, time.Duration) {
+func RSencode(data [][]byte, enc reedsolomon.Encoder, or int, timetaken time.Duration) ([][]byte, time.Duration) {
 	var Shard []byte
 	for _, shard := range data {
 		Shard = append(Shard, shard...)

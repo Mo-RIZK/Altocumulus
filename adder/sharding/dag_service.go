@@ -62,7 +62,6 @@ type DAGService struct {
 	current       int
 	shardPINtime  time.Duration
 	nodeparallel  []ipld.Node
-	howmany       int
 	flushtimes    int
 	original      int
 	parity        int
@@ -100,7 +99,6 @@ func New(ctx context.Context, rpc *rpc.Client, opts api.AddParams, out chan<- ap
 		current:       0,
 		nodeparallel:  make([]ipld.Node, 0, opts.O+opts.P),
 		currentShard:  make([]*shard, opts.O+opts.P),
-		howmany:       0,
 		flushtimes:    0,
 		original:      opts.O,
 		parity:        opts.P,
@@ -124,10 +122,10 @@ func (dgs *DAGService) Add(ctx context.Context, node ipld.Node) error {
 	        return nil
 	}*/
 	if dgs.original == 1 || dgs.seq {
-		fmt.Fprintf(os.Stdout, "Entered to sequentialllllllllllllll \n")
+		// replication
 		return dgs.ingestBlockREP(ctx, node)
 	} else {
-		fmt.Fprintf(os.Stdout, "Entered to parallelllllll \n")
+		// Erasure coding
 		return dgs.ingestBlock(ctx, node)
 	}
 
@@ -155,21 +153,13 @@ func (dgs *DAGService) Close() error {
 // with the meta pin for the root node of the content.
 func (dgs *DAGService) Finalize(ctx context.Context, dataRoot api.Cid) (api.Cid, error) {
 	if dgs.original == 1 || dgs.seq {
+		//replication
 		return dgs.FinalizeRep(ctx, dataRoot)
 	}
+	//erasure coding
+	//last stripe might not be added yet, so ensure that it is added
 	dgs.ingestLastBlocks(dgs.ctx)
-	/*for i := 0; i < dgs.original+dgs.parity; i++ {
-	        dgs.lastCid, _ = dgs.flushCurrentShard(ctx)
-	        //if err != nil {
-	        //      return api.NewCid(lastCid), err
-	        //}
-	        dgs.current = (dgs.current + 1) % (dgs.original + dgs.parity)
-	}*/
-	//dgs.lastCid , _ = dgs.flushCurrentShard(ctx)
-	//if err != nil {
-	//      return api.NewCid(lastCid), err
-	//}
-	dgs.lastCid, _ = dgs.flushCurrentShardsWithRep(ctx)
+	dgs.lastCid, _ = dgs.flushCurrentShardsWithEC(ctx)
 	if !dgs.lastCid.Equals(dataRoot.Cid) {
 		logger.Warnf("the last added CID (%s) is not the IPFS data root (%s). This is only normal when adding a single file without wrapping in directory.", dgs.lastCid, dataRoot)
 	}
@@ -310,26 +300,15 @@ func (dgs *DAGService) Allocations() []peer.ID {
 }
 
 func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
-	dgs.howmany++
-	//fmt.Fprintf(os.Stdout, " NOOOOMEEEEEEERRRRRRRROOOOO %d \n", dgs.howmany)
 	shardd := dgs.currentShard
 
-	// if we have no currentShard, create one
+	// if we have no currentShard, create n + k
 	if shardd[dgs.current] == nil {
 		start := time.Now()
-		logger.Infof("new shard for '%s': #%d", dgs.addParams.Name, len(dgs.shards))
+		logger.Infof("new shards for '%s': #%d", dgs.addParams.Name, len(dgs.shards))
 		var err error
 		// important: shards use the DAGService context.
 		oppts := dgs.addParams.PinOptions
-		for _, all := range dgs.addParams.UserAllocations {
-			fmt.Fprintf(os.Stdout, "Allocations 1 are %s \n", all.String())
-		}
-		/*oppts.ReplicationFactorMin = dgs.addParams.O + dgs.addParams.P
-		oppts.ReplicationFactorMax = dgs.addParams.O + dgs.addParams.P
-		allocs, err := adder.BlockAllocate(ctx, dgs.rpcClient, oppts)
-		if err != nil {
-			return err
-		}*/
 
 		for i := 0; i < dgs.addParams.O+dgs.addParams.P; i++ {
 			shardd[i], err = NewShard(dgs.ctx, ctx, dgs.rpcClient, dgs.addParams.PinOptions, oppts.UserAllocations[i])
@@ -347,7 +326,6 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		//save the internal nodes
 		//FIXME: This will grow in memory
 		fmt.Fprintf(os.Stdout, "Internal node save in memory %s cid : %s\n", time.Now().Format("15:04:05.000"), n.Cid().String())
-		//dgs.internalnodes = append(dgs.internalnodes, n)
 		return nil
 	}
 
@@ -355,8 +333,7 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		//send nodes concurrently
 		for _, node := range dgs.nodeparallel {
 			sizee := uint64(len(node.RawData()))
-			fmt.Fprintf(os.Stdout, "NODEEEEEEEEEEEEEEEEEE CIDDDDDDDD %s of  SIIIIIIZEEEEEEEEEE %d \n", node.Cid(), sizee)
-			fmt.Fprintf(os.Stdout, "SHAAAAAAARRRRRRRRDDDDDDDDDDDDD %s of  SIIIIIIZEEEEEEEEEE %d \n", shardd[dgs.current].pinOptions.Name, shardd[dgs.current].Size())
+			// current shard still have space for another chunk
 			if shardd[dgs.current].Size()+sizee < shardd[dgs.current].Limit() {
 				shardd[dgs.current].AddLink(ctx, node.Cid(), sizee)
 				dgs.wg.Add(1)
@@ -366,8 +343,8 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 				}(dgs.currentShard, dgs.current, node)
 				dgs.current = (dgs.current + 1) % (dgs.addParams.O + dgs.addParams.P)
 			} else {
-				fmt.Fprintf(os.Stdout, "FLUSSSSSSSSSSHHHHHHHHHHHHHHHHHHHHHHHHHHHH !!!!!!!!!1\n")
-				_, err := dgs.flushCurrentShardsWithRep(ctx)
+				// whenever it is full then send it to destination
+				_, err := dgs.flushCurrentShardsWithEC(ctx)
 				if err != nil {
 					return err
 				}
@@ -378,7 +355,6 @@ func (dgs *DAGService) ingestBlock(ctx context.Context, n ipld.Node) error {
 		dgs.wg.Wait()
 		return dgs.ingestBlock(ctx, n) // <-- retry ingest
 	} else {
-		fmt.Fprintf(os.Stdout, "Save in memory %s\n", time.Now().Format("15:04:05.000"))
 		dgs.nodeparallel = append(dgs.nodeparallel, n)
 		return nil
 	}
@@ -406,9 +382,6 @@ func (dgs *DAGService) ingestLastBlocks(ctx context.Context) error {
 		dgs.wg.Wait()
 		end := time.Now()
 		fmt.Fprintf(os.Stdout, "SENDING PART %s \n", end.Sub(start).String())
-		//fmt.Fprintf(os.Stdout, " AAAAAAADDDDDDDDEEEEEEEEDDDDDDDDDDDD %d \n", dgs.howmany)
-	} else {
-		//fmt.Fprintf(os.Stdout, " EEEEERRRRRRRRRRRRRRRR %d \n", dgs.howmany)
 	}
 	return nil
 }
@@ -459,8 +432,6 @@ func (dgs *DAGService) flushCurrentShard(ctx context.Context) (cid.Cid, error) {
 	}
 
 	lens := len(dgs.shards)
-
-	//TODO: Flush the n+k shards root nodes together here instead of flushing them one by one and return some metadata to tell us how they must be linked in the consensus
 
 	shardCid, _, err := shard[dgs.current].Flush(ctx, lens, dgs.previousShard)
 	if err != nil {
@@ -767,7 +738,7 @@ type every struct {
 }
 
 // flushes the dgs.currentShard and returns the LastLink()
-func (dgs *DAGService) flushCurrentShardsWithRep(ctx context.Context) (cid.Cid, error) {
+func (dgs *DAGService) flushCurrentShardsWithEC(ctx context.Context) (cid.Cid, error) {
 	fmt.Fprintf(os.Stdout, "Creating Shard DAG and sending roots %s\n", time.Now().Format("15:04:05.000"))
 	st := time.Now()
 	var LastLink cid.Cid

@@ -1,5 +1,7 @@
 package ipfscluster
 
+// Erasure coded Heterogeneity and Duplication aware Scheduler //
+
 import (
 	"container/heap"
 	"fmt"
@@ -6463,7 +6465,6 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationOptimized(
 
 	return assignments, estimates
 }
-
 func peerSetRelocationFast(peers []peer.ID) map[peer.ID]bool {
 	out := make(map[peer.ID]bool)
 	for _, p := range peers {
@@ -6499,16 +6500,6 @@ func max2RelocationFast(a, b float64) float64 {
 	return a
 }
 
-func max3RelocationFast(a, b, c float64) float64 {
-	if b > a {
-		a = b
-	}
-	if c > a {
-		a = c
-	}
-	return a
-}
-
 func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 	failedPeer peer.ID,
 	failedShards []api.Pin,
@@ -6519,7 +6510,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
 	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
 ) (map[peer.ID][]api.Pin, []IncomingOnlyRelocationEstimate) {
-	fmt.Println("In FAST PRECOMPUTED INCOMING-ONLY MAX-MIN Repair Strategy with Relocation !!!")
+	fmt.Println("In FAST PRECOMPUTED INCOMING-ONLY MAX-MIN Repair Strategy with Relocation WITHOUT CurrentGlobalMax !!!")
 
 	totalStart := time.Now()
 
@@ -6671,12 +6662,6 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 
 		bestForShard := make(map[string]CandidateBest)
 
-		currentGlobalMax := maxPeerIncomingTimeRelocation(
-			peerIncomingLoad,
-			topology,
-			chunkMB,
-		)
-
 		for _, shard := range unscheduled {
 			shardKey := shard.Cid.String()
 			pc := precomputed[shardKey]
@@ -6694,11 +6679,6 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 			bestRepairIncoming := 0
 			bestRelocationIncoming := 0
 
-			// ------------------------------------------------------------
-			// Compute best destination peer ONCE for this shard.
-			// This is valid because relocation cost is shardSize and does
-			// not depend on the repair peer.
-			// ------------------------------------------------------------
 			bestDestPeer := peer.ID("")
 			bestDestTime := math.Inf(1)
 
@@ -6711,8 +6691,6 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 					continue
 				}
 
-				// Destination peer must not already hold a shard
-				// belonging to the same stripe.
 				if pc.SameStripePeers[finalPeer] {
 					continue
 				}
@@ -6736,10 +6714,6 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 				}
 			}
 
-			// ------------------------------------------------------------
-			// Evaluate each repair peer once.
-			// No nested finalPeer loop is needed anymore.
-			// ------------------------------------------------------------
 			for _, repairPeer := range candidatePeers {
 				cost, ok := candidateCosts[shardKey][repairPeer]
 				if !ok {
@@ -6765,18 +6739,13 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 				completion := math.Inf(1)
 
 				if !repairPeerHasSameStripeShard {
-					// Repair peer can keep the repaired shard.
 					finalPeer = repairPeer
 					relocated = false
 					relocationIncoming = 0
 
-					completion = max2RelocationFast(
-						currentGlobalMax,
-						repairTime,
-					)
+					// No CurrentGlobalMax here.
+					completion = repairTime
 				} else {
-					// Repair peer already has another shard from this stripe.
-					// It can repair, but the result must be relocated.
 					if bestDestPeer == "" {
 						continue
 					}
@@ -6785,8 +6754,9 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 					relocated = true
 					relocationIncoming = pc.ShardSize
 
-					completion = max3RelocationFast(
-						currentGlobalMax,
+					// No CurrentGlobalMax here.
+					// Candidate time is the bottleneck between repair and relocation.
+					completion = max2RelocationFast(
 						repairTime,
 						bestDestTime,
 					)
@@ -6894,7 +6864,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 		})
 
 		fmt.Printf(
-			"FAST PRECOMPUTED INCOMING-ONLY MAX-MIN RELOCATION assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v processing=%f finish=%f local=%d direct=%d missing=%d repairIncoming=%d relocationIncoming=%d\n",
+			"FAST PRECOMPUTED INCOMING-ONLY MAX-MIN RELOCATION WITHOUT CURRENT GLOBAL MAX assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v processing=%f finish=%f local=%d direct=%d missing=%d repairIncoming=%d relocationIncoming=%d\n",
 			chosenShard.Name,
 			chosen.RepairPeer.String(),
 			chosen.FinalPeer.String(),
@@ -6915,7 +6885,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 	}
 
 	fmt.Printf("[PHASE] scheduling loop took: %v\n", time.Since(start))
-	fmt.Printf("[TOTAL] ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast took: %v\n", time.Since(totalStart))
+	fmt.Printf("[TOTAL] ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast WITHOUT CURRENT GLOBAL MAX took: %v\n", time.Since(totalStart))
 
 	return assignments, estimates
 }

@@ -124,7 +124,9 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 		nd := adder.addRep(chnk)
 		return nd, nil
 	} else {
-		if adder.Cont && adder.Striped {
+		nd := adder.addEC(chnk)
+		return nd, nil
+		/*if adder.Cont && adder.Striped {
 			// Related work
 			// align data -> encode in a specific way -> send to destination
 			nd := adder.addECC(chnk, reader)
@@ -133,7 +135,7 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 			if adder.Striped {
 				nd := adder.addEC(chnk)
 				return nd, nil
-			} else {
+			} /*else {
 				if adder.Cont {
 					// related work implementation, it is striped but with different pipeline
 					//nd := adder.addECC(chnk, reader)
@@ -147,7 +149,8 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 					time.Sleep(2 * time.Second)
 					nd := adder.addRep(chnk2)
 					return nd, nil
-				} else {
+				}
+				else {
 					// SSDBM impl
 					encoded := PrepareEncodeSSDBM(reader, adder.ShardSize, adder.Original, adder.Parity)
 					newReader := bytes.NewReader(encoded)
@@ -160,7 +163,7 @@ func (adder *Adder) add(reader io.Reader) (ipld.Node, error) {
 					return nd, nil
 				}
 			}
-		}
+		}*/
 	}
 }
 
