@@ -802,7 +802,7 @@ func (c *Cluster) alertsHandler() {
 									}
 								}
 								pin.Metadata["Strategy"] = ""
-								pin.Metadata["Strategy"] = "MAXMIN"
+								pin.Metadata["Strategy"] = "MAXMINMFS"
 								top14Peers := topology.TopPeersByGlobalIn(14)
 								pin.Metadata["allocs"] = ""
 								allocs := make([]string, 0, len(top14Peers))
@@ -891,7 +891,7 @@ func (c *Cluster) alertsHandler() {
 										}
 									}
 									pin.Metadata["Strategy"] = ""
-									pin.Metadata["Strategy"] = "MAXMIN"
+									pin.Metadata["Strategy"] = "MAXMINMFS"
 									top14Peers := topology.TopPeersByGlobalIn(14)
 									pin.Metadata["allocs"] = ""
 									allocs := make([]string, 0, len(top14Peers))
@@ -965,7 +965,7 @@ func (c *Cluster) alertsHandler() {
 									}
 								}
 								pin.Metadata["Strategy"] = ""
-								pin.Metadata["Strategy"] = "MAXMIN"
+								pin.Metadata["Strategy"] = "MAXMINMFS"
 								top14Peers := topology.TopPeersByGlobalIn(14)
 								pin.Metadata["allocs"] = ""
 								allocs := make([]string, 0, len(top14Peers))
@@ -1440,6 +1440,7 @@ func (c *Cluster) alertsHandler() {
 					for _, p := range allpeers {
 						fmt.Printf("candidate peer=%s\n", p.String())
 					}
+					sstt := time.Now()
 					/*assignments, assignedPairs := ScheduleGlobalMaxMinSimple(
 						alrt.Peer, // failed peer
 						CIDsSim4,  // failed shards
@@ -1453,7 +1454,7 @@ func (c *Cluster) alertsHandler() {
 							return c.similarities_Max_Min_Sauff(c.ctx, pin)
 						},
 					)*/
-					sstt := time.Now()
+
 					//assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly_Precomputed(
 					//assignments, allocs_of_repairs := ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocation(
 					assignments, allocs_of_repairs := ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
