@@ -802,7 +802,7 @@ func (c *Cluster) alertsHandler() {
 									}
 								}
 								pin.Metadata["Strategy"] = ""
-								pin.Metadata["Strategy"] = "MAXMINMFS"
+								pin.Metadata["Strategy"] = "MAXMIN"
 								top14Peers := topology.TopPeersByGlobalIn(14)
 								pin.Metadata["allocs"] = ""
 								allocs := make([]string, 0, len(top14Peers))
@@ -891,7 +891,7 @@ func (c *Cluster) alertsHandler() {
 										}
 									}
 									pin.Metadata["Strategy"] = ""
-									pin.Metadata["Strategy"] = "MAXMINMFS"
+									pin.Metadata["Strategy"] = "MAXMIN"
 									top14Peers := topology.TopPeersByGlobalIn(14)
 									pin.Metadata["allocs"] = ""
 									allocs := make([]string, 0, len(top14Peers))
@@ -965,7 +965,7 @@ func (c *Cluster) alertsHandler() {
 									}
 								}
 								pin.Metadata["Strategy"] = ""
-								pin.Metadata["Strategy"] = "MAXMINMFS"
+								pin.Metadata["Strategy"] = "MAXMIN"
 								top14Peers := topology.TopPeersByGlobalIn(14)
 								pin.Metadata["allocs"] = ""
 								allocs := make([]string, 0, len(top14Peers))
@@ -1514,7 +1514,7 @@ func (c *Cluster) alertsHandler() {
 					for _, alloc := range allocs_of_repairs {
 						if alloc.Relocated {
 							alloc.Shard.Metadata["Strategy"] = ""
-							alloc.Shard.Metadata["Strategy"] = "MAXMINMFS"
+							alloc.Shard.Metadata["Strategy"] = "MAXMIN"
 							alloc.Shard.Metadata["allocs"] = alloc.FinalPeer.String()
 						}
 						if alloc.RepairPeer == c.id {
