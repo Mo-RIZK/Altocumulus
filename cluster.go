@@ -1515,16 +1515,16 @@ func (c *Cluster) alertsHandler() {
 						if alloc.Relocated {
 							alloc.Shard.Metadata["Strategy"] = ""
 							alloc.Shard.Metadata["Strategy"] = "MAXMIN"
-							top14Peers := topology.TopPeersByGlobalIn(14)
+							//top14Peers := topology.TopPeersByGlobalIn(14)
 							alloc.Shard.Metadata["allocs"] = ""
-							allocs := make([]string, 0, len(top14Peers))
+							//allocs := make([]string, 0, len(top14Peers))
 
-							for _, p := range top14Peers {
-								allocs = append(allocs, p.String())
-							}
+							//for _, p := range top14Peers {
+							//	allocs = append(allocs, p.String())
+							//}
 
-							alloc.Shard.Metadata["allocs"] = strings.Join(allocs, ",")
-							//alloc.Shard.Metadata["allocs"] = alloc.FinalPeer.String()
+							//alloc.Shard.Metadata["allocs"] = strings.Join(allocs, ",")
+							alloc.Shard.Metadata["allocs"] = alloc.FinalPeer.String()
 
 						}
 						if alloc.RepairPeer == c.id {
