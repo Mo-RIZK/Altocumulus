@@ -1546,84 +1546,196 @@ func (c *Cluster) alertsHandler() {
 				}
 			}
 			if (sim == 7) && fff {
-				sstt := time.Now()
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
-
 					fmt.Println("I am the responsible")
-					topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
-					if err != nil {
-						logger.Warnf("could not load topology: %s", err)
-						continue
-					}
-					topology.PrintFull()
 
-					allpeers := distance.otherPeers
+					allpeers := append([]peer.ID{}, distance.otherPeers...)
 					allpeers = append(allpeers, c.id)
-
-					fmt.Println("DEBUG topology peer IDs:")
-					for p, n := range topology.NodesByPeer {
-						fmt.Printf("topology peer=%s node=%s\n", p.String(), n.Name)
-					}
+					allpeers = sortedUniquePeers(allpeers)
 
 					fmt.Println("DEBUG candidate peer IDs:")
 					for _, p := range allpeers {
 						fmt.Printf("candidate peer=%s\n", p.String())
 					}
-					/*assignments, assignedPairs := ScheduleGlobalSauff2Simple(
-						alrt.Peer, // failed peer
-						CIDsSim4,  // failed shards
-						allpeers,  // candidate repair peers
-						topology,
-						0.25, // chunk size in MB
-						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
-							return c.get_shards_same_stripe(pin)
-						},
-						func(pin api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string) {
-							return c.similarities_Max_Min_Sauff(c.ctx, pin)
-						},
-					)*/
-					assignments, assignedPairs := ScheduleGlobalSauff2IncomingOnly_new(
-						alrt.Peer,
-						CIDsSim4,
-						allpeers,
-						topology,
-						0.25,
-						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
-							return c.get_shards_same_stripe(pin)
-						},
-						func(pin api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string) {
-							return c.s_Max_Min_Sauff(c.ctx, pin)
-						},
+
+					sstt := time.Now()
+
+					assignments, selectiveAssignments, err :=
+						ScheduleSelectiveECOneBatch(
+							alrt.Peer, // failed peer
+							CIDsSim4,  // all failed shards: one batch
+							allpeers,  // candidate reconstruction peers
+							func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
+								return c.get_shards_same_stripe(pin)
+							},
+						)
+
+					if err != nil {
+						logger.Errorf(
+							"SelectiveEC scheduling failed: %s",
+							err,
+						)
+						continue
+					}
+
+					fmt.Printf(
+						"SELECTIVE-EC assigned %d shards\n",
+						len(selectiveAssignments),
 					)
 
-					fmt.Printf("RESOURCE-AWARE SAUFF2 assigned %d shards\n", len(assignedPairs))
-
 					total := 0
+
 					for peerID, pins := range assignments {
-						fmt.Printf("Repair peer %s -> %d shards\n", peerID.String(), len(pins))
+						fmt.Printf(
+							"Repair peer %s -> %d shards\n",
+							peerID.String(),
+							len(pins),
+						)
+
 						total += len(pins)
 					}
-					fmt.Printf("TOTAL ASSIGNED: %d / %d and it took %s \n", total, len(CIDsSim4), time.Now().Sub(sstt).String())
 
-					for peerID, pins := range assignments {
-						for _, pin := range pins {
-							if peerID == c.id {
-								c.Enqueue(c.ctx, pin)
-							} else {
-								var out bool
-								c.rpcClient.CallContext(
-									c.ctx,
-									peerID,
-									"Cluster",
-									"Enqueue",
-									&pin,
-									&out,
+					fmt.Printf(
+						"TOTAL ASSIGNED: %d / %d and it took %s\n",
+						total,
+						len(CIDsSim4),
+						time.Since(sstt).String(),
+					)
+
+					// Execute every SelectiveEC assignment.
+					for _, alloc := range selectiveAssignments {
+						pin := alloc.Shard
+
+						if pin.Metadata == nil {
+							pin.Metadata = make(map[string]string)
+						}
+
+						pin.Metadata["Strategy"] = "SELECTIVE_EC"
+
+						// The scheduler must provide exactly the selected zero-based
+						// Reed-Solomon indexes.
+						if len(alloc.HelperIndexes) == 0 {
+							logger.Errorf(
+								"SELECTIVE-EC shard %s assigned to peer %s has no helper indexes",
+								pin.Cid.String(),
+								alloc.RepairPeer.String(),
+							)
+							continue
+						}
+
+						// Copy before sorting so that the scheduler result is not modified.
+						helperIndexes := append(
+							[]int(nil),
+							alloc.HelperIndexes...,
+						)
+
+						sort.Ints(helperIndexes)
+
+						seenIndexes := make(map[int]struct{}, len(helperIndexes))
+						helperIndexStrings := make([]string, 0, len(helperIndexes))
+
+						validAssignment := true
+
+						for _, helperIndex := range helperIndexes {
+							if helperIndex < 0 {
+								logger.Errorf(
+									"SELECTIVE-EC shard %s has invalid helper index %d",
+									pin.Cid.String(),
+									helperIndex,
 								)
+
+								validAssignment = false
+								break
 							}
+
+							if _, exists := seenIndexes[helperIndex]; exists {
+								logger.Errorf(
+									"SELECTIVE-EC shard %s has duplicate helper index %d",
+									pin.Cid.String(),
+									helperIndex,
+								)
+
+								validAssignment = false
+								break
+							}
+
+							seenIndexes[helperIndex] = struct{}{}
+
+							helperIndexStrings = append(
+								helperIndexStrings,
+								strconv.Itoa(helperIndex),
+							)
+						}
+
+						if !validAssignment {
+							continue
+						}
+
+						// Example:
+						// helper_indexes = "0,2,3,5,7,8"
+						pin.Metadata["helper_indexes"] =
+							strings.Join(helperIndexStrings, ",")
+
+						// Optional: retain helper peer IDs only for debugging.
+						helperPeerStrings := make(
+							[]string,
+							0,
+							len(alloc.Helpers),
+						)
+
+						for _, helperPeer := range alloc.Helpers {
+							helperPeerStrings = append(
+								helperPeerStrings,
+								helperPeer.String(),
+							)
+						}
+
+						pin.Metadata["helpers"] =
+							strings.Join(helperPeerStrings, ",")
+
+						fmt.Printf(
+							"SELECTIVE-EC enqueue shard=%s repairPeer=%s helperIndexes=%s helpers=%s\n",
+							pin.Cid.String(),
+							alloc.RepairPeer.String(),
+							pin.Metadata["helper_indexes"],
+							pin.Metadata["helpers"],
+						)
+
+						if alloc.RepairPeer == c.id {
+							c.Enqueue(c.ctx, pin)
+							continue
+						}
+
+						var out bool
+
+						err = c.rpcClient.CallContext(
+							c.ctx,
+							alloc.RepairPeer,
+							"Cluster",
+							"Enqueue",
+							&pin,
+							&out,
+						)
+
+						if err != nil {
+							logger.Errorf(
+								"could not enqueue SelectiveEC shard %s on peer %s: %s",
+								pin.Cid.String(),
+								alloc.RepairPeer.String(),
+								err,
+							)
+							continue
+						}
+
+						if !out {
+							logger.Warnf(
+								"remote peer %s did not accept SelectiveEC shard %s",
+								alloc.RepairPeer.String(),
+								pin.Cid.String(),
+							)
 						}
 					}
-
 				}
 			}
 			fmt.Fprintf(os.Stdout, "SSSSSHHHHHH : %d \n", kk)
