@@ -13,10 +13,10 @@ import (
 
 // Erasure-coded heterogeneity- and duplication-aware Global Max-Min scheduler.
 // The scheduler balances:
-//   1. helper outgoing network load,
-//   2. repair-peer incoming network load,
-//   3. repair-peer outgoing load when relocation is selected,
-//   4. final-peer incoming load when relocation is selected, and
+//   1. source/helper disk-read and outgoing-network loads,
+//   2. repair-peer incoming-network load,
+//   3. repair-peer disk-read and outgoing-network loads when relocation is selected,
+//   4. final-peer incoming-network load when relocation is selected, and
 //   5. final-peer disk-write load.
 //
 // CPU reconstruction time is intentionally ignored.
@@ -144,6 +144,7 @@ type resourceAwareCandidateBest struct {
 	SelectedHelperShards []SelectedHelperShard
 
 	RepairIncomingMB     float64
+	RelocationDiskReadMB float64
 	RelocationOutgoingMB float64
 	RelocationIncomingMB float64
 	DiskWriteMB          float64
@@ -167,6 +168,7 @@ type IncomingOnlyRelocationEstimate struct {
 	MissingChunkCount int
 
 	RepairIncomingMB     float64
+	RelocationDiskReadMB float64
 	RelocationOutgoingMB float64
 	RelocationIncomingMB float64
 	DiskWriteMB          float64
@@ -242,6 +244,14 @@ func topologyNodeOut(t *NetworkTopology, p peer.ID) uint64 {
 	return t.NodesByPeer[p].GlobalOut
 }
 
+func topologyNodeDiskRead(t *NetworkTopology, p peer.ID) uint64 {
+	if t == nil || t.NodesByPeer == nil || t.NodesByPeer[p] == nil {
+		return 0
+	}
+
+	return t.NodesByPeer[p].DiskRead
+}
+
 func topologyNodeDiskWrite(t *NetworkTopology, p peer.ID) uint64 {
 	if t == nil || t.NodesByPeer == nil || t.NodesByPeer[p] == nil {
 		return 0
@@ -263,11 +273,20 @@ func projectedNetworkTime(loadMB, addedMB float64, capacityMbit uint64) float64 
 	return (loadMB + addedMB) / capacityMBps
 }
 
-func projectedDiskWriteTime(loadMB, addedMB float64, capacityMBps uint64) float64 {
+func projectedDiskTime(loadMB, addedMB float64, capacityMBps uint64) float64 {
 	if capacityMBps == 0 {
 		return math.Inf(1)
 	}
+
 	return (loadMB + addedMB) / float64(capacityMBps)
+}
+
+func projectedDiskReadTime(loadMB, addedMB float64, capacityMBps uint64) float64 {
+	return projectedDiskTime(loadMB, addedMB, capacityMBps)
+}
+
+func projectedDiskWriteTime(loadMB, addedMB float64, capacityMBps uint64) float64 {
+	return projectedDiskTime(loadMB, addedMB, capacityMBps)
 }
 
 func maxFloat(values ...float64) float64 {
@@ -431,14 +450,19 @@ func selectedSameStripeHelperShards(
 	return out
 }
 
-// chooseBestUploadSource selects the source whose projected outgoing completion
-// time is smallest after adding one chunk. temporaryTrafficMB includes traffic
-// already tentatively selected for the candidate currently being evaluated.
+// chooseBestUploadSource selects the direct-similarity source with the
+// smallest projected sequential send time:
+//
+//	disk-read time + outgoing-network time.
+//
+// temporaryTrafficMB contains traffic already tentatively assigned to the
+// source while evaluating the current candidate.
 func chooseBestUploadSource(
 	sources []peer.ID,
 	repairPeer peer.ID,
 	failedPeer peer.ID,
 	chunkMB float64,
+	peerDiskReadLoadMB map[peer.ID]float64,
 	peerOutgoingLoadMB map[peer.ID]float64,
 	temporaryTrafficMB map[peer.ID]float64,
 	topology *NetworkTopology,
@@ -451,16 +475,28 @@ func chooseBestUploadSource(
 			continue
 		}
 
-		out := topologyNodeOut(topology, src)
-		if out == 0 {
+		readCapacity := topologyNodeDiskRead(topology, src)
+		outCapacity := topologyNodeOut(topology, src)
+		if readCapacity == 0 || outCapacity == 0 {
 			continue
 		}
 
-		projected := projectedNetworkTime(
-			peerOutgoingLoadMB[src],
-			temporaryTrafficMB[src]+chunkMB,
-			out,
+		addedMB := temporaryTrafficMB[src] + chunkMB
+		readTime := projectedDiskReadTime(
+			peerDiskReadLoadMB[src],
+			addedMB,
+			readCapacity,
 		)
+		outTime := projectedNetworkTime(
+			peerOutgoingLoadMB[src],
+			addedMB,
+			outCapacity,
+		)
+		projected := readTime + outTime
+
+		if math.IsInf(projected, 1) {
+			continue
+		}
 
 		if projected < bestTime ||
 			(projected == bestTime && (best == "" || src.String() < best.String())) {
@@ -473,16 +509,12 @@ func chooseBestUploadSource(
 }
 
 // chooseFixedECHelpers selects one fixed set of n surviving same-stripe
-// helpers for the entire failed shard.
+// helpers for the whole failed shard.
 //
-// Every selected helper uploads one chunk for every failed-shard chunk that
-// requires conventional EC reconstruction. Consequently, the added outgoing
-// traffic for each selected helper is:
+// Every selected helper first reads its assigned chunks and then uploads them.
+// Therefore, helper selection minimizes:
 //
-//	missingChunkCount * chunkMB
-//
-// temporaryTrafficMB contains direct-similarity traffic already selected for
-// the candidate. It is included when evaluating the projected outgoing load.
+//	projected disk-read time + projected outgoing-network time.
 func chooseFixedECHelpers(
 	repairPeer peer.ID,
 	failedPeer peer.ID,
@@ -490,6 +522,7 @@ func chooseFixedECHelpers(
 	n int,
 	missingChunkCount int,
 	chunkMB float64,
+	peerDiskReadLoadMB map[peer.ID]float64,
 	peerOutgoingLoadMB map[peer.ID]float64,
 	temporaryTrafficMB map[peer.ID]float64,
 	topology *NetworkTopology,
@@ -497,8 +530,6 @@ func chooseFixedECHelpers(
 	if n <= 0 {
 		return nil, false
 	}
-
-	// No conventional EC reconstruction is required.
 	if missingChunkCount == 0 {
 		return nil, true
 	}
@@ -517,16 +548,24 @@ func chooseFixedECHelpers(
 			continue
 		}
 
+		readCapacity := topologyNodeDiskRead(topology, helper)
 		outCapacity := topologyNodeOut(topology, helper)
-		if outCapacity == 0 {
+		if readCapacity == 0 || outCapacity == 0 {
 			continue
 		}
 
-		projectedTime := projectedNetworkTime(
+		addedMB := temporaryTrafficMB[helper] + trafficPerHelperMB
+		readTime := projectedDiskReadTime(
+			peerDiskReadLoadMB[helper],
+			addedMB,
+			readCapacity,
+		)
+		outTime := projectedNetworkTime(
 			peerOutgoingLoadMB[helper],
-			temporaryTrafficMB[helper]+trafficPerHelperMB,
+			addedMB,
 			outCapacity,
 		)
+		projectedTime := readTime + outTime
 
 		if math.IsInf(projectedTime, 1) {
 			continue
@@ -553,7 +592,6 @@ func chooseFixedECHelpers(
 	for i := 0; i < n; i++ {
 		selected[i] = candidates[i].Peer
 	}
-
 	return selected, true
 }
 
@@ -584,6 +622,7 @@ func buildHelperTrafficForCandidate(
 	n int,
 	index ResourceAwareShardIndex,
 	sameStripePeers []peer.ID,
+	peerDiskReadLoadMB map[peer.ID]float64,
 	peerOutgoingLoadMB map[peer.ID]float64,
 	topology *NetworkTopology,
 	chunkMB float64,
@@ -616,6 +655,7 @@ func buildHelperTrafficForCandidate(
 			repairPeer,
 			failedPeer,
 			chunkMB,
+			peerDiskReadLoadMB,
 			peerOutgoingLoadMB,
 			helperTrafficMB,
 			topology,
@@ -637,6 +677,7 @@ func buildHelperTrafficForCandidate(
 		n,
 		missingCount,
 		chunkMB,
+		peerDiskReadLoadMB,
 		peerOutgoingLoadMB,
 		helperTrafficMB,
 		topology,
@@ -670,21 +711,26 @@ func buildHelperTrafficForCandidate(
 		true
 }
 
-// estimateDownloadPhase returns the projected bottleneck between:
-//   - the repair peer's incoming completion time, and
-//   - the slowest selected helper's outgoing completion time.
+// estimateDownloadPhase returns the repair-download bottleneck.
+//
+// For each selected source, disk reading and uploading are sequential:
+//
+//	source time = projected disk-read time + projected outgoing-network time.
+//
+// Sources operate concurrently, and the repair peer receives their combined
+// traffic concurrently. The download estimate is therefore the maximum between
+// the repair-peer incoming time and every selected source time.
 func estimateDownloadPhase(
 	repairPeer peer.ID,
 	helperTrafficMB map[peer.ID]float64,
 	peerIncomingLoadMB map[peer.ID]float64,
+	peerDiskReadLoadMB map[peer.ID]float64,
 	peerOutgoingLoadMB map[peer.ID]float64,
 	topology *NetworkTopology,
 ) (downloadTime float64, incomingMB float64, ok bool) {
-	incomingMB = 0
 	for _, mb := range helperTrafficMB {
 		incomingMB += mb
 	}
-
 	if incomingMB == 0 {
 		return 0, 0, true
 	}
@@ -698,22 +744,28 @@ func estimateDownloadPhase(
 		return math.Inf(1), incomingMB, false
 	}
 
-	slowestHelperTime := 0.0
-	for helper, addedMB := range helperTrafficMB {
-		helperTime := projectedNetworkTime(
-			peerOutgoingLoadMB[helper],
+	slowestSourceTime := 0.0
+	for source, addedMB := range helperTrafficMB {
+		readTime := projectedDiskReadTime(
+			peerDiskReadLoadMB[source],
 			addedMB,
-			topologyNodeOut(topology, helper),
+			topologyNodeDiskRead(topology, source),
 		)
-		if math.IsInf(helperTime, 1) {
+		outTime := projectedNetworkTime(
+			peerOutgoingLoadMB[source],
+			addedMB,
+			topologyNodeOut(topology, source),
+		)
+		sourceTime := readTime + outTime
+		if math.IsInf(sourceTime, 1) {
 			return math.Inf(1), incomingMB, false
 		}
-		if helperTime > slowestHelperTime {
-			slowestHelperTime = helperTime
+		if sourceTime > slowestSourceTime {
+			slowestSourceTime = sourceTime
 		}
 	}
 
-	return maxFloat(repairIncomingTime, slowestHelperTime), incomingMB, true
+	return maxFloat(repairIncomingTime, slowestSourceTime), incomingMB, true
 }
 
 // ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast keeps the old
@@ -810,11 +862,13 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 
 	// All loads are cumulative assigned MB.
 	peerIncomingLoadMB := make(map[peer.ID]float64)
+	peerDiskReadLoadMB := make(map[peer.ID]float64)
 	peerOutgoingLoadMB := make(map[peer.ID]float64)
 	peerDiskWriteLoadMB := make(map[peer.ID]float64)
 
 	for _, p := range candidatePeers {
 		peerIncomingLoadMB[p] = 0
+		peerDiskReadLoadMB[p] = 0
 		peerOutgoingLoadMB[p] = 0
 		peerDiskWriteLoadMB[p] = 0
 	}
@@ -848,6 +902,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 						pc.N,
 						pc.Index,
 						pc.SameStripePeers,
+						peerDiskReadLoadMB,
 						peerOutgoingLoadMB,
 						topology,
 						chunkMB,
@@ -880,6 +935,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 					repairPeer,
 					helperTrafficMB,
 					peerIncomingLoadMB,
+					peerDiskReadLoadMB,
 					peerOutgoingLoadMB,
 					topology,
 				)
@@ -923,6 +979,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 								SelectedHelperShards: copySelectedHelperShards(selectedHelperShards),
 
 								RepairIncomingMB:     repairIncomingMB,
+								RelocationDiskReadMB: 0,
 								RelocationOutgoingMB: 0,
 								RelocationIncomingMB: 0,
 								DiskWriteMB:          shardSizeMB,
@@ -939,10 +996,10 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 
 				// ------------------------------------------------------------
 				// Option 2: repair on repairPeer, then relocate to finalPeer.
-				// Relocation contributes:
-				//   - shardSizeMB to repairPeer outgoing load,
-				//   - shardSizeMB to finalPeer incoming load, and
-				//   - shardSizeMB to finalPeer disk-write load.
+				//
+				// Sender path: disk read + outgoing bandwidth.
+				// Replacement path: incoming bandwidth + disk write.
+				// These two paths run concurrently, so relocation uses max().
 				// ------------------------------------------------------------
 				for _, finalPeer := range candidatePeers {
 					if finalPeer == failedPeer || finalPeer == repairPeer {
@@ -951,17 +1008,25 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 					if pc.SameStripePeerSet[finalPeer] {
 						continue
 					}
-					if topologyNodeOut(topology, repairPeer) == 0 ||
+					if topologyNodeDiskRead(topology, repairPeer) == 0 ||
+						topologyNodeOut(topology, repairPeer) == 0 ||
 						topologyNodeIn(topology, finalPeer) == 0 ||
 						topologyNodeDiskWrite(topology, finalPeer) == 0 {
 						continue
 					}
 
+					relocationReadTime := projectedDiskReadTime(
+						peerDiskReadLoadMB[repairPeer],
+						shardSizeMB,
+						topologyNodeDiskRead(topology, repairPeer),
+					)
 					relocationOutTime := projectedNetworkTime(
 						peerOutgoingLoadMB[repairPeer],
 						shardSizeMB,
 						topologyNodeOut(topology, repairPeer),
 					)
+					senderTime := relocationReadTime + relocationOutTime
+
 					relocationInTime := projectedNetworkTime(
 						peerIncomingLoadMB[finalPeer],
 						shardSizeMB,
@@ -972,18 +1037,13 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 						shardSizeMB,
 						topologyNodeDiskWrite(topology, finalPeer),
 					)
+					replacementTime := relocationInTime + finalWriteTime
 
-					if math.IsInf(relocationOutTime, 1) ||
-						math.IsInf(relocationInTime, 1) ||
-						math.IsInf(finalWriteTime, 1) {
+					if math.IsInf(senderTime, 1) || math.IsInf(replacementTime, 1) {
 						continue
 					}
 
-					relocationTime := maxFloat(
-						relocationOutTime,
-						relocationInTime,
-						finalWriteTime,
-					)
+					relocationTime := maxFloat(senderTime, replacementTime)
 					completion := maxFloat(downloadTime, relocationTime)
 
 					if betterResourceAwareCandidate(
@@ -1008,6 +1068,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 							SelectedHelperShards: copySelectedHelperShards(selectedHelperShards),
 
 							RepairIncomingMB:     repairIncomingMB,
+							RelocationDiskReadMB: shardSizeMB,
 							RelocationOutgoingMB: shardSizeMB,
 							RelocationIncomingMB: shardSizeMB,
 							DiskWriteMB:          shardSizeMB,
@@ -1062,14 +1123,16 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 		chosenShard := unscheduled[chosenIndex]
 		chosen := bestForShard[chosenShard.Cid.String()]
 
-		// Commit helper upload and repair download loads.
-		for helper, mb := range chosen.HelperTrafficMB {
-			peerOutgoingLoadMB[helper] += mb
+		// Every source reads its selected data and then uploads it.
+		for source, mb := range chosen.HelperTrafficMB {
+			peerDiskReadLoadMB[source] += mb
+			peerOutgoingLoadMB[source] += mb
 		}
 		peerIncomingLoadMB[chosen.RepairPeer] += chosen.RepairIncomingMB
 
-		// Commit storage-related loads.
+		// Commit final-placement loads.
 		if chosen.Relocated {
+			peerDiskReadLoadMB[chosen.RepairPeer] += chosen.RelocationDiskReadMB
 			peerOutgoingLoadMB[chosen.RepairPeer] += chosen.RelocationOutgoingMB
 			peerIncomingLoadMB[chosen.FinalPeer] += chosen.RelocationIncomingMB
 			peerDiskWriteLoadMB[chosen.FinalPeer] += chosen.DiskWriteMB
@@ -1091,6 +1154,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 			MissingChunkCount: chosen.MissingChunkCount,
 
 			RepairIncomingMB:     chosen.RepairIncomingMB,
+			RelocationDiskReadMB: chosen.RelocationDiskReadMB,
 			RelocationOutgoingMB: chosen.RelocationOutgoingMB,
 			RelocationIncomingMB: chosen.RelocationIncomingMB,
 			DiskWriteMB:          chosen.DiskWriteMB,
@@ -1107,7 +1171,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 		})
 
 		fmt.Printf(
-			"RESOURCE-AWARE GLOBAL MAX-MIN assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v finish=%f download=%f relocation=%f diskWrite=%f local=%d direct=%d missing=%d repairInMB=%.3f relocationOutMB=%.3f relocationInMB=%.3f helpers=%d indexedStripeHelpers=%d\n",
+			"RESOURCE-AWARE GLOBAL MAX-MIN assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v finish=%f download=%f relocation=%f diskWrite=%f local=%d direct=%d missing=%d repairInMB=%.3f relocationReadMB=%.3f relocationOutMB=%.3f relocationInMB=%.3f helpers=%d indexedStripeHelpers=%d\n",
 			chosenShard.Name,
 			chosen.RepairPeer.String(),
 			chosen.FinalPeer.String(),
@@ -1120,6 +1184,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 			chosen.DirectChunkCount,
 			chosen.MissingChunkCount,
 			chosen.RepairIncomingMB,
+			chosen.RelocationDiskReadMB,
 			chosen.RelocationOutgoingMB,
 			chosen.RelocationIncomingMB,
 			len(chosen.SelectedHelpers),
