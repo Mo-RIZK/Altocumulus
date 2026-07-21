@@ -779,21 +779,47 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 	chunkMB float64,
 
 	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
-	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
-) (map[peer.ID][]api.Pin, []IncomingOnlyRelocationEstimate) {
-	fmt.Println("In RESOURCE-AWARE PRECOMPUTED GLOBAL MAX-MIN repair strategy")
+	getSimilarity func(api.Pin) (
+	peer.ID,
+	[]string,
+	map[peer.ID]int,
+	map[peer.ID][]string,
+),
+) (
+	map[peer.ID][]api.Pin,
+	[]IncomingOnlyRelocationEstimate,
+) {
+	fmt.Println(
+		"In RESOURCE-AWARE PRECOMPUTED GLOBAL MAX-MIN " +
+			"repair strategy with normalized load balancing",
+	)
 
 	totalStart := time.Now()
-	assignments := make(map[peer.ID][]api.Pin)
-	estimates := make([]IncomingOnlyRelocationEstimate, 0)
 
-	if len(failedShards) == 0 || len(candidatePeers) == 0 || topology == nil {
-		fmt.Printf("[TOTAL] exited early in %v\n", time.Since(totalStart))
+	assignments := make(map[peer.ID][]api.Pin)
+	estimates := make(
+		[]IncomingOnlyRelocationEstimate,
+		0,
+		len(failedShards),
+	)
+
+	if len(failedShards) == 0 ||
+		len(candidatePeers) == 0 ||
+		topology == nil {
+
+		fmt.Printf(
+			"[TOTAL] exited early in %v\n",
+			time.Since(totalStart),
+		)
+
 		return assignments, estimates
 	}
 
 	candidatePeers = sortedUniquePeers(candidatePeers)
 
+	// ------------------------------------------------------------------
+	// Precomputed information for one failed shard.
+	// ------------------------------------------------------------------
 	type ShardPrecompute struct {
 		Shard api.Pin
 
@@ -807,60 +833,323 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 		Index                   ResourceAwareShardIndex
 	}
 
+	// ------------------------------------------------------------------
+	// Normalized projected load associated with one candidate.
+	//
+	// Peak represents the highest projected normalized resource load.
+	// Total represents the sum of all projected normalized resource loads.
+	//
+	// Both values are in seconds because each resource load is divided by
+	// its corresponding capacity.
+	// ------------------------------------------------------------------
+	type CandidateResourceScore struct {
+		Peak  float64
+		Total float64
+	}
+
+	const comparisonEpsilon = 1e-9
+
+	// ------------------------------------------------------------------
+	// Compare two floating-point values using a small tolerance.
+	// ------------------------------------------------------------------
+	floatLess := func(a float64, b float64) bool {
+		return a < b-comparisonEpsilon
+	}
+
+	floatGreater := func(a float64, b float64) bool {
+		return a > b+comparisonEpsilon
+	}
+
+	// ------------------------------------------------------------------
+	// Calculate the projected resource score when reconstruction and
+	// final storage both happen on the repair peer.
+	// ------------------------------------------------------------------
+	localCandidateResourceScore := func(
+		repairPeer peer.ID,
+		repairIncomingMB float64,
+		diskWriteMB float64,
+		peerIncomingLoadMB map[peer.ID]float64,
+		peerDiskWriteLoadMB map[peer.ID]float64,
+	) CandidateResourceScore {
+		incomingTime := projectedNetworkTime(
+			peerIncomingLoadMB[repairPeer],
+			repairIncomingMB,
+			topologyNodeIn(topology, repairPeer),
+		)
+
+		writeTime := projectedDiskWriteTime(
+			peerDiskWriteLoadMB[repairPeer],
+			diskWriteMB,
+			topologyNodeDiskWrite(topology, repairPeer),
+		)
+
+		return CandidateResourceScore{
+			Peak: maxFloat(
+				incomingTime,
+				writeTime,
+			),
+			Total: incomingTime + writeTime,
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// Calculate the projected resource score when repairPeer performs
+	// reconstruction and finalPeer stores the reconstructed shard.
+	//
+	// It includes:
+	//
+	// repairPeer:
+	//   - incoming repair traffic
+	//   - disk read for relocation
+	//   - outgoing relocation traffic
+	//
+	// finalPeer:
+	//   - incoming relocation traffic
+	//   - final disk write
+	// ------------------------------------------------------------------
+	relocatedCandidateResourceScore := func(
+		repairPeer peer.ID,
+		finalPeer peer.ID,
+
+		repairIncomingMB float64,
+		relocationDiskReadMB float64,
+		relocationOutgoingMB float64,
+		relocationIncomingMB float64,
+		diskWriteMB float64,
+
+		peerIncomingLoadMB map[peer.ID]float64,
+		peerDiskReadLoadMB map[peer.ID]float64,
+		peerOutgoingLoadMB map[peer.ID]float64,
+		peerDiskWriteLoadMB map[peer.ID]float64,
+	) CandidateResourceScore {
+		repairIncomingTime := projectedNetworkTime(
+			peerIncomingLoadMB[repairPeer],
+			repairIncomingMB,
+			topologyNodeIn(topology, repairPeer),
+		)
+
+		repairReadTime := projectedDiskReadTime(
+			peerDiskReadLoadMB[repairPeer],
+			relocationDiskReadMB,
+			topologyNodeDiskRead(topology, repairPeer),
+		)
+
+		repairOutgoingTime := projectedNetworkTime(
+			peerOutgoingLoadMB[repairPeer],
+			relocationOutgoingMB,
+			topologyNodeOut(topology, repairPeer),
+		)
+
+		finalIncomingTime := projectedNetworkTime(
+			peerIncomingLoadMB[finalPeer],
+			relocationIncomingMB,
+			topologyNodeIn(topology, finalPeer),
+		)
+
+		finalWriteTime := projectedDiskWriteTime(
+			peerDiskWriteLoadMB[finalPeer],
+			diskWriteMB,
+			topologyNodeDiskWrite(topology, finalPeer),
+		)
+
+		return CandidateResourceScore{
+			Peak: maxFloat(
+				repairIncomingTime,
+				repairReadTime,
+				repairOutgoingTime,
+				finalIncomingTime,
+				finalWriteTime,
+			),
+			Total: repairIncomingTime +
+				repairReadTime +
+				repairOutgoingTime +
+				finalIncomingTime +
+				finalWriteTime,
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// Compare a candidate with the current best assignment for one shard.
+	//
+	// Priority:
+	//
+	// 1. Lower estimated completion time.
+	// 2. Lower peak normalized resource load.
+	// 3. Lower total normalized resource load.
+	// 4. Repair-peer ID.
+	// 5. Final-peer ID.
+	//
+	// This preserves heterogeneous resource awareness while preventing
+	// equal-completion candidates from repeatedly selecting the same peer.
+	// ------------------------------------------------------------------
+	betterCandidate := func(
+		completion float64,
+		resourceScore CandidateResourceScore,
+		repairPeer peer.ID,
+		finalPeer peer.ID,
+
+		current resourceAwareCandidateBest,
+		currentResourceScore CandidateResourceScore,
+	) bool {
+		if current.RepairPeer == "" || current.FinalPeer == "" {
+			return true
+		}
+
+		if floatLess(completion, current.CompletionTime) {
+			return true
+		}
+
+		if floatGreater(completion, current.CompletionTime) {
+			return false
+		}
+
+		if floatLess(
+			resourceScore.Peak,
+			currentResourceScore.Peak,
+		) {
+			return true
+		}
+
+		if floatGreater(
+			resourceScore.Peak,
+			currentResourceScore.Peak,
+		) {
+			return false
+		}
+
+		if floatLess(
+			resourceScore.Total,
+			currentResourceScore.Total,
+		) {
+			return true
+		}
+
+		if floatGreater(
+			resourceScore.Total,
+			currentResourceScore.Total,
+		) {
+			return false
+		}
+
+		if repairPeer.String() < current.RepairPeer.String() {
+			return true
+		}
+
+		if repairPeer.String() > current.RepairPeer.String() {
+			return false
+		}
+
+		return finalPeer.String() < current.FinalPeer.String()
+	}
+
 	precomputed := make(map[string]ShardPrecompute)
+
 	start := time.Now()
 
+	// ------------------------------------------------------------------
+	// Precompute similarity indexes, stripe peers and helper shard IDs.
+	// ------------------------------------------------------------------
 	for _, shard := range failedShards {
 		shardKey := shard.Cid.String()
+
 		shardCIDs := cidListFromPin(shard)
 		shardSize := len(shardCIDs)
+
 		if shardSize == 0 {
+			fmt.Printf(
+				"[WARN] skipping shard=%s because it contains no CIDs\n",
+				shard.Name,
+			)
+
 			continue
 		}
 
-		sameStripeShards, sameStripePeers, n, shardLength := getSameStripe(shard)
+		sameStripeShards,
+			sameStripePeers,
+			n,
+			shardLength := getSameStripe(shard)
+
 		if shardLength > 0 {
 			shardSize = shardLength
 		}
+
 		if n <= 0 {
+			fmt.Printf(
+				"[WARN] skipping shard=%s because n=%d\n",
+				shard.Name,
+				n,
+			)
+
 			continue
 		}
 
 		helperGlobalShardNumbers, err :=
-			buildHelperGlobalShardNumbers(sameStripeShards, failedPeer)
+			buildHelperGlobalShardNumbers(
+				sameStripeShards,
+				failedPeer,
+			)
+
 		if err != nil {
 			fmt.Printf(
-				"[WARN] skipping shard=%s because helper shard numbers could not be built: %v\n",
+				"[WARN] skipping shard=%s because helper "+
+					"shard numbers could not be built: %v\n",
 				shard.Name,
 				err,
 			)
+
 			continue
 		}
 
 		_, _, _, peerMatchedCIDs := getSimilarity(shard)
 
 		precomputed[shardKey] = ShardPrecompute{
-			Shard:                   shard,
-			ShardCIDs:               shardCIDs,
-			ShardSize:               shardSize,
-			N:                       n,
-			SameStripePeers:         sortedUniquePeers(sameStripePeers),
-			SameStripePeerSet:       peerSet(sameStripePeers),
+			Shard:     shard,
+			ShardCIDs: shardCIDs,
+			ShardSize: shardSize,
+			N:         n,
+
+			SameStripePeers: sortedUniquePeers(
+				sameStripePeers,
+			),
+
+			SameStripePeerSet: peerSet(
+				sameStripePeers,
+			),
+
 			HelperGlobalShardNumber: helperGlobalShardNumbers,
-			Index:                   buildResourceAwareShardIndex(peerMatchedCIDs),
+
+			Index: buildResourceAwareShardIndex(
+				peerMatchedCIDs,
+			),
 		}
 	}
 
-	fmt.Printf("[PHASE] precompute similarities + indexes took: %v\n", time.Since(start))
+	fmt.Printf(
+		"[PHASE] precompute similarities + indexes took: %v\n",
+		time.Since(start),
+	)
 
-	unscheduled := make([]api.Pin, 0, len(failedShards))
+	unscheduled := make(
+		[]api.Pin,
+		0,
+		len(failedShards),
+	)
+
 	for _, shard := range failedShards {
 		if _, ok := precomputed[shard.Cid.String()]; ok {
-			unscheduled = append(unscheduled, shard)
+			unscheduled = append(
+				unscheduled,
+				shard,
+			)
 		}
 	}
 
-	// All loads are cumulative assigned MB.
+	// ------------------------------------------------------------------
+	// All resource loads represent cumulative assigned data in MB.
+	//
+	// Each selected assignment is committed before the next Max-Min
+	// iteration, so the next assignment sees all previous resource loads.
+	// ------------------------------------------------------------------
 	peerIncomingLoadMB := make(map[peer.ID]float64)
 	peerDiskReadLoadMB := make(map[peer.ID]float64)
 	peerOutgoingLoadMB := make(map[peer.ID]float64)
@@ -875,26 +1164,60 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 
 	start = time.Now()
 
+	// ==================================================================
+	// Global Max-Min scheduling loop
+	// ==================================================================
 	for len(unscheduled) > 0 {
-		bestForShard := make(map[string]resourceAwareCandidateBest)
+		bestForShard := make(
+			map[string]resourceAwareCandidateBest,
+		)
 
+		bestResourceScoreForShard := make(
+			map[string]CandidateResourceScore,
+		)
+
+		// --------------------------------------------------------------
+		// Find the best candidate assignment for every unscheduled shard.
+		// --------------------------------------------------------------
 		for _, shard := range unscheduled {
 			shardKey := shard.Cid.String()
 			pc := precomputed[shardKey]
-			shardSizeMB := float64(pc.ShardSize) * chunkMB
+
+			shardSizeMB :=
+				float64(pc.ShardSize) * chunkMB
 
 			best := resourceAwareCandidateBest{
 				Shard:          shard,
 				CompletionTime: math.Inf(1),
 			}
 
+			bestResourceScore := CandidateResourceScore{
+				Peak:  math.Inf(1),
+				Total: math.Inf(1),
+			}
+
+			// ----------------------------------------------------------
+			// Evaluate every possible repair peer.
+			// ----------------------------------------------------------
 			for _, repairPeer := range candidatePeers {
-				if repairPeer == failedPeer || topologyNodeIn(topology, repairPeer) == 0 {
+				if repairPeer == failedPeer {
 					continue
 				}
 
-				localCount, directCount, missingCount,
-					helperTrafficMB, selectedHelpers, fixedECHelpers, helpersOK :=
+				if topologyNodeIn(
+					topology,
+					repairPeer,
+				) == 0 {
+					continue
+				}
+
+				localCount,
+					directCount,
+					missingCount,
+					helperTrafficMB,
+					selectedHelpers,
+					fixedECHelpers,
+					helpersOK :=
 					buildHelperTrafficForCandidate(
 						repairPeer,
 						failedPeer,
@@ -907,62 +1230,96 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 						topology,
 						chunkMB,
 					)
+
 				if !helpersOK {
 					continue
 				}
 
-				// Build repair metadata only from the fixed conventional EC helper set.
-				// Direct-similarity sources may contribute traffic, but they are not
-				// complete helper shards and must not be inserted into helpers metadata.
-				selectedHelperShards := selectedSameStripeHelperShards(
-					fixedECHelpers,
-					pc.HelperGlobalShardNumber,
-				)
+				// Build repair metadata only from the conventional
+				// fixed EC helper set.
+				//
+				// Direct-similarity sources may contribute network
+				// traffic, but they do not necessarily store complete
+				// same-stripe shards.
+				selectedHelperShards :=
+					selectedSameStripeHelperShards(
+						fixedECHelpers,
+						pc.HelperGlobalShardNumber,
+					)
 
-				if missingCount > 0 && len(selectedHelperShards) != pc.N {
+				if missingCount > 0 &&
+					len(selectedHelperShards) != pc.N {
+
 					fmt.Printf(
-						"[WARN] rejecting candidate shard=%s repairPeer=%s: "+
-							"expected %d fixed EC helpers, got %d\n",
+						"[WARN] rejecting candidate shard=%s "+
+							"repairPeer=%s: expected %d fixed "+
+							"EC helpers, got %d\n",
 						shard.Name,
 						repairPeer.String(),
 						pc.N,
 						len(selectedHelperShards),
 					)
+
 					continue
 				}
 
-				downloadTime, repairIncomingMB, downloadOK := estimateDownloadPhase(
-					repairPeer,
-					helperTrafficMB,
-					peerIncomingLoadMB,
-					peerDiskReadLoadMB,
-					peerOutgoingLoadMB,
-					topology,
-				)
+				downloadTime,
+					repairIncomingMB,
+					downloadOK :=
+					estimateDownloadPhase(
+						repairPeer,
+						helperTrafficMB,
+						peerIncomingLoadMB,
+						peerDiskReadLoadMB,
+						peerOutgoingLoadMB,
+						topology,
+					)
+
 				if !downloadOK {
 					continue
 				}
 
-				// ------------------------------------------------------------
-				// Option 1: store locally on the repair peer.
-				// Allowed only if doing so does not violate the stripe rule.
-				// ------------------------------------------------------------
+				// ======================================================
+				// Option 1:
+				// Repair and store on the same peer.
+				// ======================================================
 				if !pc.SameStripePeerSet[repairPeer] {
-					localWriteTime := projectedDiskWriteTime(
-						peerDiskWriteLoadMB[repairPeer],
-						shardSizeMB,
-						topologyNodeDiskWrite(topology, repairPeer),
-					)
+					localWriteTime :=
+						projectedDiskWriteTime(
+							peerDiskWriteLoadMB[repairPeer],
+							shardSizeMB,
+							topologyNodeDiskWrite(
+								topology,
+								repairPeer,
+							),
+						)
 
 					if !math.IsInf(localWriteTime, 1) {
-						completion := maxFloat(downloadTime, localWriteTime)
+						completion := maxFloat(
+							downloadTime,
+							localWriteTime,
+						)
 
-						if betterResourceAwareCandidate(
-							completion,
-							repairPeer,
-							repairPeer,
-							best,
-						) {
+						resourceScore :=
+							localCandidateResourceScore(
+								repairPeer,
+								repairIncomingMB,
+								shardSizeMB,
+								peerIncomingLoadMB,
+								peerDiskWriteLoadMB,
+							)
+
+						if !math.IsInf(resourceScore.Peak, 1) &&
+							!math.IsInf(resourceScore.Total, 1) &&
+							betterCandidate(
+								completion,
+								resourceScore,
+								repairPeer,
+								repairPeer,
+								best,
+								bestResourceScore,
+							) {
+
 							best = resourceAwareCandidateBest{
 								Shard: shard,
 
@@ -970,87 +1327,182 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 								FinalPeer:  repairPeer,
 								Relocated:  false,
 
-								LocalChunkCount:   localCount,
-								DirectChunkCount:  directCount,
+								LocalChunkCount: localCount,
+
+								DirectChunkCount: directCount,
+
 								MissingChunkCount: missingCount,
 
-								HelperTrafficMB:      copyPeerFloatMap(helperTrafficMB),
-								SelectedHelpers:      append([]peer.ID(nil), selectedHelpers...),
-								SelectedHelperShards: copySelectedHelperShards(selectedHelperShards),
+								HelperTrafficMB: copyPeerFloatMap(
+									helperTrafficMB,
+								),
 
-								RepairIncomingMB:     repairIncomingMB,
+								SelectedHelpers: append(
+									[]peer.ID(nil),
+									selectedHelpers...,
+								),
+
+								SelectedHelperShards: copySelectedHelperShards(
+									selectedHelperShards,
+								),
+
+								RepairIncomingMB: repairIncomingMB,
+
 								RelocationDiskReadMB: 0,
 								RelocationOutgoingMB: 0,
 								RelocationIncomingMB: 0,
-								DiskWriteMB:          shardSizeMB,
 
-								DownloadTime:   downloadTime,
+								DiskWriteMB: shardSizeMB,
+
+								DownloadTime: downloadTime,
+
 								RelocationTime: 0,
-								DiskWriteTime:  localWriteTime,
+
+								DiskWriteTime: localWriteTime,
+
 								ProcessingTime: downloadTime,
+
 								CompletionTime: completion,
 							}
+
+							bestResourceScore = resourceScore
 						}
 					}
 				}
 
-				// ------------------------------------------------------------
-				// Option 2: repair on repairPeer, then relocate to finalPeer.
-				//
-				// Sender path: disk read + outgoing bandwidth.
-				// Replacement path: incoming bandwidth + disk write.
-				// These two paths run concurrently, so relocation uses max().
-				// ------------------------------------------------------------
+				// ======================================================
+				// Option 2:
+				// Repair on repairPeer and relocate to finalPeer.
+				// ======================================================
 				for _, finalPeer := range candidatePeers {
-					if finalPeer == failedPeer || finalPeer == repairPeer {
+					if finalPeer == failedPeer ||
+						finalPeer == repairPeer {
 						continue
 					}
+
 					if pc.SameStripePeerSet[finalPeer] {
 						continue
 					}
-					if topologyNodeDiskRead(topology, repairPeer) == 0 ||
-						topologyNodeOut(topology, repairPeer) == 0 ||
-						topologyNodeIn(topology, finalPeer) == 0 ||
-						topologyNodeDiskWrite(topology, finalPeer) == 0 {
+
+					if topologyNodeDiskRead(
+						topology,
+						repairPeer,
+					) == 0 ||
+						topologyNodeOut(
+							topology,
+							repairPeer,
+						) == 0 ||
+						topologyNodeIn(
+							topology,
+							finalPeer,
+						) == 0 ||
+						topologyNodeDiskWrite(
+							topology,
+							finalPeer,
+						) == 0 {
+
 						continue
 					}
 
-					relocationReadTime := projectedDiskReadTime(
-						peerDiskReadLoadMB[repairPeer],
-						shardSizeMB,
-						topologyNodeDiskRead(topology, repairPeer),
-					)
-					relocationOutTime := projectedNetworkTime(
-						peerOutgoingLoadMB[repairPeer],
-						shardSizeMB,
-						topologyNodeOut(topology, repairPeer),
-					)
-					senderTime := relocationReadTime + relocationOutTime
+					// Repair peer reads the reconstructed shard
+					// before relocation.
+					relocationReadTime :=
+						projectedDiskReadTime(
+							peerDiskReadLoadMB[repairPeer],
+							shardSizeMB,
+							topologyNodeDiskRead(
+								topology,
+								repairPeer,
+							),
+						)
 
-					relocationInTime := projectedNetworkTime(
-						peerIncomingLoadMB[finalPeer],
-						shardSizeMB,
-						topologyNodeIn(topology, finalPeer),
-					)
-					finalWriteTime := projectedDiskWriteTime(
-						peerDiskWriteLoadMB[finalPeer],
-						shardSizeMB,
-						topologyNodeDiskWrite(topology, finalPeer),
-					)
-					replacementTime := relocationInTime + finalWriteTime
+					// Repair peer uploads the reconstructed shard.
+					relocationOutTime :=
+						projectedNetworkTime(
+							peerOutgoingLoadMB[repairPeer],
+							shardSizeMB,
+							topologyNodeOut(
+								topology,
+								repairPeer,
+							),
+						)
 
-					if math.IsInf(senderTime, 1) || math.IsInf(replacementTime, 1) {
+					senderTime :=
+						relocationReadTime +
+							relocationOutTime
+
+					// Final peer receives the reconstructed shard.
+					relocationInTime :=
+						projectedNetworkTime(
+							peerIncomingLoadMB[finalPeer],
+							shardSizeMB,
+							topologyNodeIn(
+								topology,
+								finalPeer,
+							),
+						)
+
+					// Final peer writes the reconstructed shard.
+					finalWriteTime :=
+						projectedDiskWriteTime(
+							peerDiskWriteLoadMB[finalPeer],
+							shardSizeMB,
+							topologyNodeDiskWrite(
+								topology,
+								finalPeer,
+							),
+						)
+
+					replacementTime :=
+						relocationInTime +
+							finalWriteTime
+
+					if math.IsInf(senderTime, 1) ||
+						math.IsInf(replacementTime, 1) {
 						continue
 					}
 
-					relocationTime := maxFloat(senderTime, replacementTime)
-					completion := maxFloat(downloadTime, relocationTime)
+					// Sender and receiver paths are modeled as
+					// concurrent relocation paths.
+					relocationTime := maxFloat(
+						senderTime,
+						replacementTime,
+					)
 
-					if betterResourceAwareCandidate(
+					completion := maxFloat(
+						downloadTime,
+						relocationTime,
+					)
+
+					resourceScore :=
+						relocatedCandidateResourceScore(
+							repairPeer,
+							finalPeer,
+
+							repairIncomingMB,
+							shardSizeMB,
+							shardSizeMB,
+							shardSizeMB,
+							shardSizeMB,
+
+							peerIncomingLoadMB,
+							peerDiskReadLoadMB,
+							peerOutgoingLoadMB,
+							peerDiskWriteLoadMB,
+						)
+
+					if math.IsInf(resourceScore.Peak, 1) ||
+						math.IsInf(resourceScore.Total, 1) {
+						continue
+					}
+
+					if betterCandidate(
 						completion,
+						resourceScore,
 						repairPeer,
 						finalPeer,
 						best,
+						bestResourceScore,
 					) {
 						best = resourceAwareCandidateBest{
 							Shard: shard,
@@ -1059,59 +1511,109 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 							FinalPeer:  finalPeer,
 							Relocated:  true,
 
-							LocalChunkCount:   localCount,
-							DirectChunkCount:  directCount,
+							LocalChunkCount: localCount,
+
+							DirectChunkCount: directCount,
+
 							MissingChunkCount: missingCount,
 
-							HelperTrafficMB:      copyPeerFloatMap(helperTrafficMB),
-							SelectedHelpers:      append([]peer.ID(nil), selectedHelpers...),
-							SelectedHelperShards: copySelectedHelperShards(selectedHelperShards),
+							HelperTrafficMB: copyPeerFloatMap(
+								helperTrafficMB,
+							),
 
-							RepairIncomingMB:     repairIncomingMB,
+							SelectedHelpers: append(
+								[]peer.ID(nil),
+								selectedHelpers...,
+							),
+
+							SelectedHelperShards: copySelectedHelperShards(
+								selectedHelperShards,
+							),
+
+							RepairIncomingMB: repairIncomingMB,
+
 							RelocationDiskReadMB: shardSizeMB,
-							RelocationOutgoingMB: shardSizeMB,
-							RelocationIncomingMB: shardSizeMB,
-							DiskWriteMB:          shardSizeMB,
 
-							DownloadTime:   downloadTime,
+							RelocationOutgoingMB: shardSizeMB,
+
+							RelocationIncomingMB: shardSizeMB,
+
+							DiskWriteMB: shardSizeMB,
+
+							DownloadTime: downloadTime,
+
 							RelocationTime: relocationTime,
-							DiskWriteTime:  finalWriteTime,
+
+							DiskWriteTime: finalWriteTime,
+
 							ProcessingTime: downloadTime,
+
 							CompletionTime: completion,
 						}
+
+						bestResourceScore = resourceScore
 					}
 				}
 			}
 
-			if best.RepairPeer != "" && best.FinalPeer != "" &&
+			if best.RepairPeer != "" &&
+				best.FinalPeer != "" &&
 				!math.IsInf(best.CompletionTime, 1) {
+
 				bestForShard[shardKey] = best
+
+				bestResourceScoreForShard[shardKey] =
+					bestResourceScore
 			}
 		}
 
 		if len(bestForShard) == 0 {
-			fmt.Println("[WARN] no valid assignment remains for unscheduled shards")
+			fmt.Println(
+				"[WARN] no valid assignment remains " +
+					"for unscheduled shards",
+			)
+
 			break
 		}
 
-		// Global Max-Min: choose the shard whose best available assignment has
+		// --------------------------------------------------------------
+		// Global Max-Min:
+		//
+		// Select the shard whose best available candidate currently has
 		// the largest completion time.
+		// --------------------------------------------------------------
 		chosenIndex := -1
 		chosenCompletion := -1.0
 		chosenKey := ""
 
-		for idx, shard := range unscheduled {
+		for index, shard := range unscheduled {
 			key := shard.Cid.String()
-			cand, ok := bestForShard[key]
+
+			candidate, ok := bestForShard[key]
 			if !ok {
 				continue
 			}
 
 			if chosenIndex == -1 ||
-				cand.CompletionTime > chosenCompletion ||
-				(cand.CompletionTime == chosenCompletion && key < chosenKey) {
-				chosenIndex = idx
-				chosenCompletion = cand.CompletionTime
+				floatGreater(
+					candidate.CompletionTime,
+					chosenCompletion,
+				) ||
+				(!floatLess(
+					candidate.CompletionTime,
+					chosenCompletion,
+				) &&
+					!floatGreater(
+						candidate.CompletionTime,
+						chosenCompletion,
+					) &&
+					key < chosenKey) {
+
+				chosenIndex = index
+
+				chosenCompletion =
+					candidate.CompletionTime
+
 				chosenKey = key
 			}
 		}
@@ -1121,62 +1623,122 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 		}
 
 		chosenShard := unscheduled[chosenIndex]
-		chosen := bestForShard[chosenShard.Cid.String()]
 
-		// Every source reads its selected data and then uploads it.
+		chosen :=
+			bestForShard[chosenShard.Cid.String()]
+
+		chosenResourceScore :=
+			bestResourceScoreForShard[
+				chosenShard.Cid.String()
+			]
+
+		// --------------------------------------------------------------
+		// Commit helper source loads.
+		//
+		// Every selected source performs both disk-read and upload work.
+		// --------------------------------------------------------------
 		for source, mb := range chosen.HelperTrafficMB {
 			peerDiskReadLoadMB[source] += mb
 			peerOutgoingLoadMB[source] += mb
 		}
-		peerIncomingLoadMB[chosen.RepairPeer] += chosen.RepairIncomingMB
 
-		// Commit final-placement loads.
+		// Commit repair-peer incoming repair traffic.
+		peerIncomingLoadMB[chosen.RepairPeer] +=
+			chosen.RepairIncomingMB
+
+		// --------------------------------------------------------------
+		// Commit storage or relocation resource loads.
+		// --------------------------------------------------------------
 		if chosen.Relocated {
-			peerDiskReadLoadMB[chosen.RepairPeer] += chosen.RelocationDiskReadMB
-			peerOutgoingLoadMB[chosen.RepairPeer] += chosen.RelocationOutgoingMB
-			peerIncomingLoadMB[chosen.FinalPeer] += chosen.RelocationIncomingMB
-			peerDiskWriteLoadMB[chosen.FinalPeer] += chosen.DiskWriteMB
+			peerDiskReadLoadMB[chosen.RepairPeer] +=
+				chosen.RelocationDiskReadMB
+
+			peerOutgoingLoadMB[chosen.RepairPeer] +=
+				chosen.RelocationOutgoingMB
+
+			peerIncomingLoadMB[chosen.FinalPeer] +=
+				chosen.RelocationIncomingMB
+
+			peerDiskWriteLoadMB[chosen.FinalPeer] +=
+				chosen.DiskWriteMB
 		} else {
-			peerDiskWriteLoadMB[chosen.RepairPeer] += chosen.DiskWriteMB
+			peerDiskWriteLoadMB[chosen.RepairPeer] +=
+				chosen.DiskWriteMB
 		}
 
-		assignments[chosen.FinalPeer] = append(assignments[chosen.FinalPeer], chosenShard)
+		// Assignment is indexed by the final placement peer.
+		assignments[chosen.FinalPeer] = append(
+			assignments[chosen.FinalPeer],
+			chosenShard,
+		)
 
-		estimates = append(estimates, IncomingOnlyRelocationEstimate{
-			Shard: chosenShard,
+		estimates = append(
+			estimates,
+			IncomingOnlyRelocationEstimate{
+				Shard: chosenShard,
 
-			RepairPeer: chosen.RepairPeer,
-			FinalPeer:  chosen.FinalPeer,
-			Relocated:  chosen.Relocated,
+				RepairPeer: chosen.RepairPeer,
+				FinalPeer:  chosen.FinalPeer,
+				Relocated:  chosen.Relocated,
 
-			LocalChunkCount:   chosen.LocalChunkCount,
-			DirectChunkCount:  chosen.DirectChunkCount,
-			MissingChunkCount: chosen.MissingChunkCount,
+				LocalChunkCount: chosen.LocalChunkCount,
 
-			RepairIncomingMB:     chosen.RepairIncomingMB,
-			RelocationDiskReadMB: chosen.RelocationDiskReadMB,
-			RelocationOutgoingMB: chosen.RelocationOutgoingMB,
-			RelocationIncomingMB: chosen.RelocationIncomingMB,
-			DiskWriteMB:          chosen.DiskWriteMB,
+				DirectChunkCount: chosen.DirectChunkCount,
 
-			HelperTrafficMB:      copyPeerFloatMap(chosen.HelperTrafficMB),
-			SelectedHelpers:      append([]peer.ID(nil), chosen.SelectedHelpers...),
-			SelectedHelperShards: copySelectedHelperShards(chosen.SelectedHelperShards),
+				MissingChunkCount: chosen.MissingChunkCount,
 
-			DownloadTime:   chosen.DownloadTime,
-			RelocationTime: chosen.RelocationTime,
-			DiskWriteTime:  chosen.DiskWriteTime,
-			ProcessingTime: chosen.ProcessingTime,
-			FinishTime:     chosen.CompletionTime,
-		})
+				RepairIncomingMB: chosen.RepairIncomingMB,
+
+				RelocationDiskReadMB: chosen.RelocationDiskReadMB,
+
+				RelocationOutgoingMB: chosen.RelocationOutgoingMB,
+
+				RelocationIncomingMB: chosen.RelocationIncomingMB,
+
+				DiskWriteMB: chosen.DiskWriteMB,
+
+				HelperTrafficMB: copyPeerFloatMap(
+					chosen.HelperTrafficMB,
+				),
+
+				SelectedHelpers: append(
+					[]peer.ID(nil),
+					chosen.SelectedHelpers...,
+				),
+
+				SelectedHelperShards: copySelectedHelperShards(
+					chosen.SelectedHelperShards,
+				),
+
+				DownloadTime: chosen.DownloadTime,
+
+				RelocationTime: chosen.RelocationTime,
+
+				DiskWriteTime: chosen.DiskWriteTime,
+
+				ProcessingTime: chosen.ProcessingTime,
+
+				FinishTime: chosen.CompletionTime,
+			},
+		)
 
 		fmt.Printf(
-			"RESOURCE-AWARE GLOBAL MAX-MIN assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v finish=%f download=%f relocation=%f diskWrite=%f local=%d direct=%d missing=%d repairInMB=%.3f relocationReadMB=%.3f relocationOutMB=%.3f relocationInMB=%.3f helpers=%d indexedStripeHelpers=%d\n",
+			"RESOURCE-AWARE GLOBAL MAX-MIN assigned "+
+				"shard=%s repairPeer=%s finalPeer=%s "+
+				"relocated=%v finish=%f loadPeak=%f "+
+				"loadTotal=%f download=%f relocation=%f "+
+				"diskWrite=%f local=%d direct=%d missing=%d "+
+				"repairInMB=%.3f relocationReadMB=%.3f "+
+				"relocationOutMB=%.3f relocationInMB=%.3f "+
+				"helpers=%d indexedStripeHelpers=%d\n",
+
 			chosenShard.Name,
 			chosen.RepairPeer.String(),
 			chosen.FinalPeer.String(),
 			chosen.Relocated,
 			chosen.CompletionTime,
+			chosenResourceScore.Peak,
+			chosenResourceScore.Total,
 			chosen.DownloadTime,
 			chosen.RelocationTime,
 			chosen.DiskWriteTime,
@@ -1191,14 +1753,46 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 			len(chosen.SelectedHelperShards),
 		)
 
+		// Print the committed loads of the selected repair and final peers.
+		fmt.Printf(
+			"[LOAD] repairPeer=%s incomingMB=%.3f "+
+				"diskReadMB=%.3f outgoingMB=%.3f "+
+				"diskWriteMB=%.3f\n",
+			chosen.RepairPeer.String(),
+			peerIncomingLoadMB[chosen.RepairPeer],
+			peerDiskReadLoadMB[chosen.RepairPeer],
+			peerOutgoingLoadMB[chosen.RepairPeer],
+			peerDiskWriteLoadMB[chosen.RepairPeer],
+		)
+
+		if chosen.FinalPeer != chosen.RepairPeer {
+			fmt.Printf(
+				"[LOAD] finalPeer=%s incomingMB=%.3f "+
+					"diskReadMB=%.3f outgoingMB=%.3f "+
+					"diskWriteMB=%.3f\n",
+				chosen.FinalPeer.String(),
+				peerIncomingLoadMB[chosen.FinalPeer],
+				peerDiskReadLoadMB[chosen.FinalPeer],
+				peerOutgoingLoadMB[chosen.FinalPeer],
+				peerDiskWriteLoadMB[chosen.FinalPeer],
+			)
+		}
+
 		unscheduled = append(
 			unscheduled[:chosenIndex],
 			unscheduled[chosenIndex+1:]...,
 		)
 	}
 
-	fmt.Printf("[PHASE] scheduling loop took: %v\n", time.Since(start))
-	fmt.Printf("[TOTAL] resource-aware Global Max-Min took: %v\n", time.Since(totalStart))
+	fmt.Printf(
+		"[PHASE] scheduling loop took: %v\n",
+		time.Since(start),
+	)
+
+	fmt.Printf(
+		"[TOTAL] resource-aware Global Max-Min took: %v\n",
+		time.Since(totalStart),
+	)
 
 	return assignments, estimates
 }
