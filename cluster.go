@@ -1421,126 +1421,164 @@ func (c *Cluster) alertsHandler() {
 				if distance.isClosest(CIDsSim4[0].Cid) {
 
 					fmt.Println("I am the responsible")
+
 					topology, err := LoadNetworkTopology("/root/pairwise_bandwidth_log.csv")
 					if err != nil {
 						logger.Warnf("could not load topology: %s", err)
 						continue
 					}
+
 					topology.PrintFull()
 
-					allpeers := distance.otherPeers
+					// Make a copy so append does not modify distance.otherPeers.
+					allpeers := append([]peer.ID(nil), distance.otherPeers...)
 					allpeers = append(allpeers, c.id)
+					allpeers = sortedUniquePeers(allpeers)
 
 					fmt.Println("DEBUG topology peer IDs:")
 					for p, n := range topology.NodesByPeer {
-						fmt.Printf("topology peer=%s node=%s\n", p.String(), n.Name)
+						fmt.Printf(
+							"topology peer=%s node=%s\n",
+							p.String(),
+							n.Name,
+						)
 					}
 
 					fmt.Println("DEBUG candidate peer IDs:")
 					for _, p := range allpeers {
 						fmt.Printf("candidate peer=%s\n", p.String())
 					}
-					sstt := time.Now()
-					/*assignments, assignedPairs := ScheduleGlobalMaxMinSimple(
-						alrt.Peer, // failed peer
-						CIDsSim4,  // failed shards
-						allpeers,  // candidate repair peers
-						topology,
-						0.25, // chunk size in MB
-						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
-							return c.get_shards_same_stripe(pin)
-						},
-						func(pin api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string) {
-							return c.similarities_Max_Min_Sauff(c.ctx, pin)
-						},
-					)*/
 
-					//assignments, assignedPairs := ScheduleGlobalMaxMinIncomingOnly_Precomputed(
-					//assignments, allocs_of_repairs := ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocation(
-					assignments, allocs_of_repairs := ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
-						alrt.Peer,
-						CIDsSim4,
-						allpeers,
-						topology,
-						0.25,
-						func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
-							return c.get_shards_same_stripe(pin)
-						},
-						func(pin api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string) {
-							return c.s_Max_Min_Sauff(c.ctx, pin)
-						},
+					sstt := time.Now()
+
+					assignments, allocsOfRepairs :=
+						ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
+							alrt.Peer,
+							CIDsSim4,
+							allpeers,
+							topology,
+							0.25,
+							func(pin api.Pin) ([]api.Pin, []peer.ID, int, int) {
+								return c.get_shards_same_stripe(pin)
+							},
+							func(pin api.Pin) (
+								peer.ID,
+								[]string,
+								map[peer.ID]int,
+								map[peer.ID][]string,
+							) {
+								return c.s_Max_Min_Sauff(c.ctx, pin)
+							},
+						)
+
+					fmt.Printf(
+						"RESOURCE-AWARE MAX-MIN assigned %d shards\n",
+						len(allocsOfRepairs),
 					)
 
-					fmt.Printf("RESOURCE-AWARE MAX-MIN assigned %d shards\n", len(allocs_of_repairs))
-
 					total := 0
-					for peerID, pins := range assignments {
-						fmt.Printf("Repair peer %s -> %d shards\n", peerID.String(), len(pins))
+
+					// assignments is indexed by the final storage peer, not necessarily
+					// by the peer performing reconstruction.
+					for finalPeer, pins := range assignments {
+						fmt.Printf(
+							"Final storage peer %s -> %d shards\n",
+							finalPeer.String(),
+							len(pins),
+						)
+
 						total += len(pins)
 					}
-					fmt.Printf("TOTAL ASSIGNED: %d / %d and it took %s \n", total, len(CIDsSim4), time.Now().Sub(sstt).String())
 
-					/*for peerID, pins := range assignments {
-						for _, pin := range pins {
-							pin.Metadata["Strategy"] = ""
-							pin.Metadata["Strategy"] = "MAXMIN"
-							top14Peers := topology.TopPeersByGlobalIn(14)
-							pin.Metadata["allocs"] = ""
-							allocs := make([]string, 0, len(top14Peers))
-
-							for _, p := range top14Peers {
-								allocs = append(allocs, p.String())
-							}
-
-							//pin.Metadata["allocs"] = strings.Join(allocs, ",")
-							if peerID == c.id {
-								c.Enqueue(c.ctx, pin)
-							} else {
-								var out bool
-								c.rpcClient.CallContext(
-									c.ctx,
-									peerID,
-									"Cluster",
-									"Enqueue",
-									&pin,
-									&out,
-								)
-							}
-						}
-					}*/
+					fmt.Printf(
+						"TOTAL ASSIGNED: %d / %d and it took %s\n",
+						total,
+						len(CIDsSim4),
+						time.Since(sstt),
+					)
 
 					/////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-					for _, alloc := range allocs_of_repairs {
-						if alloc.Relocated {
-							alloc.Shard.Metadata["Strategy"] = ""
-							alloc.Shard.Metadata["Strategy"] = "MAXMIN"
-							//top14Peers := topology.TopPeersByGlobalIn(14)
-							alloc.Shard.Metadata["allocs"] = ""
-							//allocs := make([]string, 0, len(top14Peers))
+					for _, alloc := range allocsOfRepairs {
+						shard := alloc.Shard
 
-							//for _, p := range top14Peers {
-							//	allocs = append(allocs, p.String())
-							//}
-
-							//alloc.Shard.Metadata["allocs"] = strings.Join(allocs, ",")
-							alloc.Shard.Metadata["allocs"] = alloc.FinalPeer.String()
-
+						if shard.Metadata == nil {
+							shard.Metadata = make(map[string]string)
 						}
-						if alloc.RepairPeer == c.id {
-							c.Enqueue(c.ctx, alloc.Shard)
+
+						shard.Metadata["Strategy"] = "MAXMINNEW"
+
+						// The repair is first executed on alloc.RepairPeer.
+						//
+						// When Relocated=true, the reconstructed shard must then be sent
+						// to alloc.FinalPeer.
+						if alloc.Relocated {
+							shard.Metadata["allocs"] = alloc.FinalPeer.String()
 						} else {
-							var out bool
-							c.rpcClient.CallContext(
-								c.ctx,
-								alloc.RepairPeer,
-								"Cluster",
-								"Enqueue",
-								&alloc.Shard,
-								&out,
+							shard.Metadata["allocs"] = ""
+						}
+
+						// Store conventional EC helpers together with their REAL global
+						// shard numbers.
+						//
+						// Format:
+						//     peerID:globalShardNumber,peerID:globalShardNumber,...
+						//
+						// The repair model will later calculate:
+						//     rsIndex := (globalShardNumber - 1) % (n + k)
+						indexedHelpers := make([]string, 0, len(alloc.SelectedHelperShards))
+
+						for _, selected := range alloc.SelectedHelperShards {
+							if selected.Peer == "" || selected.GlobalShardNumber <= 0 {
+								continue
+							}
+
+							indexedHelpers = append(
+								indexedHelpers,
+								fmt.Sprintf(
+									"%s:%d",
+									selected.Peer.String(),
+									selected.GlobalShardNumber,
+								),
 							)
 						}
 
+						sort.Strings(indexedHelpers)
+						shard.Metadata["helpers"] = strings.Join(indexedHelpers, ",")
+
+						fmt.Printf(
+							"ENQUEUE shard=%s repairPeer=%s finalPeer=%s relocated=%v helpers=%s\n",
+							shard.Name,
+							alloc.RepairPeer.String(),
+							alloc.FinalPeer.String(),
+							alloc.Relocated,
+							shard.Metadata["helpers"],
+						)
+
+						if alloc.RepairPeer == c.id {
+							c.Enqueue(c.ctx, shard)
+							continue
+						}
+
+						var out bool
+
+						err := c.rpcClient.CallContext(
+							c.ctx,
+							alloc.RepairPeer,
+							"Cluster",
+							"Enqueue",
+							&shard,
+							&out,
+						)
+
+						if err != nil {
+							logger.Errorf(
+								"failed to enqueue shard %s on repair peer %s: %s",
+								shard.Cid.String(),
+								alloc.RepairPeer.String(),
+								err,
+							)
+						}
 					}
 
 				}

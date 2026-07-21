@@ -145,7 +145,11 @@ func (spt *ECRepairS) pin(op *api.Pin) error {
 	if op.Metadata["Strategy"] == "SELECTIVE_EC" {
 		download, repair, waittosend = spt.repinUsingRSSelectiveEC(op)
 	} else {
-		download, repair, waittosend = spt.repinUsingRSWithSwitching1(op)
+		if op.Metadata["Strategy"] == "MAXMINNEW" {
+			download, repair, waittosend = spt.repinUsingRSASCLEPIUS(op)
+		} else {
+			download, repair, waittosend = spt.repinUsingRSWithSwitching1(op)
+		}
 	}
 
 	//download, repair, waittosend := spt.repinUsingRSrelatedWork(op)
@@ -3327,6 +3331,941 @@ func (spt *ECRepairS) repinUsingRSSelectiveEC(
 		pin.Name,
 		tosend,
 		selectedIndexes,
+		time.Since(start).String(),
+		timedownloadchunks.String(),
+		timetorepairchunksonly.String(),
+		flushDuration.String(),
+	)
+
+	return timedownloadchunks,
+		timetorepairchunksonly,
+		flushDuration
+}
+
+func (spt *ECRepairS) repinUsingRSASCLEPIUS(
+	pin *api.Pin,
+) (time.Duration, time.Duration, time.Duration) {
+
+	start := time.Now()
+
+	var timedownloadchunks time.Duration
+	var timetorepairchunksonly time.Duration
+
+	ctx, span := trace.StartSpan(
+		spt.ctx,
+		"pintracker/repinUsingRSASCLEPIUS",
+	)
+	defer span.End()
+
+	// ---------------------------------------------------------------------
+	// Read RS parameters from the failed shard name.
+	// ---------------------------------------------------------------------
+
+	f1 := strings.Split(pin.Name, "(")
+	if len(f1) < 2 {
+		logger.Errorf(
+			"ASCLEPIUS: cannot extract RS parameters from shard name %s",
+			pin.Name,
+		)
+		return 0, 0, 0
+	}
+
+	f2 := strings.Split(f1[1], ")")
+	if len(f2) < 1 {
+		logger.Errorf(
+			"ASCLEPIUS: cannot extract RS parameters from shard name %s",
+			pin.Name,
+		)
+		return 0, 0, 0
+	}
+
+	rsParts := strings.Split(f2[0], ",")
+	if len(rsParts) != 2 {
+		logger.Errorf(
+			"ASCLEPIUS: invalid RS parameters in shard name %s",
+			pin.Name,
+		)
+		return 0, 0, 0
+	}
+
+	or, err := strconv.Atoi(
+		strings.TrimSpace(rsParts[0]),
+	)
+	if err != nil || or <= 0 {
+		logger.Errorf(
+			"ASCLEPIUS: invalid original shard count in %s",
+			pin.Name,
+		)
+		return 0, 0, 0
+	}
+
+	par, err := strconv.Atoi(
+		strings.TrimSpace(rsParts[1]),
+	)
+	if err != nil || par <= 0 {
+		logger.Errorf(
+			"ASCLEPIUS: invalid parity shard count in %s",
+			pin.Name,
+		)
+		return 0, 0, 0
+	}
+
+	totalStripeShards := or + par
+
+	enc, err := reedsolomon.New(or, par)
+	if err != nil {
+		logger.Errorf(
+			"ASCLEPIUS: cannot create RS encoder: %s",
+			err,
+		)
+		return 0, 0, 0
+	}
+
+	// ---------------------------------------------------------------------
+	// Determine the failed global shard number and its RS matrix position.
+	// ---------------------------------------------------------------------
+
+	failedGlobalShardNumber, _, err :=
+		getShardNumber(pin.Name)
+
+	if err != nil {
+		logger.Errorf(
+			"ASCLEPIUS: cannot extract failed shard number from %s: %s",
+			pin.Name,
+			err,
+		)
+		return 0, 0, 0
+	}
+
+	if failedGlobalShardNumber <= 0 {
+		logger.Errorf(
+			"ASCLEPIUS: invalid failed global shard number %d",
+			failedGlobalShardNumber,
+		)
+		return 0, 0, 0
+	}
+
+	failedStripe :=
+		(failedGlobalShardNumber - 1) /
+			totalStripeShards
+
+	tosend :=
+		(failedGlobalShardNumber - 1) %
+			totalStripeShards
+
+	fmt.Printf(
+		"ASCLEPIUS failedShard=%d stripe=%d missingRSIndex=%d\n",
+		failedGlobalShardNumber,
+		failedStripe,
+		tosend,
+	)
+
+	// ---------------------------------------------------------------------
+	// Parse the scheduler-selected destination.
+	//
+	// allocs is empty when repairPeer == finalPeer.
+	// In that case the repaired shard stays on this peer.
+	// ---------------------------------------------------------------------
+
+	destinationPeer := spt.peerID
+
+	destinationString :=
+		strings.TrimSpace(pin.Metadata["allocs"])
+
+	if destinationString != "" {
+		destinationPeer, err =
+			peer.Decode(destinationString)
+
+		if err != nil {
+			logger.Errorf(
+				"ASCLEPIUS: invalid destination peer %q: %s",
+				destinationString,
+				err,
+			)
+			return 0, 0, 0
+		}
+	}
+
+	fmt.Printf(
+		"ASCLEPIUS repairPeer=%s destinationPeer=%s relocated=%v\n",
+		spt.peerID.String(),
+		destinationPeer.String(),
+		destinationPeer != spt.peerID,
+	)
+
+	// ---------------------------------------------------------------------
+	// Parse helpers metadata.
+	//
+	// Expected format:
+	//
+	// helpers=peerID:globalShardNumber,peerID:globalShardNumber,...
+	// ---------------------------------------------------------------------
+
+	type selectedHelper struct {
+		Peer              peer.ID
+		GlobalShardNumber int
+		RSIndex           int
+
+		Pin  api.Pin
+		CIDs []string
+	}
+
+	helpersMetadata :=
+		strings.TrimSpace(pin.Metadata["helpers"])
+
+	if helpersMetadata == "" {
+		logger.Errorf(
+			"ASCLEPIUS: helpers metadata is empty for shard %s",
+			pin.Name,
+		)
+		return 0, 0, 0
+	}
+
+	helperEntries :=
+		strings.Split(helpersMetadata, ",")
+
+	selectedHelpers := make(
+		[]selectedHelper,
+		0,
+		len(helperEntries),
+	)
+
+	seenPeer := make(map[peer.ID]bool)
+	seenRSIndex := make(map[int]bool)
+
+	for _, rawEntry := range helperEntries {
+		entry := strings.TrimSpace(rawEntry)
+		if entry == "" {
+			continue
+		}
+
+		separator := strings.LastIndex(
+			entry,
+			":",
+		)
+
+		if separator <= 0 ||
+			separator >= len(entry)-1 {
+
+			logger.Errorf(
+				"ASCLEPIUS: invalid helper entry %q; "+
+					"expected peerID:globalShardNumber",
+				entry,
+			)
+			return 0, 0, 0
+		}
+
+		helperPeerString :=
+			strings.TrimSpace(entry[:separator])
+
+		globalNumberString :=
+			strings.TrimSpace(entry[separator+1:])
+
+		helperPeer, decodeErr :=
+			peer.Decode(helperPeerString)
+
+		if decodeErr != nil {
+			logger.Errorf(
+				"ASCLEPIUS: invalid helper peer %q: %s",
+				helperPeerString,
+				decodeErr,
+			)
+			return 0, 0, 0
+		}
+
+		globalShardNumber, numberErr :=
+			strconv.Atoi(globalNumberString)
+
+		if numberErr != nil ||
+			globalShardNumber <= 0 {
+
+			logger.Errorf(
+				"ASCLEPIUS: invalid global shard number %q "+
+					"for helper %s",
+				globalNumberString,
+				helperPeer.String(),
+			)
+			return 0, 0, 0
+		}
+
+		helperStripe :=
+			(globalShardNumber - 1) /
+				totalStripeShards
+
+		if helperStripe != failedStripe {
+			logger.Errorf(
+				"ASCLEPIUS: helper %s globalShard=%d "+
+					"belongs to stripe=%d, expected stripe=%d",
+				helperPeer.String(),
+				globalShardNumber,
+				helperStripe,
+				failedStripe,
+			)
+			return 0, 0, 0
+		}
+
+		rsIndex :=
+			(globalShardNumber - 1) %
+				totalStripeShards
+
+		if rsIndex == tosend {
+			logger.Errorf(
+				"ASCLEPIUS: helper %s points to missing "+
+					"RS index %d",
+				helperPeer.String(),
+				rsIndex,
+			)
+			return 0, 0, 0
+		}
+
+		if seenPeer[helperPeer] {
+			logger.Errorf(
+				"ASCLEPIUS: duplicate helper peer %s",
+				helperPeer.String(),
+			)
+			return 0, 0, 0
+		}
+
+		if seenRSIndex[rsIndex] {
+			logger.Errorf(
+				"ASCLEPIUS: duplicate RS index %d "+
+					"after modulo conversion",
+				rsIndex,
+			)
+			return 0, 0, 0
+		}
+
+		seenPeer[helperPeer] = true
+		seenRSIndex[rsIndex] = true
+
+		selectedHelpers = append(
+			selectedHelpers,
+			selectedHelper{
+				Peer:              helperPeer,
+				GlobalShardNumber: globalShardNumber,
+				RSIndex:           rsIndex,
+			},
+		)
+	}
+
+	if len(selectedHelpers) != or {
+		logger.Errorf(
+			"ASCLEPIUS: expected exactly %d EC helpers, got %d",
+			or,
+			len(selectedHelpers),
+		)
+		return 0, 0, 0
+	}
+
+	sort.Slice(
+		selectedHelpers,
+		func(i, j int) bool {
+			return selectedHelpers[i].RSIndex <
+				selectedHelpers[j].RSIndex
+		},
+	)
+
+	// ---------------------------------------------------------------------
+	// Read the selected shard pins from consensus.
+	//
+	// We locate shards using the exact global numbers returned by the
+	// scheduler. Helper peer IDs are also validated against allocations.
+	// ---------------------------------------------------------------------
+
+	cState, err := spt.cons.State(spt.ctx)
+	if err != nil {
+		logger.Errorf(
+			"ASCLEPIUS: cannot read consensus state: %s",
+			err,
+		)
+		return 0, 0, 0
+	}
+
+	pinCh := make(chan api.Pin, 1024)
+
+	go func() {
+		listErr := cState.List(ctx, pinCh)
+		if listErr != nil {
+			logger.Errorf(
+				"ASCLEPIUS: cannot list consensus state: %s",
+				listErr,
+			)
+		}
+	}()
+
+	type helperLookupKey struct {
+		GlobalShardNumber int
+	}
+
+	helperByGlobalNumber := make(
+		map[int]int,
+		len(selectedHelpers),
+	)
+
+	for i := range selectedHelpers {
+		helperByGlobalNumber[selectedHelpers[i].GlobalShardNumber] = i
+	}
+
+	foundHelpers := 0
+
+	for candidatePin := range pinCh {
+		if !strings.Contains(
+			candidatePin.Name,
+			"-shard-",
+		) {
+			continue
+		}
+
+		candidateNumber, candidateBaseName, numberErr :=
+			getShardNumber(candidatePin.Name)
+
+		if numberErr != nil {
+			continue
+		}
+
+		helperPosition, needed :=
+			helperByGlobalNumber[candidateNumber]
+
+		if !needed {
+			continue
+		}
+
+		_, failedBaseName, failedNameErr :=
+			getShardNumber(pin.Name)
+
+		if failedNameErr != nil ||
+			candidateBaseName != failedBaseName {
+
+			continue
+		}
+
+		expectedPeer :=
+			selectedHelpers[helperPosition].Peer
+
+		if !slices.Contains(
+			candidatePin.Allocations,
+			expectedPeer,
+		) {
+			logger.Errorf(
+				"ASCLEPIUS: selected peer %s does not allocate "+
+					"helper shard %s",
+				expectedPeer.String(),
+				candidatePin.Name,
+			)
+			return 0, 0, 0
+		}
+
+		selectedHelpers[helperPosition].Pin =
+			candidatePin
+
+		helperPinWithMeta := pinwithmeta{
+			pin:   candidatePin,
+			index: candidateNumber,
+			cids:  make([]string, 0),
+		}
+
+		chunks :=
+			spt.retrieveCids(helperPinWithMeta)
+
+		for _, chunk := range chunks {
+			selectedHelpers[helperPosition].CIDs =
+				append(
+					selectedHelpers[helperPosition].CIDs,
+					chunk.cid,
+				)
+		}
+
+		foundHelpers++
+
+		delete(
+			helperByGlobalNumber,
+			candidateNumber,
+		)
+
+		if foundHelpers == len(selectedHelpers) {
+			break
+		}
+	}
+
+	if foundHelpers != len(selectedHelpers) {
+		logger.Errorf(
+			"ASCLEPIUS: found metadata for %d/%d selected helpers",
+			foundHelpers,
+			len(selectedHelpers),
+		)
+		return 0, 0, 0
+	}
+
+	// Validate that all selected shards have the same number of chunks.
+	chunkCount := -1
+
+	for _, helper := range selectedHelpers {
+		if len(helper.CIDs) == 0 {
+			logger.Errorf(
+				"ASCLEPIUS: selected helper %s shard=%d has no CIDs",
+				helper.Peer.String(),
+				helper.GlobalShardNumber,
+			)
+			return 0, 0, 0
+		}
+
+		if chunkCount == -1 {
+			chunkCount = len(helper.CIDs)
+		} else if len(helper.CIDs) != chunkCount {
+			logger.Errorf(
+				"ASCLEPIUS: inconsistent chunk counts; "+
+					"helper %s has %d, expected %d",
+				helper.Peer.String(),
+				len(helper.CIDs),
+				chunkCount,
+			)
+			return 0, 0, 0
+		}
+	}
+
+	// ---------------------------------------------------------------------
+	// Read the failed shard CID list.
+	// ---------------------------------------------------------------------
+
+	failedCIDsRaw :=
+		strings.Split(pin.Metadata["Cids"], ",")
+
+	failedCIDs := make(
+		[]string,
+		0,
+		len(failedCIDsRaw),
+	)
+
+	for _, rawCID := range failedCIDsRaw {
+		cleaned := strings.TrimSpace(
+			strings.Trim(rawCID, "<>"),
+		)
+
+		if cleaned != "" {
+			failedCIDs = append(
+				failedCIDs,
+				cleaned,
+			)
+		}
+	}
+
+	if len(failedCIDs) == 0 {
+		logger.Errorf(
+			"ASCLEPIUS: failed shard %s contains no CIDs metadata",
+			pin.Name,
+		)
+		return 0, 0, 0
+	}
+
+	if len(failedCIDs) != chunkCount {
+		logger.Errorf(
+			"ASCLEPIUS: failed shard has %d chunks, "+
+				"selected helpers have %d",
+			len(failedCIDs),
+			chunkCount,
+		)
+		return 0, 0, 0
+	}
+
+	// ---------------------------------------------------------------------
+	// Create the destination shard directly.
+	//
+	// When destinationPeer == spt.peerID, this stores locally.
+	// Otherwise, NewShard sends generated blocks directly to the scheduler's
+	// selected destination peer.
+	// ---------------------------------------------------------------------
+
+	if pin.PinOptions.Metadata == nil {
+		pin.PinOptions.Metadata =
+			make(map[string]string)
+	}
+
+	shh, err := sharding.NewShard(
+		spt.ctx,
+		spt.ctx,
+		spt.rpcClient,
+		pin.PinOptions,
+		destinationPeer,
+	)
+
+	if err != nil {
+		logger.Errorf(
+			"ASCLEPIUS: cannot create output shard for destination %s: %s",
+			destinationPeer.String(),
+			err,
+		)
+		return 0, 0, 0
+	}
+
+	prefix, err :=
+		merkledag.PrefixForCidVersion(0)
+
+	if err != nil {
+		logger.Errorf(
+			"ASCLEPIUS: cannot create CID prefix: %s",
+			err,
+		)
+		return 0, 0, 0
+	}
+
+	hashFunCode, exists :=
+		multihash.Names[strings.ToLower("sha2-256")]
+
+	if !exists {
+		logger.Errorf(
+			"ASCLEPIUS: sha2-256 multihash code is unavailable",
+		)
+		return 0, 0, 0
+	}
+
+	prefix.MhType = hashFunCode
+	prefix.MhLength = -1
+
+	downloadContext, cancelDownloads :=
+		context.WithCancel(spt.ctx)
+
+	defer cancelDownloads()
+
+	// ---------------------------------------------------------------------
+	// This section is intentionally almost identical to SelectiveEC.
+	// ---------------------------------------------------------------------
+
+	for chunkPosition := 0; chunkPosition < chunkCount; chunkPosition++ {
+
+		targetCID, decodeErr :=
+			cid.Decode(failedCIDs[chunkPosition])
+
+		if decodeErr != nil {
+			logger.Errorf(
+				"ASCLEPIUS: invalid target CID at chunk %d: %s",
+				chunkPosition,
+				decodeErr,
+			)
+			return 0, 0, 0
+		}
+
+		// Reuse the chunk locally when already available.
+		existsLocally, localErr :=
+			spt.connector.BlockLocalHas(
+				spt.ctx,
+				targetCID,
+			)
+
+		if localErr == nil && existsLocally {
+			localStart := time.Now()
+
+			data := spt.getData(
+				downloadContext,
+				targetCID.String(),
+			)
+
+			localDuration :=
+				time.Since(localStart)
+
+			if len(data) == 0 {
+				logger.Errorf(
+					"ASCLEPIUS: locally available chunk %d is empty",
+					chunkPosition,
+				)
+				return 0, 0, 0
+			}
+
+			node :=
+				ipfsadd.NewFSNodeOverDagC(
+					ft.TFile,
+					prefix,
+				)
+
+			node.SetFileData(data)
+
+			rawNode, commitErr :=
+				node.Commit()
+
+			if commitErr != nil {
+				logger.Errorf(
+					"ASCLEPIUS: cannot commit local chunk %d: %s",
+					chunkPosition,
+					commitErr,
+				)
+				return 0, 0, 0
+			}
+
+			shh.SendBlock(
+				spt.ctx,
+				rawNode,
+			)
+
+			size := uint64(
+				len(rawNode.RawData()),
+			)
+
+			shh.AddLink(
+				ctx,
+				rawNode.Cid(),
+				size,
+			)
+
+			timedownloadchunks +=
+				localDuration
+
+			continue
+		}
+
+		reconstructShards := make(
+			[][]byte,
+			totalStripeShards,
+		)
+
+		type downloadResult struct {
+			rsIndex  int
+			peer     peer.ID
+			data     []byte
+			duration time.Duration
+			err      error
+		}
+
+		results := make(
+			chan downloadResult,
+			len(selectedHelpers),
+		)
+
+		var downloadWG sync.WaitGroup
+
+		downloadWG.Add(
+			len(selectedHelpers),
+		)
+
+		parallelDownloadStart :=
+			time.Now()
+
+		for _, selected := range selectedHelpers {
+			helper := selected
+
+			go func() {
+				defer downloadWG.Done()
+
+				if chunkPosition >= len(helper.CIDs) {
+					results <- downloadResult{
+						rsIndex: helper.RSIndex,
+						peer:    helper.Peer,
+						err: fmt.Errorf(
+							"chunk %d unavailable for helper shard %d",
+							chunkPosition,
+							helper.GlobalShardNumber,
+						),
+					}
+					return
+				}
+
+				helperCID :=
+					helper.CIDs[chunkPosition]
+
+				oneStart := time.Now()
+
+				data := spt.getData(
+					downloadContext,
+					helperCID,
+				)
+
+				duration :=
+					time.Since(oneStart)
+
+				if len(data) == 0 {
+					results <- downloadResult{
+						rsIndex:  helper.RSIndex,
+						peer:     helper.Peer,
+						duration: duration,
+						err: fmt.Errorf(
+							"empty data for CID %s from helper %s",
+							helperCID,
+							helper.Peer.String(),
+						),
+					}
+					return
+				}
+
+				results <- downloadResult{
+					rsIndex:  helper.RSIndex,
+					peer:     helper.Peer,
+					data:     data,
+					duration: duration,
+				}
+			}()
+		}
+
+		downloadWG.Wait()
+		close(results)
+
+		parallelDownloadDuration :=
+			time.Since(parallelDownloadStart)
+
+		timedownloadchunks +=
+			parallelDownloadDuration
+
+		successfulDownloads := 0
+
+		for result := range results {
+			if result.err != nil {
+				logger.Errorf(
+					"ASCLEPIUS: helper download failed: %s",
+					result.err,
+				)
+				return 0, 0, 0
+			}
+
+			if result.rsIndex < 0 ||
+				result.rsIndex >= totalStripeShards {
+
+				logger.Errorf(
+					"ASCLEPIUS: invalid RS index %d",
+					result.rsIndex,
+				)
+				return 0, 0, 0
+			}
+
+			if reconstructShards[result.rsIndex] != nil {
+				logger.Errorf(
+					"ASCLEPIUS: duplicate data for RS index %d",
+					result.rsIndex,
+				)
+				return 0, 0, 0
+			}
+
+			reconstructShards[result.rsIndex] =
+				result.data
+
+			successfulDownloads++
+
+			fmt.Printf(
+				"ASCLEPIUS chunk=%d helper=%s rsIndex=%d "+
+					"duration=%s size=%d\n",
+				chunkPosition,
+				result.peer.String(),
+				result.rsIndex,
+				result.duration.String(),
+				len(result.data),
+			)
+		}
+
+		if successfulDownloads != or {
+			logger.Errorf(
+				"ASCLEPIUS: downloaded %d/%d required chunks "+
+					"for position %d",
+				successfulDownloads,
+				or,
+				chunkPosition,
+			)
+			return 0, 0, 0
+		}
+
+		if reconstructShards[tosend] != nil {
+			logger.Errorf(
+				"ASCLEPIUS: missing index %d was populated before reconstruction",
+				tosend,
+			)
+			return 0, 0, 0
+		}
+
+		reconstructionStart :=
+			time.Now()
+
+		err = enc.Reconstruct(
+			reconstructShards,
+		)
+
+		reconstructionDuration :=
+			time.Since(reconstructionStart)
+
+		timetorepairchunksonly +=
+			reconstructionDuration
+
+		if err != nil {
+			logger.Errorf(
+				"ASCLEPIUS: reconstruction failed for chunk %d: %s",
+				chunkPosition,
+				err,
+			)
+			return 0, 0, 0
+		}
+
+		if len(reconstructShards[tosend]) == 0 {
+			logger.Errorf(
+				"ASCLEPIUS: reconstructed data is empty "+
+					"for chunk=%d index=%d",
+				chunkPosition,
+				tosend,
+			)
+			return 0, 0, 0
+		}
+
+		node :=
+			ipfsadd.NewFSNodeOverDagC(
+				ft.TFile,
+				prefix,
+			)
+
+		node.SetFileData(
+			reconstructShards[tosend],
+		)
+
+		rawNode, commitErr :=
+			node.Commit()
+
+		if commitErr != nil {
+			logger.Errorf(
+				"ASCLEPIUS: cannot commit reconstructed chunk %d: %s",
+				chunkPosition,
+				commitErr,
+			)
+			return 0, 0, 0
+		}
+
+		// This is the relocation. shh targets destinationPeer.
+		shh.SendBlock(
+			spt.ctx,
+			rawNode,
+		)
+
+		size := uint64(
+			len(rawNode.RawData()),
+		)
+
+		shh.AddLink(
+			ctx,
+			rawNode.Cid(),
+			size,
+		)
+	}
+
+	// ---------------------------------------------------------------------
+	// Flush the rebuilt shard on the destination selected by the scheduler.
+	// ---------------------------------------------------------------------
+
+	flushStart := time.Now()
+
+	pin.Allocations = []peer.ID{
+		destinationPeer,
+	}
+
+	shh.FlushForStateless(
+		spt.ctx,
+		*pin,
+	)
+
+	flushDuration :=
+		time.Since(flushStart)
+
+	fmt.Printf(
+		"ASCLEPIUS REPAIR COMPLETED "+
+			"shard=%s failedGlobal=%d missingIndex=%d "+
+			"repairPeer=%s destination=%s relocated=%v "+
+			"total=%s download=%s reconstruction=%s sendFlush=%s\n",
+		pin.Name,
+		failedGlobalShardNumber,
+		tosend,
+		spt.peerID.String(),
+		destinationPeer.String(),
+		destinationPeer != spt.peerID,
 		time.Since(start).String(),
 		timedownloadchunks.String(),
 		timetorepairchunksonly.String(),

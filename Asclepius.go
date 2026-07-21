@@ -107,6 +107,20 @@ type SimulationResult struct {
 
 // IncomingOnlyRelocationEstimate records the resource-aware assignment selected by Global Max-Min.
 
+// SelectedHelperShard identifies a selected same-stripe helper and the real
+// global shard number stored by that helper.
+//
+// GlobalShardNumber is intentionally NOT converted to a zero-based
+// Reed-Solomon position here. The repair model performs:
+//
+//	rsIndex := (GlobalShardNumber - 1) % (n + k)
+//
+// only when it builds the reconstruction array.
+type SelectedHelperShard struct {
+	Peer              peer.ID
+	GlobalShardNumber int
+}
+
 type resourceAwareCandidateBest struct {
 	Shard api.Pin
 
@@ -119,7 +133,15 @@ type resourceAwareCandidateBest struct {
 	MissingChunkCount int
 
 	HelperTrafficMB map[peer.ID]float64
+
+	// SelectedHelpers contains every peer contributing network traffic,
+	// including direct-similarity sources.
 	SelectedHelpers []peer.ID
+
+	// SelectedHelperShards contains only selected helpers that store a
+	// surviving shard from the failed shard's stripe. The global shard
+	// number is returned unchanged; no modulo is applied by the scheduler.
+	SelectedHelperShards []SelectedHelperShard
 
 	RepairIncomingMB     float64
 	RelocationOutgoingMB float64
@@ -149,9 +171,16 @@ type IncomingOnlyRelocationEstimate struct {
 	RelocationIncomingMB float64
 	DiskWriteMB          float64
 
-	// HelperTrafficMB maps each selected helper to the amount it uploads.
+	// HelperTrafficMB maps every selected network source to the amount it uploads.
 	HelperTrafficMB map[peer.ID]float64
+
+	// SelectedHelpers contains all peers that contribute network traffic,
+	// including direct-similarity sources.
 	SelectedHelpers []peer.ID
+
+	// SelectedHelperShards contains selected same-stripe helpers together
+	// with their real global shard numbers. The repair model applies modulo.
+	SelectedHelperShards []SelectedHelperShard
 
 	DownloadTime   float64
 	RelocationTime float64
@@ -314,6 +343,92 @@ func copyPeerFloatMap(src map[peer.ID]float64) map[peer.ID]float64 {
 		dst[p] = v
 	}
 	return dst
+}
+
+func copySelectedHelperShards(src []SelectedHelperShard) []SelectedHelperShard {
+	return append([]SelectedHelperShard(nil), src...)
+}
+
+// buildHelperGlobalShardNumbers maps each surviving same-stripe allocation to
+// the real global shard number parsed from the shard name.
+//
+// No modulo is applied here. A peer is expected to store at most one shard
+// from a given stripe.
+func buildHelperGlobalShardNumbers(
+	sameStripeShards []api.Pin,
+	failedPeer peer.ID,
+) (map[peer.ID]int, error) {
+	result := make(map[peer.ID]int)
+
+	for _, stripeShard := range sameStripeShards {
+		globalShardNumber, _, err := getShardNumber(stripeShard.Name)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"cannot extract global shard number from %q: %w",
+				stripeShard.Name,
+				err,
+			)
+		}
+		if globalShardNumber <= 0 {
+			return nil, fmt.Errorf(
+				"invalid global shard number %d parsed from %q",
+				globalShardNumber,
+				stripeShard.Name,
+			)
+		}
+
+		for _, allocation := range stripeShard.Allocations {
+			if allocation == "" || allocation == failedPeer {
+				continue
+			}
+
+			oldNumber, exists := result[allocation]
+			if exists && oldNumber != globalShardNumber {
+				return nil, fmt.Errorf(
+					"peer %s maps to multiple global shard numbers in one stripe: %d and %d",
+					allocation.String(),
+					oldNumber,
+					globalShardNumber,
+				)
+			}
+
+			result[allocation] = globalShardNumber
+		}
+	}
+
+	return result, nil
+}
+
+// selectedSameStripeHelperShards keeps only selected helpers that have a
+// concrete surviving shard in the failed shard's stripe.
+func selectedSameStripeHelperShards(
+	selectedHelpers []peer.ID,
+	helperGlobalShardNumbers map[peer.ID]int,
+) []SelectedHelperShard {
+	out := make([]SelectedHelperShard, 0, len(selectedHelpers))
+
+	for _, helper := range selectedHelpers {
+		globalShardNumber, exists := helperGlobalShardNumbers[helper]
+		if !exists {
+			// This may be a direct-similarity source rather than a conventional
+			// same-stripe reconstruction helper.
+			continue
+		}
+
+		out = append(out, SelectedHelperShard{
+			Peer:              helper,
+			GlobalShardNumber: globalShardNumber,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Peer == out[j].Peer {
+			return out[i].GlobalShardNumber < out[j].GlobalShardNumber
+		}
+		return out[i].Peer.String() < out[j].Peer.String()
+	})
+
+	return out
 }
 
 // chooseBestUploadSource selects the source whose projected outgoing completion
@@ -534,9 +649,10 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 		ShardSize int
 		N         int
 
-		SameStripePeers   []peer.ID
-		SameStripePeerSet map[peer.ID]bool
-		Index             ResourceAwareShardIndex
+		SameStripePeers         []peer.ID
+		SameStripePeerSet       map[peer.ID]bool
+		HelperGlobalShardNumber map[peer.ID]int
+		Index                   ResourceAwareShardIndex
 	}
 
 	precomputed := make(map[string]ShardPrecompute)
@@ -550,7 +666,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 			continue
 		}
 
-		_, sameStripePeers, n, shardLength := getSameStripe(shard)
+		sameStripeShards, sameStripePeers, n, shardLength := getSameStripe(shard)
 		if shardLength > 0 {
 			shardSize = shardLength
 		}
@@ -558,16 +674,28 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 			continue
 		}
 
+		helperGlobalShardNumbers, err :=
+			buildHelperGlobalShardNumbers(sameStripeShards, failedPeer)
+		if err != nil {
+			fmt.Printf(
+				"[WARN] skipping shard=%s because helper shard numbers could not be built: %v\n",
+				shard.Name,
+				err,
+			)
+			continue
+		}
+
 		_, _, _, peerMatchedCIDs := getSimilarity(shard)
 
 		precomputed[shardKey] = ShardPrecompute{
-			Shard:             shard,
-			ShardCIDs:         shardCIDs,
-			ShardSize:         shardSize,
-			N:                 n,
-			SameStripePeers:   sortedUniquePeers(sameStripePeers),
-			SameStripePeerSet: peerSet(sameStripePeers),
-			Index:             buildResourceAwareShardIndex(peerMatchedCIDs),
+			Shard:                   shard,
+			ShardCIDs:               shardCIDs,
+			ShardSize:               shardSize,
+			N:                       n,
+			SameStripePeers:         sortedUniquePeers(sameStripePeers),
+			SameStripePeerSet:       peerSet(sameStripePeers),
+			HelperGlobalShardNumber: helperGlobalShardNumbers,
+			Index:                   buildResourceAwareShardIndex(peerMatchedCIDs),
 		}
 	}
 
@@ -628,6 +756,11 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 					continue
 				}
 
+				selectedHelperShards := selectedSameStripeHelperShards(
+					selectedHelpers,
+					pc.HelperGlobalShardNumber,
+				)
+
 				downloadTime, repairIncomingMB, downloadOK := estimateDownloadPhase(
 					repairPeer,
 					helperTrafficMB,
@@ -670,8 +803,9 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 								DirectChunkCount:  directCount,
 								MissingChunkCount: missingCount,
 
-								HelperTrafficMB: copyPeerFloatMap(helperTrafficMB),
-								SelectedHelpers: append([]peer.ID(nil), selectedHelpers...),
+								HelperTrafficMB:      copyPeerFloatMap(helperTrafficMB),
+								SelectedHelpers:      append([]peer.ID(nil), selectedHelpers...),
+								SelectedHelperShards: copySelectedHelperShards(selectedHelperShards),
 
 								RepairIncomingMB:     repairIncomingMB,
 								RelocationOutgoingMB: 0,
@@ -754,8 +888,9 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 							DirectChunkCount:  directCount,
 							MissingChunkCount: missingCount,
 
-							HelperTrafficMB: copyPeerFloatMap(helperTrafficMB),
-							SelectedHelpers: append([]peer.ID(nil), selectedHelpers...),
+							HelperTrafficMB:      copyPeerFloatMap(helperTrafficMB),
+							SelectedHelpers:      append([]peer.ID(nil), selectedHelpers...),
+							SelectedHelperShards: copySelectedHelperShards(selectedHelperShards),
 
 							RepairIncomingMB:     repairIncomingMB,
 							RelocationOutgoingMB: shardSizeMB,
@@ -845,8 +980,9 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 			RelocationIncomingMB: chosen.RelocationIncomingMB,
 			DiskWriteMB:          chosen.DiskWriteMB,
 
-			HelperTrafficMB: copyPeerFloatMap(chosen.HelperTrafficMB),
-			SelectedHelpers: append([]peer.ID(nil), chosen.SelectedHelpers...),
+			HelperTrafficMB:      copyPeerFloatMap(chosen.HelperTrafficMB),
+			SelectedHelpers:      append([]peer.ID(nil), chosen.SelectedHelpers...),
+			SelectedHelperShards: copySelectedHelperShards(chosen.SelectedHelperShards),
 
 			DownloadTime:   chosen.DownloadTime,
 			RelocationTime: chosen.RelocationTime,
@@ -856,7 +992,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 		})
 
 		fmt.Printf(
-			"RESOURCE-AWARE GLOBAL MAX-MIN assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v finish=%f download=%f relocation=%f diskWrite=%f local=%d direct=%d missing=%d repairInMB=%.3f relocationOutMB=%.3f relocationInMB=%.3f helpers=%d\n",
+			"RESOURCE-AWARE GLOBAL MAX-MIN assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v finish=%f download=%f relocation=%f diskWrite=%f local=%d direct=%d missing=%d repairInMB=%.3f relocationOutMB=%.3f relocationInMB=%.3f helpers=%d indexedStripeHelpers=%d\n",
 			chosenShard.Name,
 			chosen.RepairPeer.String(),
 			chosen.FinalPeer.String(),
@@ -872,6 +1008,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 			chosen.RelocationOutgoingMB,
 			chosen.RelocationIncomingMB,
 			len(chosen.SelectedHelpers),
+			len(chosen.SelectedHelperShards),
 		)
 
 		unscheduled = append(
