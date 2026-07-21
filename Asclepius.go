@@ -472,18 +472,111 @@ func chooseBestUploadSource(
 	return best, best != ""
 }
 
-// buildHelperTrafficForCandidate performs load-aware helper selection for one
+// chooseFixedECHelpers selects one fixed set of n surviving same-stripe
+// helpers for the entire failed shard.
+//
+// Every selected helper uploads one chunk for every failed-shard chunk that
+// requires conventional EC reconstruction. Consequently, the added outgoing
+// traffic for each selected helper is:
+//
+//	missingChunkCount * chunkMB
+//
+// temporaryTrafficMB contains direct-similarity traffic already selected for
+// the candidate. It is included when evaluating the projected outgoing load.
+func chooseFixedECHelpers(
+	repairPeer peer.ID,
+	failedPeer peer.ID,
+	sameStripePeers []peer.ID,
+	n int,
+	missingChunkCount int,
+	chunkMB float64,
+	peerOutgoingLoadMB map[peer.ID]float64,
+	temporaryTrafficMB map[peer.ID]float64,
+	topology *NetworkTopology,
+) ([]peer.ID, bool) {
+	if n <= 0 {
+		return nil, false
+	}
+
+	// No conventional EC reconstruction is required.
+	if missingChunkCount == 0 {
+		return nil, true
+	}
+
+	trafficPerHelperMB := float64(missingChunkCount) * chunkMB
+
+	type helperCandidate struct {
+		Peer          peer.ID
+		ProjectedTime float64
+	}
+
+	candidates := make([]helperCandidate, 0, len(sameStripePeers))
+
+	for _, helper := range sortedUniquePeers(sameStripePeers) {
+		if helper == "" || helper == failedPeer || helper == repairPeer {
+			continue
+		}
+
+		outCapacity := topologyNodeOut(topology, helper)
+		if outCapacity == 0 {
+			continue
+		}
+
+		projectedTime := projectedNetworkTime(
+			peerOutgoingLoadMB[helper],
+			temporaryTrafficMB[helper]+trafficPerHelperMB,
+			outCapacity,
+		)
+
+		if math.IsInf(projectedTime, 1) {
+			continue
+		}
+
+		candidates = append(candidates, helperCandidate{
+			Peer:          helper,
+			ProjectedTime: projectedTime,
+		})
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].ProjectedTime == candidates[j].ProjectedTime {
+			return candidates[i].Peer.String() < candidates[j].Peer.String()
+		}
+		return candidates[i].ProjectedTime < candidates[j].ProjectedTime
+	})
+
+	if len(candidates) < n {
+		return nil, false
+	}
+
+	selected := make([]peer.ID, n)
+	for i := 0; i < n; i++ {
+		selected[i] = candidates[i].Peer
+	}
+
+	return selected, true
+}
+
+// buildHelperTrafficForCandidate performs load-aware source selection for one
 // (failed shard, repair peer) candidate.
 //
-// Direct chunk:
+// The source-selection model is:
 //
-//	one helper containing the same CID uploads one chunk.
+//  1. Local chunk:
+//     The repair peer already contains the failed chunk CID. No network
+//     transfer is added.
 //
-// Missing chunk:
+//  2. Direct-similarity chunk:
+//     One peer containing the exact CID uploads one chunk.
 //
-//	n distinct surviving peers from the same stripe each upload one chunk.
+//  3. Missing chunk:
+//     One fixed set of n surviving same-stripe helpers is selected once for
+//     the entire failed shard. Every helper in that fixed set uploads one
+//     chunk for every missing chunk position.
 //
-// The function returns false if the candidate cannot obtain all required data.
+// selectedHelpers contains every peer that contributes network traffic.
+// fixedECHelpers contains only the conventional same-stripe helpers that must
+// be written to the repair metadata.
 func buildHelperTrafficForCandidate(
 	repairPeer peer.ID,
 	failedPeer peer.ID,
@@ -500,10 +593,13 @@ func buildHelperTrafficForCandidate(
 	missingCount int,
 	helperTrafficMB map[peer.ID]float64,
 	selectedHelpers []peer.ID,
+	fixedECHelpers []peer.ID,
 	ok bool,
 ) {
 	helperTrafficMB = make(map[peer.ID]float64)
 
+	// First classify the failed shard's chunks. Direct-similarity sources are
+	// selected immediately and their temporary traffic is recorded.
 	for _, rawCID := range shardCIDs {
 		cidStr := cleanCIDString(rawCID)
 		if cidStr == "" {
@@ -515,7 +611,6 @@ func buildHelperTrafficForCandidate(
 			continue
 		}
 
-		// First try direct similarity reuse.
 		if src, found := chooseBestUploadSource(
 			index.CIDSources[cidStr],
 			repairPeer,
@@ -530,44 +625,49 @@ func buildHelperTrafficForCandidate(
 			continue
 		}
 
-		// Otherwise perform conventional EC reconstruction for this missing
-		// chunk by selecting n distinct surviving same-stripe helpers.
 		missingCount++
-		chosenForMissing := make(map[peer.ID]bool)
+	}
 
-		for k := 0; k < n; k++ {
-			available := make([]peer.ID, 0, len(sameStripePeers))
-			for _, src := range sameStripePeers {
-				if chosenForMissing[src] {
-					continue
-				}
-				available = append(available, src)
-			}
+	// Select exactly one conventional EC helper set for all missing chunks.
+	var helpersOK bool
+	fixedECHelpers, helpersOK = chooseFixedECHelpers(
+		repairPeer,
+		failedPeer,
+		sameStripePeers,
+		n,
+		missingCount,
+		chunkMB,
+		peerOutgoingLoadMB,
+		helperTrafficMB,
+		topology,
+	)
+	if !helpersOK {
+		return 0, 0, 0, nil, nil, nil, false
+	}
 
-			src, found := chooseBestUploadSource(
-				available,
-				repairPeer,
-				failedPeer,
-				chunkMB,
-				peerOutgoingLoadMB,
-				helperTrafficMB,
-				topology,
-			)
-			if !found {
-				return 0, 0, 0, nil, nil, false
-			}
+	// Each fixed helper uploads one chunk for each missing chunk position.
+	ecTrafficPerHelperMB := float64(missingCount) * chunkMB
+	for _, helper := range fixedECHelpers {
+		helperTrafficMB[helper] += ecTrafficPerHelperMB
+	}
 
-			chosenForMissing[src] = true
-			helperTrafficMB[src] += chunkMB
+	for helper, trafficMB := range helperTrafficMB {
+		if helper == "" || trafficMB <= 0 {
+			continue
 		}
+		selectedHelpers = append(selectedHelpers, helper)
 	}
 
-	for h := range helperTrafficMB {
-		selectedHelpers = append(selectedHelpers, h)
-	}
 	selectedHelpers = sortedUniquePeers(selectedHelpers)
+	fixedECHelpers = sortedUniquePeers(fixedECHelpers)
 
-	return localCount, directCount, missingCount, helperTrafficMB, selectedHelpers, true
+	return localCount,
+		directCount,
+		missingCount,
+		helperTrafficMB,
+		selectedHelpers,
+		fixedECHelpers,
+		true
 }
 
 // estimateDownloadPhase returns the projected bottleneck between:
@@ -740,7 +840,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 				}
 
 				localCount, directCount, missingCount,
-					helperTrafficMB, selectedHelpers, helpersOK :=
+					helperTrafficMB, selectedHelpers, fixedECHelpers, helpersOK :=
 					buildHelperTrafficForCandidate(
 						repairPeer,
 						failedPeer,
@@ -756,10 +856,25 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 					continue
 				}
 
+				// Build repair metadata only from the fixed conventional EC helper set.
+				// Direct-similarity sources may contribute traffic, but they are not
+				// complete helper shards and must not be inserted into helpers metadata.
 				selectedHelperShards := selectedSameStripeHelperShards(
-					selectedHelpers,
+					fixedECHelpers,
 					pc.HelperGlobalShardNumber,
 				)
+
+				if missingCount > 0 && len(selectedHelperShards) != pc.N {
+					fmt.Printf(
+						"[WARN] rejecting candidate shard=%s repairPeer=%s: "+
+							"expected %d fixed EC helpers, got %d\n",
+						shard.Name,
+						repairPeer.String(),
+						pc.N,
+						len(selectedHelperShards),
+					)
+					continue
+				}
 
 				downloadTime, repairIncomingMB, downloadOK := estimateDownloadPhase(
 					repairPeer,
