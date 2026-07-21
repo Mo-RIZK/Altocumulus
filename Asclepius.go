@@ -780,11 +780,11 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 
 	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
 	getSimilarity func(api.Pin) (
-	peer.ID,
-	[]string,
-	map[peer.ID]int,
-	map[peer.ID][]string,
-),
+		peer.ID,
+		[]string,
+		map[peer.ID]int,
+		map[peer.ID][]string,
+	),
 ) (
 	map[peer.ID][]api.Pin,
 	[]IncomingOnlyRelocationEstimate,
@@ -1628,9 +1628,7 @@ func ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
 			bestForShard[chosenShard.Cid.String()]
 
 		chosenResourceScore :=
-			bestResourceScoreForShard[
-				chosenShard.Cid.String()
-			]
+			bestResourceScoreForShard[chosenShard.Cid.String()]
 
 		// --------------------------------------------------------------
 		// Commit helper source loads.
