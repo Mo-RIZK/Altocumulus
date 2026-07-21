@@ -3665,6 +3665,25 @@ func (spt *ECRepairS) repinUsingRSASCLEPIUS(
 		},
 	)
 
+	fmt.Printf(
+		"ASCLEPIUS fixed helper indexes for all repaired chunks: ",
+	)
+
+	for i, helper := range selectedHelpers {
+		if i > 0 {
+			fmt.Print(",")
+		}
+
+		fmt.Printf(
+			"peer=%s:globalShard=%d:rsIndex=%d",
+			helper.Peer.String(),
+			helper.GlobalShardNumber,
+			helper.RSIndex,
+		)
+	}
+
+	fmt.Println()
+
 	// ---------------------------------------------------------------------
 	// Read the selected shard pins from consensus.
 	//
@@ -3796,7 +3815,18 @@ func (spt *ECRepairS) repinUsingRSASCLEPIUS(
 		return 0, 0, 0
 	}
 
-	// Validate that all selected shards have the same number of chunks.
+	// ---------------------------------------------------------------------
+	// Determine the common reconstructable chunk range.
+	//
+	// The scheduler selects only the fixed helper shard indexes. The repair
+	// model reuses these same helpers for every chunk position. Therefore,
+	// helper selection is not repeated per chunk and no per-helper usage
+	// amount is read from metadata.
+	//
+	// We use the minimum CID count across the selected helper shards because
+	// every reconstructed position must exist in every selected helper shard.
+	// ---------------------------------------------------------------------
+
 	chunkCount := -1
 
 	for _, helper := range selectedHelpers {
@@ -3809,18 +3839,16 @@ func (spt *ECRepairS) repinUsingRSASCLEPIUS(
 			return 0, 0, 0
 		}
 
-		if chunkCount == -1 {
+		if chunkCount == -1 || len(helper.CIDs) < chunkCount {
 			chunkCount = len(helper.CIDs)
-		} else if len(helper.CIDs) != chunkCount {
-			logger.Errorf(
-				"ASCLEPIUS: inconsistent chunk counts; "+
-					"helper %s has %d, expected %d",
-				helper.Peer.String(),
-				len(helper.CIDs),
-				chunkCount,
-			)
-			return 0, 0, 0
 		}
+	}
+
+	if chunkCount <= 0 {
+		logger.Errorf(
+			"ASCLEPIUS: selected helper indexes expose no common chunks",
+		)
+		return 0, 0, 0
 	}
 
 	// ---------------------------------------------------------------------
@@ -3857,14 +3885,32 @@ func (spt *ECRepairS) repinUsingRSASCLEPIUS(
 		return 0, 0, 0
 	}
 
-	if len(failedCIDs) != chunkCount {
+	// The failed shard metadata may contain more entries than the common
+	// reconstructable helper range (for example, an additional metadata/root
+	// entry). The fixed helper indexes are used for all positions available
+	// across the selected helper shards.
+	//
+	// A failed shard with fewer entries than the helpers is invalid because
+	// there is no target CID for some helper positions.
+	if len(failedCIDs) < chunkCount {
 		logger.Errorf(
-			"ASCLEPIUS: failed shard has %d chunks, "+
-				"selected helpers have %d",
+			"ASCLEPIUS: failed shard has only %d target CIDs, "+
+				"but selected helper indexes expose %d chunks",
 			len(failedCIDs),
 			chunkCount,
 		)
 		return 0, 0, 0
+	}
+
+	if len(failedCIDs) > chunkCount {
+		logger.Warnf(
+			"ASCLEPIUS: failed shard metadata has %d CIDs while fixed "+
+				"helper indexes expose %d reconstructable chunks; "+
+				"repairing the common %d chunk positions",
+			len(failedCIDs),
+			chunkCount,
+			chunkCount,
+		)
 	}
 
 	// ---------------------------------------------------------------------
