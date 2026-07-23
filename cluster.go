@@ -1603,6 +1603,13 @@ func (c *Cluster) alertsHandler() {
 					}
 
 					topology.PrintFull()
+					for p, node := range topology.NodesByPeer {
+						fmt.Printf(
+							"TOPOLOGY node=%s peer=%s\n",
+							node.Name,
+							p.String(),
+						)
+					}
 					sstt := time.Now()
 
 					assignments, repairPlans, _, err :=
