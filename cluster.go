@@ -1612,7 +1612,7 @@ func (c *Cluster) alertsHandler() {
 					}
 					sstt := time.Now()
 
-					assignments, repairPlans, _, err :=
+					repairDecisions, err :=
 						ScheduleASCLEPIUSMultiResource(
 							alrt.Peer, // failed peer
 							CIDsSim4,  // all failed shards in one batch
@@ -1641,110 +1641,51 @@ func (c *Cluster) alertsHandler() {
 					}
 
 					fmt.Printf(
-						"ASCLEPIUS assigned %d shards\n",
-						len(repairPlans),
+						"ASCLEPIUS assigned %d shards in %s \n",
+						len(repairDecisions), time.Since(sstt),
 					)
 
-					total := 0
-
-					// assignments is indexed by the final storage peer.
-					for finalPeer, pins := range assignments {
-						fmt.Printf(
-							"Final peer %s -> %d shards\n",
-							finalPeer.String(),
-							len(pins),
-						)
-
-						total += len(pins)
-					}
-
-					fmt.Printf(
-						"TOTAL ASSIGNED: %d / %d and it took %s\n",
-						total,
-						len(CIDsSim4),
-						time.Since(sstt).String(),
-					)
-
-					// Execute every ASCLEPIUS repair assignment.
-					for _, plan := range repairPlans {
-						pin := plan.Shard
-
-						if pin.Metadata == nil {
-							pin.Metadata = make(map[string]string)
+					for _, decision := range repairDecisions {
+						first := 1
+						for _, com := range decision.CommonChunks {
+							if first == 1 {
+								decision.Shard.Metadata["common"] = com.CID
+								first++
+							} else {
+								decision.Shard.Metadata["common"] = decision.Shard.Metadata["common"] + "," + com.CID
+							}
 						}
+						decision.Shard.Metadata["Strategy"] = ""
+						decision.Shard.Metadata["Strategy"] = "ASCLEPUIS"
+						decision.Shard.Metadata["allocs"] = ""
+						decision.Shard.Metadata["allocs"] = decision.FinalPeer.String()
 
-						pin.Metadata["Strategy"] = "ASCLEPIUS"
-
-						helperPeerStrings := make(
-							[]string,
-							0,
-							len(plan.Helpers),
-						)
-
-						for _, helperPeer := range plan.Helpers {
-							helperPeerStrings = append(
-								helperPeerStrings,
-								helperPeer.String(),
-							)
-						}
-
-						pin.Metadata["helpers"] =
-							strings.Join(helperPeerStrings, ",")
-
-						pin.Metadata["repair_peer"] =
-							plan.RepairPeer.String()
-
-						pin.Metadata["final_peer"] =
-							plan.FinalPeer.String()
-
-						pin.Metadata["relocated"] =
-							strconv.FormatBool(plan.Relocated)
-
-						fmt.Printf(
-							"ASCLEPIUS enqueue shard=%s repairPeer=%s finalPeer=%s "+
-								"relocated=%v helpers=%s\n",
-							pin.Cid.String(),
-							plan.RepairPeer.String(),
-							plan.FinalPeer.String(),
-							plan.Relocated,
-							pin.Metadata["helpers"],
-						)
-
-						// Reconstruction is executed on the repairing peer.
-						if plan.RepairPeer == c.id {
-							c.Enqueue(c.ctx, pin)
+						if decision.RepairPeer == c.id {
+							c.Enqueue(c.ctx, decision.Shard)
 							continue
 						}
 
 						var out bool
 
-						err = c.rpcClient.CallContext(
+						err := c.rpcClient.CallContext(
 							c.ctx,
-							plan.RepairPeer,
+							decision.RepairPeer,
 							"Cluster",
 							"Enqueue",
-							&pin,
+							&decision.Shard,
 							&out,
 						)
 
 						if err != nil {
 							logger.Errorf(
-								"could not enqueue ASCLEPIUS shard %s on repair peer %s: %s",
-								pin.Cid.String(),
-								plan.RepairPeer.String(),
+								"failed to enqueue shard %s on repair peer %s: %s",
+								decision.Shard.Cid.String(),
+								decision.RepairPeer.String(),
 								err,
-							)
-							continue
-						}
-
-						if !out {
-							logger.Warnf(
-								"repair peer %s did not accept ASCLEPIUS shard %s",
-								plan.RepairPeer.String(),
-								pin.Cid.String(),
 							)
 						}
 					}
+
 				}
 			}
 			fmt.Fprintf(os.Stdout, "SSSSSHHHHHH : %d \n", kk)

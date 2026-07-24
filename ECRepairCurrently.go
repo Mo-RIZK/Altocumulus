@@ -145,8 +145,9 @@ func (spt *ECRepairS) pin(op *api.Pin) error {
 	if op.Metadata["Strategy"] == "SELECTIVE_EC" {
 		download, repair, waittosend = spt.repinUsingRSSelectiveEC(op)
 	} else {
-		if op.Metadata["Strategy"] == "MAXMINNEW" {
-			download, repair, waittosend = spt.repinUsingRSASCLEPIUS(op)
+		if op.Metadata["Strategy"] == "ASCLEPIUS" {
+			//download, repair, waittosend = spt.repinUsingRSASCLEPIUS(op)
+			download, repair, waittosend = spt.repinUsingRSWithSwitching_updated(op)
 		} else {
 			download, repair, waittosend = spt.repinUsingRSWithSwitching1(op)
 		}
@@ -1548,6 +1549,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 	wgg.Wait()
 	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s and localllllll is %t \n", time.Now().Sub(ssss).String(), Local)
 
+	if pin.Metadata["allocs"] != spt.peerID.String() {
+		Local = false
+	}
 	//Local
 	if Local {
 		shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions, spt.peerID)
@@ -4321,4 +4325,734 @@ func (spt *ECRepairS) repinUsingRSASCLEPIUS(
 	return timedownloadchunks,
 		timetorepairchunksonly,
 		flushDuration
+}
+
+func (spt *ECRepairS) repinUsingRSWithSwitching_updated(
+	pin *api.Pin,
+) (time.Duration, time.Duration, time.Duration) {
+	totalStart := time.Now()
+	start := time.Now()
+
+	var timedownloadchunks time.Duration
+	var timetorepairchunksonly time.Duration
+
+	// ---------------------------------------------------------------------
+	// Read metadata.
+	// ---------------------------------------------------------------------
+
+	cidString := pin.Metadata["Cids"]
+	CIDs := strings.Split(cidString, ",")
+
+	commonString := pin.Metadata["common"]
+	Common := strings.Split(commonString, ",")
+
+	allMatchesString := pin.Metadata["allmatches"]
+	AllMatches := strings.Split(allMatchesString, ",")
+
+	fmt.Printf(
+		"MAX similarities: %d out of %d\n",
+		len(Common),
+		len(CIDs),
+	)
+
+	ctx, span := trace.StartSpan(
+		spt.ctx,
+		"pintracker/repinFromPeer",
+	)
+	defer span.End()
+
+	// ---------------------------------------------------------------------
+	// Parse EC parameters from the shard name.
+	// ---------------------------------------------------------------------
+
+	f1 := strings.Split(pin.Name, "(")[1]
+	f2 := strings.Split(f1, ")")[0]
+
+	or, _ := strconv.Atoi(
+		strings.Split(f2, ",")[0],
+	)
+
+	par, _ := strconv.Atoi(
+		strings.Split(f2, ",")[1],
+	)
+
+	logger.Debugf(
+		"repinning %s from peer %s",
+		pin.Cid,
+		pin.Allocations,
+	)
+
+	prefix, err := merkledag.PrefixForCidVersion(0)
+	if err != nil {
+		logger.Errorf(
+			"cannot create CID prefix for shard %s: %s",
+			pin.Name,
+			err,
+		)
+		return 0, 0, 0
+	}
+
+	hashFunCode, ok :=
+		multihash.Names[strings.ToLower("sha2-256")]
+
+	if !ok {
+		logger.Errorf(
+			"cannot find sha2-256 multihash code",
+		)
+		return 0, 0, 0
+	}
+
+	prefix.MhType = hashFunCode
+	prefix.MhLength = -1
+
+	// ---------------------------------------------------------------------
+	// Obtain the cluster state.
+	// ---------------------------------------------------------------------
+
+	cState, err := spt.cons.State(ctx)
+	if err != nil {
+		logger.Warn(err)
+		return 0, 0, 0
+	}
+
+	pinCh := make(chan api.Pin, 1024)
+
+	go func() {
+		if listErr := cState.List(spt.ctx, pinCh); listErr != nil {
+			logger.Warn(listErr)
+		}
+	}()
+
+	// ---------------------------------------------------------------------
+	// Find the failed shard number and its stripe range.
+	// ---------------------------------------------------------------------
+
+	fmt.Fprintf(
+		os.Stdout,
+		"getShardNumber of pin named: %s\n",
+		pin.Name,
+	)
+
+	numpin, name, err := getShardNumber(pin.Name)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return 0, 0, 0
+	}
+
+	tosend := (numpin - 1) % (or + par)
+
+	fmt.Printf(
+		"number of the shard to repair is: %d\n",
+		numpin,
+	)
+
+	mod := numpin % (or + par)
+	before := (numpin - 1) % (or + par)
+	after := (or + par - mod) % (or + par)
+
+	// ---------------------------------------------------------------------
+	// Obtain the other shards in the same stripe.
+	// ---------------------------------------------------------------------
+
+	repairShards := make(
+		[]pinwithmeta,
+		0,
+	)
+
+	for pinn := range pinCh {
+		if !strings.Contains(
+			pinn.Name,
+			"-shard-",
+		) {
+			continue
+		}
+
+		pinnShardNum, namee, shardErr :=
+			getShardNumber(pinn.Name)
+
+		if shardErr != nil {
+			fmt.Println("Error:", shardErr)
+			continue
+		}
+
+		sameStripe :=
+			pinnShardNum >= numpin-before &&
+				pinnShardNum <= numpin+after &&
+				pinnShardNum != numpin &&
+				name == namee
+
+		if !sameStripe {
+			continue
+		}
+
+		repairShards = append(
+			repairShards,
+			pinwithmeta{
+				pin:   pinn,
+				index: pinnShardNum,
+				cids:  make([]string, 0),
+			},
+		)
+	}
+
+	sortRepairShardsByIndex(repairShards)
+
+	// ---------------------------------------------------------------------
+	// Retrieve the CID lists of the available shards.
+	// ---------------------------------------------------------------------
+
+	retrieveWG := new(sync.WaitGroup)
+	retrieveMutex := new(sync.Mutex)
+
+	retrievedMetadata := 0
+
+	retrieveWG.Add(or)
+
+	fmt.Printf(
+		"STEEEEEEEEEPPPPPPPPPP RRRRRRRRRREEEEEEETTTTTTTTT "+
+			"with length of repair shards: %d\n",
+		len(repairShards),
+	)
+
+	for i, pinwm := range repairShards {
+		go func(
+			index int,
+			shard pinwithmeta,
+		) {
+			cidss := spt.retrieveCids(shard)
+
+			retrieveMutex.Lock()
+			defer retrieveMutex.Unlock()
+
+			for _, retrievedCID := range cidss {
+				repairShards[index].cids = append(
+					repairShards[index].cids,
+					retrievedCID.cid,
+				)
+			}
+
+			if retrievedMetadata < or {
+				retrievedMetadata++
+				retrieveWG.Done()
+			}
+		}(i, pinwm)
+	}
+
+	retrieveWG.Wait()
+
+	fmt.Printf(
+		"Extracting everything took %s\n",
+		time.Since(totalStart),
+	)
+
+	// ---------------------------------------------------------------------
+	// Select the final allocation.
+	//
+	// Local means:
+	//     allocs == repairing peer
+	//
+	// Non-local means:
+	//     repair locally, but open the rebuilt shard from the repairing
+	//     peer toward the peer specified by allocs.
+	// ---------------------------------------------------------------------
+
+	allocString := strings.TrimSpace(
+		pin.Metadata["allocs"],
+	)
+
+	local := allocString == spt.peerID.String()
+
+	allocationPeer := spt.peerID
+
+	if !local {
+		if allocString == "" {
+			logger.Errorf(
+				"empty allocs metadata for non-local repair of shard %s",
+				pin.Name,
+			)
+			return 0, 0, 0
+		}
+
+		allocationPeer, err =
+			peer.Decode(allocString)
+
+		if err != nil {
+			logger.Errorf(
+				"cannot decode allocation peer %q for shard %s: %s",
+				allocString,
+				pin.Name,
+				err,
+			)
+			return 0, 0, 0
+		}
+	}
+
+	fmt.Printf(
+		"Repair allocation: repairPeer=%s allocationPeer=%s local=%t\n",
+		spt.peerID.String(),
+		allocationPeer.String(),
+		local,
+	)
+
+	// ---------------------------------------------------------------------
+	// Build blacklist metadata.
+	// ---------------------------------------------------------------------
+
+	blacklist := make(
+		[]peer.ID,
+		0,
+	)
+
+	blacklistSet := make(
+		map[peer.ID]bool,
+	)
+
+	for _, repairShard := range repairShards {
+		for _, allocation := range repairShard.pin.Allocations {
+
+			if allocation == "" ||
+				blacklistSet[allocation] {
+				continue
+			}
+
+			blacklistSet[allocation] = true
+
+			blacklist = append(
+				blacklist,
+				allocation,
+			)
+		}
+	}
+
+	if pin.PinOptions.Metadata == nil {
+		pin.PinOptions.Metadata =
+			make(map[string]string)
+	}
+
+	blacklistStrings := make(
+		[]string,
+		0,
+		len(blacklist),
+	)
+
+	for _, blacklistedPeer := range blacklist {
+		fmt.Printf(
+			"BBBBLLLLL: %s\n",
+			blacklistedPeer.String(),
+		)
+
+		blacklistStrings = append(
+			blacklistStrings,
+			blacklistedPeer.String(),
+		)
+	}
+
+	pin.PinOptions.Metadata["Black"] =
+		strings.Join(
+			blacklistStrings,
+			",",
+		)
+
+	// ---------------------------------------------------------------------
+	// Open the repaired shard.
+	//
+	// This is now the only difference between local and relocation:
+	// allocationPeer is either spt.peerID or the peer from allocs.
+	// ---------------------------------------------------------------------
+
+	shh, err := sharding.NewShard(
+		spt.ctx,
+		spt.ctx,
+		spt.rpcClient,
+		pin.PinOptions,
+		allocationPeer,
+	)
+
+	if err != nil {
+		logger.Errorf(
+			"cannot create repaired shard %s on peer %s: %s",
+			pin.Name,
+			allocationPeer.String(),
+			err,
+		)
+		return 0, 0, 0
+	}
+
+	enc, err := reedsolomon.New(or, par)
+	if err != nil {
+		logger.Errorf(
+			"cannot initialize Reed-Solomon (%d,%d): %s",
+			or,
+			par,
+			err,
+		)
+		return 0, 0, 0
+	}
+
+	// ---------------------------------------------------------------------
+	// Find a shard whose CID metadata was successfully retrieved.
+	// ---------------------------------------------------------------------
+
+	firstAvailable := -1
+
+	for i, shard := range repairShards {
+		if len(shard.cids) > 0 {
+			firstAvailable = i
+			break
+		}
+	}
+
+	if firstAvailable == -1 {
+		logger.Errorf(
+			"no helper shard metadata available for repairing %s",
+			pin.Name,
+		)
+		return 0, 0, 0
+	}
+
+	times := len(
+		repairShards[firstAvailable].cids,
+	)
+
+	toskip := true
+	timerlaunched := false
+	selectedIndexes := make([]int, 0)
+
+	repairCtx, cancelRepair :=
+		context.WithCancel(
+			context.Background(),
+		)
+	defer cancelRepair()
+
+	// ---------------------------------------------------------------------
+	// Helper used to download N shard chunks and reconstruct one chunk.
+	// ---------------------------------------------------------------------
+
+	reconstructChunk := func(
+		chunkIndex int,
+		readFrom []pinwithmeta,
+		saveIndexes bool,
+	) ([]byte, bool) {
+		if len(readFrom) < or {
+			logger.Errorf(
+				"only %d readable helpers exist; %d are required",
+				len(readFrom),
+				or,
+			)
+			return nil, false
+		}
+
+		reconstructShards :=
+			make([][]byte, or+par)
+
+		var downloadWG sync.WaitGroup
+		var downloadMutex sync.Mutex
+
+		retrieved := 0
+
+		fetchCtx, cancelFetch :=
+			context.WithCancel(repairCtx)
+		defer cancelFetch()
+
+		downloadWG.Add(or)
+
+		downloadStart := time.Now()
+
+		for _, shard := range readFrom {
+			if len(shard.cids) <= chunkIndex {
+				continue
+			}
+
+			go func(shard pinwithmeta) {
+				chunkStart := time.Now()
+
+				data := spt.getData(
+					fetchCtx,
+					shard.cids[chunkIndex],
+				)
+
+				fmt.Printf(
+					"REPAIR GOT HERE local=%t FOR shard %d: %s\n",
+					local,
+					shard.index,
+					time.Since(chunkStart),
+				)
+
+				downloadMutex.Lock()
+				defer downloadMutex.Unlock()
+
+				if retrieved >= or {
+					return
+				}
+
+				retrieved++
+
+				reconstructIndex :=
+					(shard.index - 1) %
+						(or + par)
+
+				reconstructShards[reconstructIndex] =
+					data
+
+				if saveIndexes {
+					selectedIndexes = append(
+						selectedIndexes,
+						shard.index,
+					)
+				}
+
+				downloadWG.Done()
+
+				if retrieved == or {
+					cancelFetch()
+				}
+			}(shard)
+		}
+
+		downloadWG.Wait()
+
+		timedownloadchunks +=
+			time.Since(downloadStart)
+
+		fmt.Printf(
+			"REPAIR GOT HERE ENDEDDDD this stripeeeee\n",
+		)
+
+		reconstructStart := time.Now()
+
+		if reconstructErr :=
+			enc.Reconstruct(reconstructShards); reconstructErr != nil {
+
+			logger.Errorf(
+				"cannot reconstruct chunk %d of shard %s: %s",
+				chunkIndex,
+				pin.Name,
+				reconstructErr,
+			)
+
+			return nil, false
+		}
+
+		timetorepairchunksonly +=
+			time.Since(reconstructStart)
+
+		return reconstructShards[tosend], true
+	}
+
+	// ---------------------------------------------------------------------
+	// Repair every chunk.
+	// ---------------------------------------------------------------------
+
+	for i := 0; i < times; i++ {
+		var chunkData []byte
+
+		// Common or already-matched chunk: retrieve it directly.
+		if contains(Common, CIDs[i]) ||
+			contains(AllMatches, CIDs[i]) {
+
+			fmt.Printf(
+				"Entered to the direct/common chunk part\n",
+			)
+
+			chunkStart := time.Now()
+
+			chunkData =
+				spt.getData(
+					repairCtx,
+					CIDs[i],
+				)
+
+			timedownloadchunks +=
+				time.Since(chunkStart)
+
+			fmt.Printf(
+				"Direct/common data size: %d\n",
+				len(chunkData),
+			)
+		} else {
+			// Missing chunk: reconstruct it from helper shards.
+			readFrom := make(
+				[]pinwithmeta,
+				0,
+				len(repairShards),
+			)
+
+			for _, shard := range repairShards {
+				if len(shard.cids) > i {
+					readFrom = append(
+						readFrom,
+						shard,
+					)
+				}
+			}
+
+			if len(readFrom) > or {
+				if !timerlaunched {
+					go startTimerNew5(
+						repairCtx,
+						&toskip,
+					)
+
+					timerlaunched = true
+				}
+
+				if toskip {
+					selectedIndexes =
+						make([]int, 0)
+
+					var reconstructed bool
+
+					chunkData, reconstructed =
+						reconstructChunk(
+							i,
+							readFrom,
+							true,
+						)
+
+					if !reconstructed {
+						return 0, 0, 0
+					}
+
+					toskip = false
+				} else {
+					readFiltered := make(
+						[]pinwithmeta,
+						0,
+						or,
+					)
+
+					selectedSet :=
+						make(map[int]bool)
+
+					for _, selectedIndex := range selectedIndexes {
+
+						selectedSet[selectedIndex] =
+							true
+					}
+
+					for _, shard := range readFrom {
+
+						if selectedSet[shard.index] {
+							readFiltered = append(
+								readFiltered,
+								shard,
+							)
+						}
+					}
+
+					var reconstructed bool
+
+					chunkData, reconstructed =
+						reconstructChunk(
+							i,
+							readFiltered,
+							false,
+						)
+
+					if !reconstructed {
+						return 0, 0, 0
+					}
+				}
+			} else {
+				var reconstructed bool
+
+				chunkData, reconstructed =
+					reconstructChunk(
+						i,
+						readFrom,
+						false,
+					)
+
+				if !reconstructed {
+					return 0, 0, 0
+				}
+			}
+		}
+
+		// -----------------------------------------------------------------
+		// Add the direct or reconstructed chunk to the repaired shard.
+		// -----------------------------------------------------------------
+
+		nodee := ipfsadd.NewFSNodeOverDagC(
+			ft.TFile,
+			prefix,
+		)
+
+		nodee.SetFileData(chunkData)
+
+		rawnode, commitErr :=
+			nodee.Commit()
+
+		if commitErr != nil {
+			logger.Errorf(
+				"cannot create repaired block %d for shard %s: %s",
+				i,
+				pin.Name,
+				commitErr,
+			)
+			return 0, 0, 0
+		}
+
+		if sendErr :=
+			shh.SendBlock(
+				spt.ctx,
+				rawnode,
+			); sendErr != nil {
+
+			logger.Errorf(
+				"cannot send repaired block %s: %s",
+				rawnode.Cid(),
+				sendErr,
+			)
+
+			return 0, 0, 0
+		}
+
+		size :=
+			uint64(
+				len(rawnode.RawData()),
+			)
+
+		shh.AddLink(
+			ctx,
+			rawnode.Cid(),
+			size,
+		)
+	}
+
+	// ---------------------------------------------------------------------
+	// Flush the repaired shard.
+	// ---------------------------------------------------------------------
+
+	waitStart := time.Now()
+
+	pin.Allocations =
+		make([]peer.ID, 0)
+
+	for _, allocation := range shh.Allocations() {
+
+		pin.Allocations = append(
+			pin.Allocations,
+			allocation,
+		)
+	}
+
+	shh.FlushForStateless(
+		spt.ctx,
+		*pin,
+	)
+
+	waitTime := time.Since(waitStart)
+
+	fmt.Printf(
+		"REPAIR TOOK %s local=%t repairPeer=%s allocationPeer=%s\n",
+		time.Since(start),
+		local,
+		spt.peerID.String(),
+		allocationPeer.String(),
+	)
+
+	return timedownloadchunks,
+		timetorepairchunksonly,
+		waitTime
 }
