@@ -1063,102 +1063,69 @@ func ascHelperProjectedCost(
 	return readTime + uploadTime
 }
 
-type ascHelperChoice struct {
-	TaskIndex    int
-	Helper       peer.ID
-	BestCost     float64
-	Sufferage    float64
-	MissingCount int
-}
-
-// Phase 2: assign N balanced helpers to every task with missing chunks.
+// Phase 2: greedily assign the least-loaded valid helpers.
+// Heterogeneity is considered through each peer's upload and disk-read speeds.
 func ascAssignMissingHelpers(
 	tasks []*ascTask,
 	topology *NetworkTopology,
 	loads *ASCNetworkLoad,
 	chunkMB float64,
 ) error {
-	for {
-		maxMissing := -1
-		active := false
-		for _, task := range tasks {
-			if len(task.MissingIndexes) == 0 || len(task.Helpers) >= task.N {
-				continue
-			}
-			active = true
-			if len(task.MissingIndexes) > maxMissing {
-				maxMissing = len(task.MissingIndexes)
-			}
-		}
-		if !active {
-			return nil
+	for _, task := range tasks {
+		if len(task.MissingIndexes) == 0 {
+			continue
 		}
 
-		var chosen *ascHelperChoice
-		for taskIndex, task := range tasks {
-			if len(task.MissingIndexes) != maxMissing || len(task.Helpers) >= task.N {
-				continue
-			}
+		additionalMB := float64(len(task.MissingIndexes)) * chunkMB
 
-			additionalMB := float64(len(task.MissingIndexes)) * chunkMB
-			type helperCost struct {
-				Peer peer.ID
-				Cost float64
-			}
-			costs := make([]helperCost, 0, len(task.HelperCandidates))
+		for len(task.Helpers) < task.N {
+			bestHelper := peer.ID("")
+			bestCost := math.Inf(1)
 
 			for _, helper := range task.HelperCandidates {
 				if ascContainsPeer(task.Helpers, helper) {
 					continue
 				}
-				cost := ascHelperProjectedCost(helper, additionalMB, topology, loads)
-				if !math.IsInf(cost, 1) {
-					costs = append(costs, helperCost{Peer: helper, Cost: cost})
+				if ascOutMBps(topology, helper) <= 0 ||
+					ascDiskReadMBps(topology, helper) <= 0 {
+					continue
+				}
+
+				cost := ascHelperProjectedCost(
+					helper,
+					additionalMB,
+					topology,
+					loads,
+				)
+				if math.IsInf(cost, 1) {
+					continue
+				}
+
+				if cost < bestCost ||
+					(cost == bestCost &&
+						(bestHelper == "" ||
+							helper.String() < bestHelper.String())) {
+					bestHelper = helper
+					bestCost = cost
 				}
 			}
 
-			if len(costs) == 0 {
-				return fmt.Errorf("cannot assign another helper for shard %s", task.Shard.Name)
+			if bestHelper == "" {
+				return fmt.Errorf(
+					"cannot assign helper %d/%d for shard %s",
+					len(task.Helpers)+1,
+					task.N,
+					task.Shard.Name,
+				)
 			}
 
-			sort.Slice(costs, func(i, j int) bool {
-				if costs[i].Cost != costs[j].Cost {
-					return costs[i].Cost < costs[j].Cost
-				}
-				return costs[i].Peer.String() < costs[j].Peer.String()
-			})
-
-			sufferage := math.Inf(1)
-			if len(costs) > 1 {
-				sufferage = costs[1].Cost - costs[0].Cost
-			}
-
-			candidate := &ascHelperChoice{
-				TaskIndex:    taskIndex,
-				Helper:       costs[0].Peer,
-				BestCost:     costs[0].Cost,
-				Sufferage:    sufferage,
-				MissingCount: len(task.MissingIndexes),
-			}
-
-			if chosen == nil ||
-				candidate.Sufferage > chosen.Sufferage ||
-				(candidate.Sufferage == chosen.Sufferage && candidate.BestCost > chosen.BestCost) ||
-				(candidate.Sufferage == chosen.Sufferage && candidate.BestCost == chosen.BestCost && task.Key < tasks[chosen.TaskIndex].Key) {
-				chosen = candidate
-			}
+			task.Helpers = append(task.Helpers, bestHelper)
+			loads.UploadMB[bestHelper] += additionalMB
+			loads.DiskReadMB[bestHelper] += additionalMB
 		}
-
-		if chosen == nil {
-			return fmt.Errorf("helper assignment reached an inconsistent state")
-		}
-
-		task := tasks[chosen.TaskIndex]
-		additionalMB := float64(len(task.MissingIndexes)) * chunkMB
-		task.Helpers = append(task.Helpers, chosen.Helper)
-		loads.UploadMB[chosen.Helper] += additionalMB
-		loads.DiskReadMB[chosen.Helper] += additionalMB
 	}
+
+	return nil
 }
 
 func ascCommonSourceProjectedCost(
@@ -1172,126 +1139,64 @@ func ascCommonSourceProjectedCost(
 	return readTime + uploadTime
 }
 
-func ascUnassignedCommonCount(task *ascTask) int {
-	count := 0
-	for _, chunkIndex := range task.CommonIndexes {
-		if task.Chunks[chunkIndex].SourcePeer == "" {
-			count++
-		}
-	}
-	return count
-}
-
-type ascCommonSourceChoice struct {
-	TaskIndex       int
-	ChunkIndex      int
-	Source          peer.ID
-	BestCost        float64
-	Sufferage       float64
-	RemainingCommon int
-}
-
-// Phase 3: select one source for every common chunk without deciding locality.
+// Phase 3: greedily select the least-loaded valid source for every common chunk.
 func ascAssignCommonSources(
 	tasks []*ascTask,
 	topology *NetworkTopology,
 	loads *ASCNetworkLoad,
 	chunkMB float64,
 ) error {
-	for {
-		maxRemaining := 0
-		for _, task := range tasks {
-			if remaining := ascUnassignedCommonCount(task); remaining > maxRemaining {
-				maxRemaining = remaining
-			}
-		}
-		if maxRemaining == 0 {
-			return nil
-		}
+	for _, task := range tasks {
+		for _, chunkIndex := range task.CommonIndexes {
+			chunk := &task.Chunks[chunkIndex]
 
-		var chosen *ascCommonSourceChoice
-		for taskIndex, task := range tasks {
-			remaining := ascUnassignedCommonCount(task)
-			if remaining != maxRemaining {
+			if chunk.SourcePeer != "" {
 				continue
 			}
 
-			var taskChoice *ascCommonSourceChoice
-			for _, chunkIndex := range task.CommonIndexes {
-				chunk := &task.Chunks[chunkIndex]
-				if chunk.SourcePeer != "" {
+			bestSource := peer.ID("")
+			bestCost := math.Inf(1)
+
+			for _, source := range chunk.Sources {
+				if ascOutMBps(topology, source) <= 0 ||
+					ascDiskReadMBps(topology, source) <= 0 {
 					continue
 				}
 
-				type sourceCost struct {
-					Peer peer.ID
-					Cost float64
-				}
-				costs := make([]sourceCost, 0, len(chunk.Sources))
-				for _, source := range chunk.Sources {
-					if ascOutMBps(topology, source) <= 0 || ascDiskReadMBps(topology, source) <= 0 {
-						continue
-					}
-					cost := ascCommonSourceProjectedCost(source, chunkMB, topology, loads)
-					if !math.IsInf(cost, 1) {
-						costs = append(costs, sourceCost{Peer: source, Cost: cost})
-					}
+				cost := ascCommonSourceProjectedCost(
+					source,
+					chunkMB,
+					topology,
+					loads,
+				)
+				if math.IsInf(cost, 1) {
+					continue
 				}
 
-				if len(costs) == 0 {
-					return fmt.Errorf("common chunk %s of shard %s has no valid source", chunk.CID, task.Shard.Name)
-				}
-
-				sort.Slice(costs, func(i, j int) bool {
-					if costs[i].Cost != costs[j].Cost {
-						return costs[i].Cost < costs[j].Cost
-					}
-					return costs[i].Peer.String() < costs[j].Peer.String()
-				})
-
-				sufferage := math.Inf(1)
-				if len(costs) > 1 {
-					sufferage = costs[1].Cost - costs[0].Cost
-				}
-
-				candidate := &ascCommonSourceChoice{
-					TaskIndex:       taskIndex,
-					ChunkIndex:      chunkIndex,
-					Source:          costs[0].Peer,
-					BestCost:        costs[0].Cost,
-					Sufferage:       sufferage,
-					RemainingCommon: remaining,
-				}
-
-				if taskChoice == nil ||
-					candidate.Sufferage > taskChoice.Sufferage ||
-					(candidate.Sufferage == taskChoice.Sufferage && candidate.BestCost > taskChoice.BestCost) ||
-					(candidate.Sufferage == taskChoice.Sufferage && candidate.BestCost == taskChoice.BestCost && candidate.ChunkIndex < taskChoice.ChunkIndex) {
-					taskChoice = candidate
+				if cost < bestCost ||
+					(cost == bestCost &&
+						(bestSource == "" ||
+							source.String() < bestSource.String())) {
+					bestSource = source
+					bestCost = cost
 				}
 			}
 
-			if taskChoice == nil {
-				continue
+			if bestSource == "" {
+				return fmt.Errorf(
+					"common chunk %s of shard %s has no valid source",
+					chunk.CID,
+					task.Shard.Name,
+				)
 			}
 
-			if chosen == nil ||
-				taskChoice.Sufferage > chosen.Sufferage ||
-				(taskChoice.Sufferage == chosen.Sufferage && taskChoice.BestCost > chosen.BestCost) ||
-				(taskChoice.Sufferage == chosen.Sufferage && taskChoice.BestCost == chosen.BestCost && task.Key < tasks[chosen.TaskIndex].Key) {
-				chosen = taskChoice
-			}
+			chunk.SourcePeer = bestSource
+			loads.UploadMB[bestSource] += chunkMB
+			loads.DiskReadMB[bestSource] += chunkMB
 		}
-
-		if chosen == nil {
-			return fmt.Errorf("common-source assignment reached an inconsistent state")
-		}
-
-		task := tasks[chosen.TaskIndex]
-		task.Chunks[chosen.ChunkIndex].SourcePeer = chosen.Source
-		loads.UploadMB[chosen.Source] += chunkMB
-		loads.DiskReadMB[chosen.Source] += chunkMB
 	}
+
+	return nil
 }
 
 func ascTaskNominalIncomingMB(task *ascTask, chunkMB float64) float64 {
@@ -1315,7 +1220,9 @@ func ascLocalUploadReduction(task *ascTask, candidate peer.ID, chunkMB float64) 
 	return reduction
 }
 
-// Destination score is max(incoming completion, disk-write completion).
+// Select the least-loaded valid relocation destination.
+// Destination time is projected download completion plus disk-write completion.
+// Effective destination speed is shard size divided by this total time.
 func ascBestRelocationDestination(
 	task *ascTask,
 	repairPeer peer.ID,
@@ -1323,33 +1230,58 @@ func ascBestRelocationDestination(
 	candidatePeers []peer.ID,
 	topology *NetworkTopology,
 	loads *ASCNetworkLoad,
-) (peer.ID, float64) {
+) (peer.ID, float64, float64) {
 	bestPeer := peer.ID("")
 	bestTime := math.Inf(1)
+	bestEffectiveSpeed := 0.0
 
 	for _, destination := range candidatePeers {
-		if destination == "" || destination == failedPeer || destination == repairPeer {
+		if destination == "" ||
+			destination == failedPeer ||
+			destination == repairPeer {
 			continue
 		}
 		if task.SameStripePeers[destination] {
 			continue
 		}
-		if ascInMBps(topology, destination) <= 0 || ascDiskWriteMBps(topology, destination) <= 0 {
+
+		inSpeed := ascInMBps(topology, destination)
+		writeSpeed := ascDiskWriteMBps(topology, destination)
+		if inSpeed <= 0 || writeSpeed <= 0 {
 			continue
 		}
 
-		inTime := ascCompletion(loads.DownloadMB[destination], task.ShardMB, ascInMBps(topology, destination))
-		writeTime := ascCompletion(loads.DiskWriteMB[destination], task.ShardMB, ascDiskWriteMBps(topology, destination))
-		destinationTime := ascMax(inTime, writeTime)
+		downloadTime := ascCompletion(
+			loads.DownloadMB[destination],
+			task.ShardMB,
+			inSpeed,
+		)
+		writeTime := ascCompletion(
+			loads.DiskWriteMB[destination],
+			task.ShardMB,
+			writeSpeed,
+		)
+		if math.IsInf(downloadTime, 1) || math.IsInf(writeTime, 1) {
+			continue
+		}
+
+		destinationTime := downloadTime + writeTime
+		effectiveSpeed := 0.0
+		if destinationTime > 0 {
+			effectiveSpeed = task.ShardMB / destinationTime
+		}
 
 		if destinationTime < bestTime ||
-			(destinationTime == bestTime && (bestPeer == "" || destination.String() < bestPeer.String())) {
+			(destinationTime == bestTime &&
+				(bestPeer == "" ||
+					destination.String() < bestPeer.String())) {
 			bestPeer = destination
 			bestTime = destinationTime
+			bestEffectiveSpeed = effectiveSpeed
 		}
 	}
 
-	return bestPeer, bestTime
+	return bestPeer, bestTime, bestEffectiveSpeed
 }
 
 func ascEvaluateRepairCandidate(
@@ -1362,10 +1294,17 @@ func ascEvaluateRepairCandidate(
 	loads *ASCNetworkLoad,
 	chunkMB float64,
 ) (ascRepairCandidate, bool) {
-	if repairPeer == "" || repairPeer == failedPeer || !ascValidNode(topology, repairPeer) {
+	if repairPeer == "" ||
+		repairPeer == failedPeer ||
+		!ascValidNode(topology, repairPeer) {
 		return ascRepairCandidate{}, false
 	}
-	if ascInMBps(topology, repairPeer) <= 0 || ascDiskWriteMBps(topology, repairPeer) <= 0 {
+
+	repairInSpeed := ascInMBps(topology, repairPeer)
+	repairOutSpeed := ascOutMBps(topology, repairPeer)
+	localWriteSpeed := ascDiskWriteMBps(topology, repairPeer)
+
+	if repairInSpeed <= 0 || localWriteSpeed <= 0 {
 		return ascRepairCandidate{}, false
 	}
 
@@ -1379,7 +1318,7 @@ func ascEvaluateRepairCandidate(
 	repairDownloadTime := ascCompletion(
 		loads.DownloadMB[repairPeer],
 		repairIncomingMB,
-		ascInMBps(topology, repairPeer),
+		repairInSpeed,
 	)
 	if math.IsInf(repairDownloadTime, 1) {
 		return ascRepairCandidate{}, false
@@ -1388,66 +1327,111 @@ func ascEvaluateRepairCandidate(
 	localWriteTime := ascCompletion(
 		loads.DiskWriteMB[repairPeer],
 		task.ShardMB,
-		ascDiskWriteMBps(topology, repairPeer),
+		localWriteSpeed,
 	)
-	localCompletion := ascMax(repairDownloadTime, localWriteTime)
+	if math.IsInf(localWriteTime, 1) {
+		return ascRepairCandidate{}, false
+	}
 
+	localCompletion := repairDownloadTime + localWriteTime
 	localPlacementEligible := !task.SameStripePeers[repairPeer]
 
 	adjustedUploadLoad := loads.UploadMB[repairPeer] - localReduction
 	if adjustedUploadLoad < 0 {
 		adjustedUploadLoad = 0
 	}
-	relocationUploadTime := ascCompletion(
-		adjustedUploadLoad,
-		task.ShardMB,
-		ascOutMBps(topology, repairPeer),
-	)
 
-	bestDestination, bestDestinationTime := ascBestRelocationDestination(
-		task, repairPeer, failedPeer, candidatePeers, topology, loads,
-	)
+	bestDestination, bestDestinationTime, bestDestinationEffectiveSpeed :=
+		ascBestRelocationDestination(
+			task,
+			repairPeer,
+			failedPeer,
+			candidatePeers,
+			topology,
+			loads,
+		)
 
+	// Local placement is forbidden because the repair peer already stores
+	// another shard from the same stripe. Relocation is mandatory.
 	if !localPlacementEligible {
-		if bestDestination == "" || math.IsInf(relocationUploadTime, 1) {
+		if bestDestination == "" || repairOutSpeed <= 0 {
 			return ascRepairCandidate{}, false
 		}
+
+		relocationUploadTime := ascCompletion(
+			adjustedUploadLoad,
+			task.ShardMB,
+			repairOutSpeed,
+		)
+		if math.IsInf(relocationUploadTime, 1) ||
+			math.IsInf(bestDestinationTime, 1) {
+			return ascRepairCandidate{}, false
+		}
+
 		return ascRepairCandidate{
 			TaskIndex:            taskIndex,
 			RepairPeer:           repairPeer,
 			FinalPeer:            bestDestination,
 			RepairIncomingMB:     repairIncomingMB,
 			LocalUploadReduction: localReduction,
-			CompletionTime:       ascMax(repairDownloadTime, relocationUploadTime, bestDestinationTime),
+			CompletionTime: repairDownloadTime +
+				relocationUploadTime +
+				bestDestinationTime,
 		}, true
 	}
 
-	// Optional relocation:
-	// first compare repair-peer upload against local disk write;
-	// then require the best destination's incoming/write side to also be faster.
-	chooseRelocation := bestDestination != "" &&
-		!math.IsInf(relocationUploadTime, 1) &&
-		relocationUploadTime < localWriteTime &&
-		bestDestinationTime < localWriteTime
-
-	if chooseRelocation {
+	// Local disk writing is at least as fast as uploading.
+	if repairOutSpeed <= 0 || localWriteSpeed >= repairOutSpeed {
 		return ascRepairCandidate{
 			TaskIndex:            taskIndex,
 			RepairPeer:           repairPeer,
-			FinalPeer:            bestDestination,
+			FinalPeer:            repairPeer,
 			RepairIncomingMB:     repairIncomingMB,
 			LocalUploadReduction: localReduction,
-			CompletionTime:       ascMax(repairDownloadTime, relocationUploadTime, bestDestinationTime),
+			CompletionTime:       localCompletion,
+		}, true
+	}
+
+	// Upload is faster than local writing, but relocation is selected only
+	// when the least-loaded destination is also effectively faster.
+	if bestDestination == "" ||
+		bestDestinationEffectiveSpeed <= localWriteSpeed {
+		return ascRepairCandidate{
+			TaskIndex:            taskIndex,
+			RepairPeer:           repairPeer,
+			FinalPeer:            repairPeer,
+			RepairIncomingMB:     repairIncomingMB,
+			LocalUploadReduction: localReduction,
+			CompletionTime:       localCompletion,
+		}, true
+	}
+
+	relocationUploadTime := ascCompletion(
+		adjustedUploadLoad,
+		task.ShardMB,
+		repairOutSpeed,
+	)
+	if math.IsInf(relocationUploadTime, 1) ||
+		math.IsInf(bestDestinationTime, 1) {
+		return ascRepairCandidate{
+			TaskIndex:            taskIndex,
+			RepairPeer:           repairPeer,
+			FinalPeer:            repairPeer,
+			RepairIncomingMB:     repairIncomingMB,
+			LocalUploadReduction: localReduction,
+			CompletionTime:       localCompletion,
 		}, true
 	}
 
 	return ascRepairCandidate{
 		TaskIndex:            taskIndex,
 		RepairPeer:           repairPeer,
-		FinalPeer:            repairPeer,
+		FinalPeer:            bestDestination,
 		RepairIncomingMB:     repairIncomingMB,
 		LocalUploadReduction: localReduction,
-		CompletionTime:       localCompletion,
+		CompletionTime: repairDownloadTime +
+			relocationUploadTime +
+			bestDestinationTime,
 	}, true
 }
 
