@@ -244,7 +244,7 @@ require (
 
 replace github.com/ipfs/go-ipld-format v0.6.0 => github.com/Mo-RIZK/go-ipld-format v0.0.0-20260206105547-7c68fd5e35ab
 
-replace github.com/ipfs/boxo v0.29.1 => github.com/Mo-RIZK/boxo-2 v0.0.0-20260724104803-5c2d5ee98ed2
+replace github.com/ipfs/boxo v0.29.1 => github.com/Mo-RIZK/boxo-2 0a453811add086de881ebd657870d35be1292ad5
 
 go 1.24
 
