@@ -111,6 +111,50 @@ func min3(a, b, c uint64) uint64 {
 
 	return m
 }
+func hasValidValue(v string) bool {
+	v = strings.TrimSpace(v)
+
+	return v != "" &&
+		!strings.EqualFold(v, "NOT_FOUND")
+}
+
+func validNodeValues(
+	peerID string,
+	globalOut string,
+	globalIn string,
+	diskRead string,
+	diskWrite string,
+) bool {
+	peerID = strings.TrimSpace(peerID)
+
+	if peerID == "" || !hasValidValue(peerID) {
+		return false
+	}
+
+	if _, err := peer.Decode(peerID); err != nil {
+		return false
+	}
+
+	if !hasValidValue(globalOut) ||
+		!hasValidValue(globalIn) ||
+		!hasValidValue(diskRead) ||
+		!hasValidValue(diskWrite) {
+		return false
+	}
+
+	if parseBandwidthToMbit(globalOut) == 0 ||
+		parseBandwidthToMbit(globalIn) == 0 ||
+		parseDiskSpeedToMBps(diskRead) == 0 ||
+		parseDiskSpeedToMBps(diskWrite) == 0 {
+		return false
+	}
+
+	return true
+}
+
+func validPairwiseValue(v string) bool {
+	return hasValidValue(v) && parseBandwidthToMbit(v) > 0
+}
 
 func LoadNetworkTopology(path string) (*NetworkTopology, error) {
 	f, err := os.Open(path)
@@ -127,30 +171,15 @@ func LoadNetworkTopology(path string) (*NetworkTopology, error) {
 		return nil, err
 	}
 
-	topo := &NetworkTopology{
-		NodesByPeer: make(map[peer.ID]*NodeInfo),
-		NodesByName: make(map[string]*NodeInfo),
-		Links:       make(map[peer.ID]map[peer.ID]*LinkInfo),
-	}
+	/*
+		First pass: identify peers with invalid node information.
 
-	// Expected header:
-	//
-	// src,
-	// src_ip,
-	// src_ipfs_id,
-	// src_global_out,
-	// src_global_in,
-	// src_disk_read,
-	// src_disk_write,
-	// dst,
-	// dst_ip,
-	// dst_ipfs_id,
-	// dst_global_out,
-	// dst_global_in,
-	// dst_disk_read,
-	// dst_disk_write,
-	// pairwise_out_src_to_dst,
-	// pairwise_out_dst_to_src
+		A peer is rejected when:
+		  - its peer ID is missing or invalid;
+		  - global input/output is missing or zero;
+		  - disk read/write is missing or zero.
+	*/
+	invalidPeersByName := make(map[string]string)
 
 	for i, row := range rows {
 		if i == 0 {
@@ -166,6 +195,89 @@ func LoadNetworkTopology(path string) (*NetworkTopology, error) {
 		}
 
 		srcName := strings.TrimSpace(row[0])
+		srcPeerStr := strings.TrimSpace(row[2])
+
+		if !validNodeValues(
+			srcPeerStr,
+			row[3],
+			row[4],
+			row[5],
+			row[6],
+		) {
+			invalidPeersByName[srcName] = fmt.Sprintf(
+				"invalid values: peer_id=%q, global_out=%q, global_in=%q, disk_read=%q, disk_write=%q",
+				srcPeerStr,
+				strings.TrimSpace(row[3]),
+				strings.TrimSpace(row[4]),
+				strings.TrimSpace(row[5]),
+				strings.TrimSpace(row[6]),
+			)
+		}
+
+		dstName := strings.TrimSpace(row[7])
+		dstPeerStr := strings.TrimSpace(row[9])
+
+		if !validNodeValues(
+			dstPeerStr,
+			row[10],
+			row[11],
+			row[12],
+			row[13],
+		) {
+			invalidPeersByName[dstName] = fmt.Sprintf(
+				"invalid values: peer_id=%q, global_out=%q, global_in=%q, disk_read=%q, disk_write=%q",
+				dstPeerStr,
+				strings.TrimSpace(row[10]),
+				strings.TrimSpace(row[11]),
+				strings.TrimSpace(row[12]),
+				strings.TrimSpace(row[13]),
+			)
+		}
+	}
+
+	for name, reason := range invalidPeersByName {
+		fmt.Printf(
+			"Removing peer %s from topology: %s\n",
+			name,
+			reason,
+		)
+	}
+
+	topo := &NetworkTopology{
+		NodesByPeer: make(map[peer.ID]*NodeInfo),
+		NodesByName: make(map[string]*NodeInfo),
+		Links:       make(map[peer.ID]map[peer.ID]*LinkInfo),
+	}
+
+	/*
+		Second pass: load only rows whose source and destination peers
+		have complete and valid node information.
+	*/
+	for i, row := range rows {
+		if i == 0 {
+			continue
+		}
+
+		if len(row) < 16 {
+			return nil, fmt.Errorf(
+				"invalid row %d: expected 16 columns, got %d",
+				i+1,
+				len(row),
+			)
+		}
+
+		srcName := strings.TrimSpace(row[0])
+		dstName := strings.TrimSpace(row[7])
+
+		// Completely remove every row involving an invalid peer.
+		if _, invalid := invalidPeersByName[srcName]; invalid {
+			continue
+		}
+
+		if _, invalid := invalidPeersByName[dstName]; invalid {
+			continue
+		}
+
 		srcIP := strings.TrimSpace(row[1])
 		srcPeerStr := strings.TrimSpace(row[2])
 		srcGlobalOut := parseBandwidthToMbit(row[3])
@@ -173,16 +285,12 @@ func LoadNetworkTopology(path string) (*NetworkTopology, error) {
 		srcDiskRead := parseDiskSpeedToMBps(row[5])
 		srcDiskWrite := parseDiskSpeedToMBps(row[6])
 
-		dstName := strings.TrimSpace(row[7])
 		dstIP := strings.TrimSpace(row[8])
 		dstPeerStr := strings.TrimSpace(row[9])
 		dstGlobalOut := parseBandwidthToMbit(row[10])
 		dstGlobalIn := parseBandwidthToMbit(row[11])
 		dstDiskRead := parseDiskSpeedToMBps(row[12])
 		dstDiskWrite := parseDiskSpeedToMBps(row[13])
-
-		pairSrcToDst := parseBandwidthToMbit(row[14])
-		pairDstToSrc := parseBandwidthToMbit(row[15])
 
 		srcPeer, err := peer.Decode(srcPeerStr)
 		if err != nil {
@@ -232,9 +340,24 @@ func LoadNetworkTopology(path string) (*NetworkTopology, error) {
 			topo.NodesByName[dstName] = n
 		}
 
-		addLink := func(src, dst peer.ID, pair uint64) {
+		addLink := func(
+			src peer.ID,
+			dst peer.ID,
+			pairValue string,
+		) {
+			// Do not create links with missing or invalid measurements.
+			if !validPairwiseValue(pairValue) {
+				return
+			}
+
+			pair := parseBandwidthToMbit(pairValue)
+
 			srcNode := topo.NodesByPeer[src]
 			dstNode := topo.NodesByPeer[dst]
+
+			if srcNode == nil || dstNode == nil {
+				return
+			}
 
 			if topo.Links[src] == nil {
 				topo.Links[src] = make(map[peer.ID]*LinkInfo)
@@ -252,9 +375,50 @@ func LoadNetworkTopology(path string) (*NetworkTopology, error) {
 			}
 		}
 
-		addLink(srcPeer, dstPeer, pairSrcToDst)
-		addLink(dstPeer, srcPeer, pairDstToSrc)
+		addLink(srcPeer, dstPeer, row[14])
+		addLink(dstPeer, srcPeer, row[15])
 	}
+
+	/*
+		Final cleanup: remove nodes that ended up with no valid outgoing
+		links after pairwise filtering.
+	*/
+	for p, node := range topo.NodesByPeer {
+		if len(topo.Links[p]) > 0 {
+			continue
+		}
+
+		fmt.Printf(
+			"Removing peer %s: no valid outgoing pairwise links\n",
+			node.Name,
+		)
+
+		delete(topo.NodesByPeer, p)
+		delete(topo.NodesByName, node.Name)
+		delete(topo.Links, p)
+	}
+
+	/*
+		Remove incoming links pointing to any peer removed during the
+		final cleanup.
+	*/
+	for src, links := range topo.Links {
+		for dst := range links {
+			if _, exists := topo.NodesByPeer[dst]; !exists {
+				delete(links, dst)
+			}
+		}
+
+		if len(links) == 0 {
+			delete(topo.Links, src)
+		}
+	}
+
+	fmt.Printf(
+		"Loaded topology with %d valid peers and %d invalid peers removed\n",
+		len(topo.NodesByPeer),
+		len(invalidPeersByName),
+	)
 
 	return topo, nil
 }
