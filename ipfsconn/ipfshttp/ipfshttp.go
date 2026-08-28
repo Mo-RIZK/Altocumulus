@@ -1252,7 +1252,7 @@ func (ipfs *Connector) postCtxNew(ctx context.Context, path string, contentType 
 }
 
 // NodeGet retrieves an ipfs node with the given cid
-func (ipfs *Connector) ChunkGet_old(ctx context.Context, c cid.Cid) ([]byte, error) {
+func (ipfs *Connector) ChunkGet(ctx context.Context, c cid.Cid) ([]byte, error) {
 	ctx, span := trace.StartSpan(ctx, "ipfsconn/ipfshttp/BlockGet")
 	defer span.End()
 
@@ -1264,7 +1264,7 @@ func (ipfs *Connector) ChunkGet_old(ctx context.Context, c cid.Cid) ([]byte, err
 
 // ChunkGet retrieves the data contained in an IPFS leaf node
 // without storing a remotely fetched block in the local datastore.
-func (ipfs *Connector) ChunkGet(ctx context.Context, c cid.Cid) ([]byte, error) {
+func (ipfs *Connector) ChunkGet_try(ctx context.Context, c cid.Cid) ([]byte, error) {
 	ctx, span := trace.StartSpan(
 		ctx,
 		"ipfsconn/ipfshttp/BlockGetNoStore",

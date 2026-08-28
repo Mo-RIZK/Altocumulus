@@ -978,7 +978,7 @@ func (c *Cluster) alertsHandler() {
 								c.Enqueue(c.ctx, pin)
 							}
 						}
-						if sim == 5 || sim == 6 || sim == 7 {
+						if sim == 5 || sim == 6 || sim == 7 || sim == 8 {
 							CIDsSim4 = append(CIDsSim4, pin)
 							fff = true
 						}
@@ -1688,6 +1688,403 @@ func (c *Cluster) alertsHandler() {
 
 				}
 			}
+			if (sim == 8) && fff {
+
+				SortCIDs(CIDsSim4)
+
+				if distance.isClosest(CIDsSim4[0].Cid) {
+
+					fmt.Println("I am the SelectiveEC responsible peer")
+
+					// -------------------------------------------------------------
+					// Build candidate live-peer list.
+					// -------------------------------------------------------------
+
+					allpeers := append(
+						[]peer.ID{},
+						distance.otherPeers...,
+					)
+
+					allpeers = append(
+						allpeers,
+						c.id,
+					)
+
+					allpeers =
+						selectiveECSortedUniquePeers(
+							allpeers,
+						)
+
+					fmt.Println("SELECTIVE_EC candidate peer IDs:")
+
+					for _, p := range allpeers {
+
+						fmt.Printf(
+							"SELECTIVE_EC candidate peer=%s\n",
+							p.String(),
+						)
+					}
+
+					// -------------------------------------------------------------
+					// Load the network information.
+					//
+					// SelectiveEC TPDS Section 4.3 needs:
+					//
+					//     available upstream bandwidth
+					//     available downstream bandwidth
+					//
+					// for every live peer.
+					//
+					// We reuse the topology information already used by ASCLEPIUS
+					// instead of introducing another measurement mechanism.
+					// -------------------------------------------------------------
+
+					topology, err :=
+						LoadNetworkTopology(
+							"/root/pairwise_bandwidth_log.csv",
+						)
+
+					if err != nil {
+
+						logger.Warnf(
+							"SELECTIVE_EC could not load topology: %s",
+							err,
+						)
+
+						continue
+					}
+
+					topology.PrintFull()
+
+					// -------------------------------------------------------------
+					// Build the bandwidth map expected by SelectiveEC.
+					//
+					// IMPORTANT:
+					//
+					// Out = available upstream/upload bandwidth
+					// In  = available downstream/download bandwidth
+					//
+					// These values must represent the bandwidth currently available
+					// to the peer, as required by the TPDS paper.
+					// -------------------------------------------------------------
+
+					bandwidth :=
+						make(
+							map[peer.ID]SelectiveECBandwidth,
+							len(allpeers),
+						)
+
+					bandwidthValid := true
+
+					for _, p := range allpeers {
+
+						node, exists :=
+							topology.NodesByPeer[p]
+
+						if !exists {
+
+							logger.Errorf(
+								"SELECTIVE_EC missing topology information for peer %s",
+								p.String(),
+							)
+
+							bandwidthValid = false
+
+							break
+						}
+
+						// ---------------------------------------------------------
+						// Use the peer's currently available outgoing and incoming
+						// bandwidth.
+						//
+						// GlobalOut:
+						//     available upload/upstream bandwidth
+						//
+						// GlobalIn:
+						//     available download/downstream bandwidth
+						// ---------------------------------------------------------
+
+						bandwidth[p] =
+							SelectiveECBandwidth{
+								Out: node.GlobalOut,
+								In:  node.GlobalIn,
+							}
+
+						fmt.Printf(
+							"SELECTIVE_EC bandwidth peer=%s out=%f in=%f\n",
+							p.String(),
+							node.GlobalOut,
+							node.GlobalIn,
+						)
+					}
+
+					if !bandwidthValid {
+						continue
+					}
+
+					// -------------------------------------------------------------
+					// Run SelectiveEC scheduling.
+					// -------------------------------------------------------------
+
+					sstt := time.Now()
+
+					schedule, err :=
+						ScheduleSelectiveECBatches(
+							alrt.Peer, // failed peer
+							CIDsSim4,  // failed shards
+							allpeers,  // candidate live peers
+							bandwidth, // TPDS heterogeneous bandwidth weights
+							func(pin api.Pin) (
+								[]api.Pin,
+								[]peer.ID,
+								int,
+								int,
+							) {
+
+								return c.get_shards_same_stripe(
+									pin,
+								)
+							},
+						)
+
+					if err != nil {
+
+						logger.Errorf(
+							"SELECTIVE_EC scheduling failed: %s",
+							err,
+						)
+
+						continue
+					}
+
+					fmt.Printf(
+						"SELECTIVE_EC scheduling finished in %s | batches=%d | leftover=%d\n",
+						time.Since(sstt),
+						len(schedule.Batches),
+						len(schedule.Leftover),
+					)
+
+					// -------------------------------------------------------------
+					// Execute batches sequentially.
+					//
+					// Queue every repair in the current batch, then wait before
+					// submitting the next batch.
+					// -------------------------------------------------------------
+
+					for batchPosition, batch := range schedule.Batches {
+
+						fmt.Printf(
+							"SELECTIVE_EC START BATCH %d | repairs=%d\n",
+							batch.Index,
+							len(batch.Decisions),
+						)
+
+						for _, decision := range batch.Decisions {
+
+							shard :=
+								decision.Shard
+
+							if shard.Metadata == nil {
+
+								shard.Metadata =
+									make(
+										map[string]string,
+									)
+							}
+
+							// -----------------------------------------------------
+							// SelectiveEC repair strategy.
+							// -----------------------------------------------------
+
+							shard.Metadata["Strategy"] =
+								"SELECTIVE_EC"
+
+							shard.Metadata["common"] =
+								""
+
+							shard.Metadata["allmatches"] =
+								""
+
+							shard.Metadata["allocs"] =
+								""
+
+							// -----------------------------------------------------
+							// Store the helper shards selected by SelectiveEC.
+							//
+							// helper_cids[i] corresponds exactly to
+							// helper_indexes[i].
+							//
+							// Do not sort one list independently of the other.
+							// -----------------------------------------------------
+
+							helperCIDs :=
+								make(
+									[]string,
+									0,
+									len(decision.Helpers),
+								)
+
+							helperIndexes :=
+								make(
+									[]string,
+									0,
+									len(decision.Helpers),
+								)
+
+							helperMetadataValid :=
+								true
+
+							for _, helper := range decision.Helpers {
+
+								if !helper.CID.Defined() {
+
+									logger.Errorf(
+										"SELECTIVE_EC selected undefined helper CID for shard %s",
+										shard.Name,
+									)
+
+									helperMetadataValid =
+										false
+
+									break
+								}
+
+								helperCIDs =
+									append(
+										helperCIDs,
+										helper.CID.String(),
+									)
+
+								helperIndexes =
+									append(
+										helperIndexes,
+										strconv.Itoa(
+											helper.RSIndex,
+										),
+									)
+							}
+
+							if !helperMetadataValid {
+								continue
+							}
+
+							shard.Metadata["helper_cids"] =
+								strings.Join(
+									helperCIDs,
+									",",
+								)
+
+							shard.Metadata["helper_indexes"] =
+								strings.Join(
+									helperIndexes,
+									",",
+								)
+
+							fmt.Printf(
+								"SELECTIVE_EC batch=%d shard=%s repairPeer=%s helperCIDs=%s helperIndexes=%s\n",
+								batch.Index,
+								shard.Name,
+								decision.RepairPeer.String(),
+								shard.Metadata["helper_cids"],
+								shard.Metadata["helper_indexes"],
+							)
+
+							// -----------------------------------------------------
+							// Local repair.
+							// -----------------------------------------------------
+
+							if decision.RepairPeer ==
+								c.id {
+
+								err :=
+									c.Enqueue(
+										c.ctx,
+										shard,
+									)
+
+								if err != nil {
+
+									logger.Errorf(
+										"SELECTIVE_EC failed to enqueue shard %s locally: %s",
+										shard.Cid.String(),
+										err,
+									)
+								}
+
+								continue
+							}
+
+							// -----------------------------------------------------
+							// Remote repair.
+							// -----------------------------------------------------
+
+							var out bool
+
+							err :=
+								c.rpcClient.CallContext(
+									c.ctx,
+									decision.RepairPeer,
+									"Cluster",
+									"Enqueue",
+									&shard,
+									&out,
+								)
+
+							if err != nil {
+
+								logger.Errorf(
+									"SELECTIVE_EC failed to enqueue shard %s on repair peer %s: %s",
+									shard.Cid.String(),
+									decision.RepairPeer.String(),
+									err,
+								)
+							}
+						}
+
+						fmt.Printf(
+							"SELECTIVE_EC BATCH %d QUEUED\n",
+							batch.Index,
+						)
+
+						// ---------------------------------------------------------
+						// Wait before submitting the next complete batch.
+						// ---------------------------------------------------------
+
+						if batchPosition <
+							len(schedule.Batches)-1 {
+
+							fmt.Println(
+								"SELECTIVE_EC waiting 30 seconds before next batch",
+							)
+
+							time.Sleep(
+								30 * time.Second,
+							)
+						}
+					}
+
+					// -------------------------------------------------------------
+					// Incomplete final batch.
+					// -------------------------------------------------------------
+
+					if len(schedule.Leftover) > 0 {
+
+						fmt.Printf(
+							"SELECTIVE_EC leftovers=%d\n",
+							len(schedule.Leftover),
+						)
+
+						for _, shard := range schedule.Leftover {
+
+							fmt.Printf(
+								"SELECTIVE_EC LEFTOVER shard=%s\n",
+								shard.Name,
+							)
+						}
+					}
+				}
+			}
+
 			fmt.Fprintf(os.Stdout, "SSSSSHHHHHH : %d \n", kk)
 		}
 	}
