@@ -1806,8 +1806,8 @@ func (c *Cluster) alertsHandler() {
 
 						bandwidth[p] =
 							SelectiveECBandwidth{
-								Out: node.GlobalOut,
-								In:  node.GlobalIn,
+								Out: float64(node.GlobalOut),
+								In:  float64(node.GlobalIn),
 							}
 
 						fmt.Printf(
