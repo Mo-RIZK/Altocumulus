@@ -1770,7 +1770,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 
 		return timedownloadchunks, timetorepairchunksonly, wait2
 	} else {
-		if strategy == "MAXMIN" {
+		if strategy == "ASCLEPIUS" {
 			allocccs := strings.Split(pin.Metadata["allocs"], ",") //metadata of allocs
 			for _, pi := range repairShards {
 				for _, per := range pi.pin.Allocations {

@@ -1646,22 +1646,23 @@ func (c *Cluster) alertsHandler() {
 					)
 
 					for _, decision := range repairDecisions {
+						shard := decision.Shard
 						first := 1
 						for _, com := range decision.CommonChunks {
 							if first == 1 {
-								decision.Shard.Metadata["common"] = com.CID
+								shard.Metadata["common"] = com.CID
 								first++
 							} else {
-								decision.Shard.Metadata["common"] = decision.Shard.Metadata["common"] + "," + com.CID
+								shard.Metadata["common"] = shard.Metadata["common"] + "," + com.CID
 							}
 						}
-						decision.Shard.Metadata["Strategy"] = ""
-						decision.Shard.Metadata["Strategy"] = "ASCLEPUIS"
-						decision.Shard.Metadata["allocs"] = ""
-						decision.Shard.Metadata["allocs"] = decision.FinalPeer.String()
+						shard.Metadata["Strategy"] = ""
+						shard.Metadata["Strategy"] = "ASCLEPUIS"
+						shard.Metadata["allocs"] = ""
+						shard.Metadata["allocs"] = decision.FinalPeer.String()
 
 						if decision.RepairPeer == c.id {
-							c.Enqueue(c.ctx, decision.Shard)
+							c.Enqueue(c.ctx, shard)
 							continue
 						}
 
@@ -1672,14 +1673,14 @@ func (c *Cluster) alertsHandler() {
 							decision.RepairPeer,
 							"Cluster",
 							"Enqueue",
-							&decision.Shard,
+							&shard,
 							&out,
 						)
 
 						if err != nil {
 							logger.Errorf(
 								"failed to enqueue shard %s on repair peer %s: %s",
-								decision.Shard.Cid.String(),
+								shard.Cid.String(),
 								decision.RepairPeer.String(),
 								err,
 							)
