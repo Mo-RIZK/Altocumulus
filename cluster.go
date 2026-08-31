@@ -1657,7 +1657,7 @@ func (c *Cluster) alertsHandler() {
 							}
 						}
 						shard.Metadata["Strategy"] = ""
-						shard.Metadata["Strategy"] = "ASCLEPUIS"
+						shard.Metadata["Strategy"] = "ASCLEPIUS"
 						shard.Metadata["allocs"] = ""
 						shard.Metadata["allocs"] = decision.FinalPeer.String()
 
