@@ -1761,10 +1761,6 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		wait1 := time.Now()
 		wait2 := time.Since(wait1)
 		cancell()
-		pin.Allocations = make([]peer.ID, 0)
-		for _, all := range shh.Allocations() {
-			pin.Allocations = append(pin.Allocations, all)
-		}
 		shh.FlushForStateless(spt.ctx, *pin)
 		fmt.Printf("REPAIR TOOK %s \n", time.Now().Sub(start).String())
 
@@ -2002,10 +1998,6 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 				}
 			}
 			wait1 := time.Now()
-			pin.Allocations = make([]peer.ID, 0)
-			for _, all := range shh.Allocations() {
-				pin.Allocations = append(pin.Allocations, all)
-			}
 			shh.FlushForStateless(spt.ctx, *pin)
 			wait2 := time.Since(wait1)
 			cancell()
@@ -2682,11 +2674,12 @@ func (spt *ECRepairS) repinUsingRSExactCl(
 	// -------------------------------------------------------------
 
 	shh, err :=
-		sharding.NewShards(
+		sharding.NewShard(
 			spt.ctx,
 			spt.ctx,
 			spt.rpcClient,
 			pin.PinOptions,
+			spt.peerID,
 		)
 
 	if err != nil {
@@ -2888,21 +2881,6 @@ func (spt *ECRepairS) repinUsingRSExactCl(
 	// -------------------------------------------------------------
 	// Flush reconstructed shard.
 	// -------------------------------------------------------------
-
-	pin.Allocations =
-		make(
-			[]peer.ID,
-			0,
-		)
-
-	for _, allocation := range shh.Allocations() {
-
-		pin.Allocations =
-			append(
-				pin.Allocations,
-				allocation,
-			)
-	}
 
 	waitStart :=
 		time.Now()
