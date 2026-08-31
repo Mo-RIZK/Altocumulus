@@ -65,13 +65,15 @@ An edge:
 
 exists iff that peer stores a surviving shard belonging to the same EC stripe.
 
-For a full batch containing B tasks:
+For a normal batch containing B tasks:
 
-        required max-flow = B * N
+        desired max-flow = B * N
 
-The normal SelectiveEC batch size is:
-
-        B = number of live peers
+The SelectiveEC paper's Algorithm 1 starts from n tasks, where n is the
+number of live nodes. If the maximum flow cannot saturate all task vertices,
+the algorithm first tries task replacement. If no improving replacement can
+be found, TPDS Section 4.2.4 supplements the remaining unsaturated tasks with
+the lightest-loaded eligible source nodes until each task has N sources.
 
 -------------------------------------------------------------------------------
 SelectiveEC task replacement
@@ -104,6 +106,12 @@ If Graph 1 cannot achieve B*N flow:
 
 This follows SelectiveEC's findMostUnsaturate /
 updateGraphWithNewReconwork behavior.
+
+If no improving replacement can be found while some tasks are still
+unsaturated, TPDS Section 4.2.4 relaxes the source-node capacity restriction
+and supplements each such task with the lightest-loaded eligible source nodes
+until it has N helpers. This implementation performs that supplementation when
+extracting the final helper assignments.
 
 -------------------------------------------------------------------------------
 SelectiveEC Graph 2: target/replacement-node selection
@@ -1430,46 +1438,66 @@ func selectiveECReplaceUnsaturatedTask(
 // Extract Graph-1 helper assignments
 // =============================================================================
 
+// selectiveECExtractHelpers reproduces the source assignment produced by
+// Algorithm 1 and the supplementary source-node heuristic in TPDS Section 4.2.4.
+//
+// The maximum-flow edges are used first. If Algorithm 1 terminates before all
+// task vertices are saturated, the paper relaxes the per-source-node capacity
+// restriction and supplements each unsaturated task, one by one, with the
+// lightest-loaded eligible source nodes until the task has N sources.
 func selectiveECExtractHelpers(
 	batch []*selectiveECTask,
 	sourceGraph *selectiveECSourceGraph,
 	n int,
 ) ([][]SelectiveECHelper, error) {
 
-	allHelpers :=
-		make(
-			[][]SelectiveECHelper,
-			len(batch),
-		)
+	allHelpers := make(
+		[][]SelectiveECHelper,
+		len(batch),
+	)
+
+	// Current source-node load induced by the maximum-flow solution.
+	// This is the number of selected recovery blocks currently read from each
+	// source node in the batch, exactly the load considered by Section 4.2.4.
+	sourceLoad := make(
+		map[peer.ID]int,
+		len(sourceGraph.PeerSinkEdges),
+	)
+
+	for p, edge := range sourceGraph.PeerSinkEdges {
+		sourceLoad[p] = sourceGraph.Graph.Flow(edge)
+	}
 
 	for taskIndex, task := range batch {
 
-		helpers :=
-			make(
-				[]SelectiveECHelper,
-				0,
-				n,
-			)
+		helpers := make(
+			[]SelectiveECHelper,
+			0,
+			n,
+		)
 
+		selectedPeers := make(
+			map[peer.ID]bool,
+			n,
+		)
+
+		// -------------------------------------------------------------
+		// First keep every source assignment selected by max-flow.
+		// -------------------------------------------------------------
 		for _, p := range task.SourcePeers {
 
-			edge, exists :=
-				sourceGraph.
-					TaskPeerEdges[taskIndex][p]
+			edge, exists := sourceGraph.
+				TaskPeerEdges[taskIndex][p]
 
 			if !exists {
 				continue
 			}
 
-			if sourceGraph.Graph.Flow(edge) <=
-				0 {
-
+			if sourceGraph.Graph.Flow(edge) <= 0 {
 				continue
 			}
 
-			helper, exists :=
-				task.HelperByPeer[p]
-
+			helper, exists := task.HelperByPeer[p]
 			if !exists {
 				return nil,
 					fmt.Errorf(
@@ -1479,29 +1507,82 @@ func selectiveECExtractHelpers(
 					)
 			}
 
-			helpers =
-				append(
-					helpers,
-					helper,
-				)
+			helpers = append(
+				helpers,
+				helper,
+			)
+
+			selectedPeers[p] = true
+		}
+
+		// -------------------------------------------------------------
+		// TPDS Section 4.2.4 source supplementary heuristic.
+		//
+		// If this task is unsaturated, relax the source-node capacity
+		// restriction and repeatedly choose the lightest-loaded eligible
+		// source node not already selected for this task, updating the load
+		// after each supplementary assignment.
+		// -------------------------------------------------------------
+		for len(helpers) < n {
+
+			bestPeer := peer.ID("")
+			bestLoad := int(^uint(0) >> 1)
+
+			for _, p := range task.SourcePeers {
+
+				if selectedPeers[p] {
+					continue
+				}
+
+				load := sourceLoad[p]
+
+				if bestPeer == "" ||
+					load < bestLoad ||
+					(load == bestLoad &&
+						p.String() < bestPeer.String()) {
+
+					bestPeer = p
+					bestLoad = load
+				}
+			}
+
+			if bestPeer == "" {
+				return nil,
+					fmt.Errorf(
+						"SelectiveEC: task %s cannot be supplemented to %d distinct source peers",
+						task.Shard.Name,
+						n,
+					)
+			}
+
+			helper, exists := task.HelperByPeer[bestPeer]
+			if !exists {
+				return nil,
+					fmt.Errorf(
+						"SelectiveEC: supplementary source peer %s for shard %s has no helper shard",
+						bestPeer.String(),
+						task.Shard.Name,
+					)
+			}
+
+			helpers = append(
+				helpers,
+				helper,
+			)
+
+			selectedPeers[bestPeer] = true
+			sourceLoad[bestPeer]++
 		}
 
 		sort.Slice(
 			helpers,
 			func(i, j int) bool {
-				if helpers[i].RSIndex !=
-					helpers[j].RSIndex {
-
-					return helpers[i].
-						RSIndex <
-						helpers[j].
-							RSIndex
+				if helpers[i].RSIndex != helpers[j].RSIndex {
+					return helpers[i].RSIndex < helpers[j].RSIndex
 				}
 
-				return helpers[i].
-					CID.String() <
-					helpers[j].
-						CID.String()
+				return helpers[i].CID.String() <
+					helpers[j].CID.String()
 			},
 		)
 
@@ -1516,11 +1597,10 @@ func selectiveECExtractHelpers(
 		}
 
 		// Reed-Solomon reconstruction requires distinct RS positions.
-		selectedRSIndexes :=
-			make(
-				map[int]bool,
-				len(helpers),
-			)
+		selectedRSIndexes := make(
+			map[int]bool,
+			len(helpers),
+		)
 
 		for _, helper := range helpers {
 			if selectedRSIndexes[helper.RSIndex] {
@@ -1532,12 +1612,10 @@ func selectiveECExtractHelpers(
 					)
 			}
 
-			selectedRSIndexes[helper.RSIndex] =
-				true
+			selectedRSIndexes[helper.RSIndex] = true
 		}
 
-		allHelpers[taskIndex] =
-			helpers
+		allHelpers[taskIndex] = helpers
 	}
 
 	return allHelpers, nil
@@ -1717,48 +1795,55 @@ func selectiveECExtractTargets(
 	targetGraph *selectiveECTargetGraph,
 ) ([]peer.ID, error) {
 
-	targets :=
-		make(
-			[]peer.ID,
-			len(batch),
-		)
+	targets := make(
+		[]peer.ID,
+		len(batch),
+	)
+
+	// Current replacement-node load produced by the maximum matching/flow.
+	// Supplementary assignments below update this map immediately, so every
+	// subsequent unmatched task sees the new load, as required by the
+	// lightest-loaded-node heuristic in TPDS Section 4.2.4.
+	replacementLoad := make(
+		map[peer.ID]int,
+		len(targetGraph.PeerSinkEdges),
+	)
+
+	for p, edge := range targetGraph.PeerSinkEdges {
+		replacementLoad[p] = targetGraph.Graph.Flow(edge)
+	}
 
 	// -----------------------------------------------------------------
 	// First extract target assignments produced by max-flow.
 	// -----------------------------------------------------------------
-
 	for taskIndex := range batch {
 
 		for _, p := range livePeers {
 
-			edge, exists :=
-				targetGraph.
-					TaskPeerEdges[taskIndex][p]
+			edge, exists := targetGraph.
+				TaskPeerEdges[taskIndex][p]
 
 			if !exists {
 				continue
 			}
 
-			if targetGraph.Graph.Flow(edge) <=
-				0 {
-
+			if targetGraph.Graph.Flow(edge) <= 0 {
 				continue
 			}
 
-			targets[taskIndex] =
-				p
-
+			targets[taskIndex] = p
 			break
 		}
 	}
 
 	// -----------------------------------------------------------------
-	// Supplementary heuristic described in the paper:
+	// TPDS Section 4.2.4 replacement supplementary heuristic:
 	//
-	// choose the lightest-loaded valid replacement node for each
-	// unmatched task.
+	// Relax the restriction on how many tasks one live node may
+	// reconstruct. For each unmatched task, choose the lightest-loaded
+	// valid replacement node and update its load before processing the
+	// next unmatched task.
 	// -----------------------------------------------------------------
-
 	for taskIndex, task := range batch {
 
 		if targets[taskIndex] != "" {
@@ -1774,17 +1859,11 @@ func selectiveECExtractTargets(
 				continue
 			}
 
-			edge, exists :=
-				targetGraph.PeerSinkEdges[p]
-
-			if !exists {
+			if _, exists := targetGraph.PeerSinkEdges[p]; !exists {
 				continue
 			}
 
-			load :=
-				targetGraph.Graph.Flow(
-					edge,
-				)
+			load := replacementLoad[p]
 
 			if bestPeer == "" ||
 				load < bestLoad ||
@@ -1804,15 +1883,15 @@ func selectiveECExtractTargets(
 				)
 		}
 
-		targets[taskIndex] =
-			bestPeer
+		targets[taskIndex] = bestPeer
+		replacementLoad[bestPeer]++
 	}
 
 	return targets, nil
 }
 
 // =============================================================================
-// Schedule one complete SelectiveEC batch
+// Schedule one SelectiveEC batch
 // =============================================================================
 
 func selectiveECScheduleOneBatch(
@@ -1862,26 +1941,19 @@ func selectiveECScheduleOneBatch(
 	// until the batch reaches complete flow.
 	// -----------------------------------------------------------------
 
-	maxAttempts :=
-		len(allTasks) *
-			len(batchIndexes)
+	// Algorithm 1: repeatedly rebuild the source flow graph. Stop when all
+	// task vertices are saturated, or when no improving task substitution can
+	// be found. In the latter case, Section 4.2.4 supplements the unsaturated
+	// tasks afterwards instead of failing the batch.
+	for {
 
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
-
-	for attempt := 0; attempt <= maxAttempts; attempt++ {
-
-		currentBatch :=
-			make(
-				[]*selectiveECTask,
-				len(batchIndexes),
-			)
+		currentBatch := make(
+			[]*selectiveECTask,
+			len(batchIndexes),
+		)
 
 		for position, taskIndex := range batchIndexes {
-
-			currentBatch[position] =
-				allTasks[taskIndex]
+			currentBatch[position] = allTasks[taskIndex]
 		}
 
 		sourceGraph, err :=
@@ -1902,26 +1974,14 @@ func selectiveECScheduleOneBatch(
 				sourceGraph.Sink,
 			)
 
-		// -------------------------------------------------------------
-		// Full n-regular source assignment found.
-		// -------------------------------------------------------------
-
-		if maxFlow ==
-			expectedFlow {
-
-			finalBatch =
-				currentBatch
-
-			finalSourceGraph =
-				sourceGraph
-
+		// Full source assignment found: Algorithm 1 stops here.
+		if maxFlow == expectedFlow {
+			finalBatch = currentBatch
+			finalSourceGraph = sourceGraph
 			break
 		}
 
-		// -------------------------------------------------------------
-		// Otherwise use remaining unscheduled tasks to improve batch.
-		// -------------------------------------------------------------
-
+		// Otherwise try Algorithm 1's task substitution rule.
 		replaced :=
 			selectiveECReplaceUnsaturatedTask(
 				allTasks,
@@ -1930,14 +1990,16 @@ func selectiveECScheduleOneBatch(
 				sourceGraph,
 			)
 
-		if !replaced {
-			return SelectiveECBatch{},
-				fmt.Errorf(
-					"SelectiveEC: source graph cannot reach full flow: got %d expected %d",
-					maxFlow,
-					expectedFlow,
-				)
+		if replaced {
+			continue
 		}
+
+		// Algorithm 1 explicitly terminates when no such replacement task
+		// exists. Keep this best flow; Section 4.2.4 will supplement each
+		// remaining unsaturated task with lightest-loaded eligible sources.
+		finalBatch = currentBatch
+		finalSourceGraph = sourceGraph
+		break
 	}
 
 	if finalSourceGraph == nil {
@@ -2065,15 +2127,13 @@ func selectiveECScheduleOneBatch(
 //   - selected reconstruction helpers (CID + zero-based RS index)
 //   - selected repair peer
 //
-// IMPORTANT:
-//
-// SelectiveEC's normal transformer only forms COMPLETE batches where:
-//
-//	batchSize = number of live peers
-//
-// Therefore a final number of repairs smaller than batchSize is returned in:
-//
-//	schedule.Leftover
+// This ALTOCUMULUS entry point follows Algorithm 1's standard n-task batch,
+// where n is the number of live peers, matching the released SelectiveEC
+// transformer's normal batching path. Tasks fewer than n at the end are
+// returned in schedule.Leftover; TPDS does not prescribe a unique concrete
+// queue-draining rule for that API-level remainder, so this function does not
+// invent one. The Section 4.2.4 supplementary heuristics are applied inside
+// every batch when its source or replacement graph is unsaturated.
 //
 // This function DOES NOT execute the batches.
 func ScheduleSelectiveECBatches(
