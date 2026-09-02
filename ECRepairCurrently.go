@@ -142,7 +142,7 @@ func (spt *ECRepairS) pin(op *api.Pin) error {
 	//
 	//CIDs := op.Metadata["Cids"]
 	var download, repair, waittosend time.Duration
-	if op.Metadata["Strategy"] == "SELECTIVE_EC" {
+	if op.Metadata["Strategy"] == "SELECTIVE_EC" || op.Metadata["Strategy"] == "CMREPAIR_CTP" || op.Metadata["Strategy"] == "CMREPAIR_RTP" {
 		download, repair, waittosend = spt.repinUsingRSExactCl(op)
 	} else {
 		if op.Metadata["Strategy"] == "ASCLEPIUS" {
