@@ -1055,6 +1055,7 @@ func cmRepairRunRTP(
 	options CMRepairRTPOptions,
 ) []cmRepairSolution {
 
+	// CMRepair paper defaults used in our implementation.
 	if options.W <= 0 {
 		options.W = 4
 	}
@@ -1065,35 +1066,57 @@ func cmRepairRunRTP(
 	rng := rand.New(rand.NewSource(options.Seed))
 	started := time.Now()
 
+	// Current multi-stripe solution Solu.
 	current := cmRepairCopyMultiSolution(initial)
-	currentTimes := cmRepairEvaluateMultiSolution(tasks, current, topology)
+	currentTimes := cmRepairEvaluateMultiSolution(
+		tasks,
+		current,
+		topology,
+	)
 
+	// mSolu / mMT:
+	// best multi-stripe solution encountered during the whole search.
 	best := cmRepairCopyMultiSolution(current)
 	bestMT := currentTimes.MT
 
+	// "count" in Algorithm 2:
+	// number of continuously tolerated worse/non-improving solutions.
 	consecutiveTolerated := 0
 
-	for consecutiveTolerated < options.W &&
-		time.Since(started) < options.MaxComputationTime {
-
+	for {
+		// Corresponds to flag = 0 at the beginning of each optimization.
 		improvedInPass := false
 
-		// Traverse all stripes and all valid single-stripe solutions.
+		// ---------------------------------------------------------------------
+		// Greedy part of RTP.
+		//
+		// For every stripe Si:
+		//   enumerate every valid single-stripe solution solu'i;
+		//   substitute it temporarily into the current multi-stripe solution;
+		//   compute nMT;
+		//   accept the FIRST one satisfying nMT < MT;
+		//   reset count = 0;
+		//   break and move to the next stripe.
+		// ---------------------------------------------------------------------
 		for taskIndex, task := range tasks {
-			if time.Since(started) >= options.MaxComputationTime {
-				break
-			}
 
-			candidates := cmRepairAllCandidatesForTask(task, topology)
+			candidates := cmRepairAllCandidatesForTask(
+				task,
+				topology,
+			)
 
 			for _, candidate := range candidates {
-				if time.Since(started) >= options.MaxComputationTime {
-					break
-				}
-				if cmRepairSameSolution(candidate, current[taskIndex]) {
+
+				// The paper traverses alternative valid solutions,
+				// so ignore the currently selected solution.
+				if cmRepairSameSolution(
+					candidate,
+					current[taskIndex],
+				) {
 					continue
 				}
 
+				// nSolu = Solu with solui replaced by solu'i.
 				trial := cmRepairCopyMultiSolution(current)
 				trial[taskIndex] = cmRepairCopySolution(candidate)
 
@@ -1103,32 +1126,85 @@ func cmRepairRunRTP(
 					topology,
 				)
 
-				// RTP greedily accepts any strict improvement encountered while
-				// traversing valid single-stripe alternatives.
+				// Algorithm 2:
+				//
+				// if nMT < MT:
+				//     Solu  = nSolu
+				//     MT    = nMT
+				//     flag  = 1
+				//     count = 0
+				//     break
 				if cmRepairLess(newTimes.MT, currentTimes.MT) {
+
 					current = trial
 					currentTimes = newTimes
+
 					improvedInPass = true
 					consecutiveTolerated = 0
 
+					// Update mSolu / mMT if this is the best
+					// solution seen during the search.
 					if cmRepairLess(currentTimes.MT, bestMT) {
 						best = cmRepairCopyMultiSolution(current)
 						bestMT = currentTimes.MT
 					}
+
+					// IMPORTANT:
+					// Algorithm 2 line 13.
+					//
+					// Once one improving alternative is found for
+					// this stripe, move to the next stripe.
+					break
 				}
 			}
 		}
 
-		if time.Since(started) >= options.MaxComputationTime {
-			break
-		}
-
+		// ---------------------------------------------------------------------
+		// At least one greedy improvement occurred during this optimization.
+		//
+		// Start another optimization from the new solution.
+		// Since an improvement occurred, count has already been reset to 0.
+		// ---------------------------------------------------------------------
 		if improvedInPass {
 			continue
 		}
 
-		// Local optimum: tolerate one random non-improving/worse single-stripe
-		// solution and continue searching from the new state.
+		// ---------------------------------------------------------------------
+		// flag == 0:
+		//
+		// We traversed all stripes and their valid single-stripe solutions
+		// without finding nMT < MT.
+		//
+		// Therefore, current is a local optimum with respect to the RTP
+		// single-stripe neighborhood.
+		//
+		// This is where Algorithm 2 checks its two stopping conditions.
+		// ---------------------------------------------------------------------
+
+		if consecutiveTolerated >= options.W ||
+			time.Since(started) > options.MaxComputationTime {
+
+			// Return mSolu, not necessarily current Solu.
+			break
+		}
+
+		// ---------------------------------------------------------------------
+		// Tolerate one worse/non-improving solution.
+		//
+		// The paper randomly selects:
+		//      a stripe Sx
+		//      and a valid alternative solution solu'x
+		//
+		// such that the resulting MT is not smaller than the old MT.
+		//
+		// Then:
+		//      Solu  = nSolu
+		//      count = count + 1
+		//
+		// The next loop iteration performs another complete greedy search
+		// FROM THIS NEW STATE.
+		// ---------------------------------------------------------------------
+
 		type toleratedMove struct {
 			TaskIndex int
 			Solution  cmRepairSolution
@@ -1138,10 +1214,18 @@ func cmRepairRunRTP(
 		moves := make([]toleratedMove, 0)
 
 		for taskIndex, task := range tasks {
-			candidates := cmRepairAllCandidatesForTask(task, topology)
+
+			candidates := cmRepairAllCandidatesForTask(
+				task,
+				topology,
+			)
 
 			for _, candidate := range candidates {
-				if cmRepairSameSolution(candidate, current[taskIndex]) {
+
+				if cmRepairSameSolution(
+					candidate,
+					current[taskIndex],
+				) {
 					continue
 				}
 
@@ -1154,34 +1238,68 @@ func cmRepairRunRTP(
 					topology,
 				)
 
-				// The paper's tolerated move is not better than the old Solu.
-				if !cmRepairLess(newTimes.MT, currentTimes.MT) {
-					moves = append(moves, toleratedMove{
-						TaskIndex: taskIndex,
-						Solution:  cmRepairCopySolution(candidate),
-						MT:        newTimes.MT,
-					})
+				// RTP's tolerated move is not an improvement:
+				//
+				//     nMT >= MT
+				//
+				// Equality is allowed because the paper states that the
+				// new MT "must not be less than" the previous MT.
+				if !cmRepairLess(
+					newTimes.MT,
+					currentTimes.MT,
+				) {
+					moves = append(
+						moves,
+						toleratedMove{
+							TaskIndex: taskIndex,
+							Solution: cmRepairCopySolution(
+								candidate,
+							),
+							MT: newTimes.MT,
+						},
+					)
 				}
 			}
 		}
 
+		// No alternative single-stripe solution exists.
+		// Nothing else can be explored.
 		if len(moves) == 0 {
 			break
 		}
 
+		// Randomly tolerate one valid non-improving/worse solution.
 		move := moves[rng.Intn(len(moves))]
-		current[move.TaskIndex] = cmRepairCopySolution(move.Solution)
-		currentTimes = cmRepairEvaluateMultiSolution(tasks, current, topology)
+
+		current[move.TaskIndex] =
+			cmRepairCopySolution(move.Solution)
+
+		currentTimes = cmRepairEvaluateMultiSolution(
+			tasks,
+			current,
+			topology,
+		)
+
 		consecutiveTolerated++
 
-		// Normally a tolerated move cannot improve bestMT, but keeping this
-		// guard makes the invariant explicit and safe against floating error.
+		// Normally this cannot improve bestMT because the tolerated move was
+		// selected with nMT >= MT. Keep the guard for numerical robustness.
 		if cmRepairLess(currentTimes.MT, bestMT) {
 			best = cmRepairCopyMultiSolution(current)
 			bestMT = currentTimes.MT
 		}
+
+		// IMPORTANT:
+		//
+		// Do NOT stop here when consecutiveTolerated becomes W.
+		//
+		// The paper allows this newly tolerated solution to undergo another
+		// complete greedy optimization. Only if THAT search also fails does
+		// the next flag == 0 branch observe count >= W and terminate.
 	}
 
+	// Algorithm 2 returns mSolu:
+	// the minimum-MT multi-stripe solution encountered during the search.
 	return best
 }
 

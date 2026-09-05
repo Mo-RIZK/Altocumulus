@@ -733,7 +733,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 7 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 4: threshold based --- 6:maxmin --- 7:sauff2
+			sim := 6 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 6: bandwidth in model --- 7:badnwdith in and out model --- 8:selectiveEC --- 9:cmrepair
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
@@ -1415,7 +1415,7 @@ func (c *Cluster) alertsHandler() {
 					}
 				}
 			}
-			/*if (sim == 6) && fff {
+			if (sim == 6) && fff {
 
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
@@ -1433,7 +1433,7 @@ func (c *Cluster) alertsHandler() {
 					// Make a copy so append does not modify distance.otherPeers.
 					allpeers := append([]peer.ID(nil), distance.otherPeers...)
 					allpeers = append(allpeers, c.id)
-					allpeers = sortedUniquePeers(allpeers)
+					allpeers = ascOldSortedUniquePeers(allpeers)
 
 					fmt.Println("DEBUG topology peer IDs:")
 					for p, n := range topology.NodesByPeer {
@@ -1452,7 +1452,7 @@ func (c *Cluster) alertsHandler() {
 					sstt := time.Now()
 
 					assignments, allocsOfRepairs :=
-						ScheduleGlobalMaxMinIncomingOnly_PrecomputedRelocationFast(
+						ScheduleASCLEPIUSOldIncomingOnly(
 							alrt.Peer,
 							CIDsSim4,
 							allpeers,
@@ -1472,7 +1472,7 @@ func (c *Cluster) alertsHandler() {
 						)
 
 					fmt.Printf(
-						"RESOURCE-AWARE MAX-MIN assigned %d shards\n",
+						"ASCLEPIUS OLD INCOMING-ONLY assigned %d shards\n",
 						len(allocsOfRepairs),
 					)
 
@@ -1500,61 +1500,52 @@ func (c *Cluster) alertsHandler() {
 					/////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 					for _, alloc := range allocsOfRepairs {
+
 						shard := alloc.Shard
 
 						if shard.Metadata == nil {
 							shard.Metadata = make(map[string]string)
 						}
 
-						shard.Metadata["Strategy"] = "MAXMINNEW"
+						shard.Metadata["Strategy"] = "ASCLEPIUS"
 
-						// The repair is first executed on alloc.RepairPeer.
+						// Final placement of the repaired shard.
 						//
-						// When Relocated=true, the reconstructed shard must then be sent
-						// to alloc.FinalPeer.
-						if alloc.Relocated {
-							shard.Metadata["allocs"] = alloc.FinalPeer.String()
-						} else {
-							shard.Metadata["allocs"] = ""
-						}
+						// If RepairPeer == FinalPeer, no relocation is needed.
+						// Otherwise the shard is reconstructed on RepairPeer and then
+						// stored on FinalPeer.
+						shard.Metadata["allocs"] = alloc.FinalPeer.String()
 
-						// Store conventional EC helpers together with their REAL global
-						// shard numbers.
+						// Store the actual duplicated/common chunk CIDs selected for
+						// this repair peer.
+						//
+						// These chunks do not need conventional EC reconstruction.
 						//
 						// Format:
-						//     peerID:globalShardNumber,peerID:globalShardNumber,...
-						//
-						// The repair model will later calculate:
-						//     rsIndex := (globalShardNumber - 1) % (n + k)
-						indexedHelpers := make([]string, 0, len(alloc.SelectedHelperShards))
+						//     cid1,cid2,cid3,...
+						if len(alloc.CommonChunks) > 0 {
+							commonChunks := append([]string(nil), alloc.CommonChunks...)
 
-						for _, selected := range alloc.SelectedHelperShards {
-							if selected.Peer == "" || selected.GlobalShardNumber <= 0 {
-								continue
-							}
+							sort.Strings(commonChunks)
 
-							indexedHelpers = append(
-								indexedHelpers,
-								fmt.Sprintf(
-									"%s:%d",
-									selected.Peer.String(),
-									selected.GlobalShardNumber,
-								),
+							shard.Metadata["common"] = strings.Join(
+								commonChunks,
+								",",
 							)
+						} else {
+							shard.Metadata["common"] = ""
 						}
 
-						sort.Strings(indexedHelpers)
-						shard.Metadata["helpers"] = strings.Join(indexedHelpers, ",")
-
 						fmt.Printf(
-							"ENQUEUE shard=%s repairPeer=%s finalPeer=%s relocated=%v helpers=%s\n",
+							"ENQUEUE shard=%s repairPeer=%s finalPeer=%s relocated=%v common=%s\n",
 							shard.Name,
 							alloc.RepairPeer.String(),
 							alloc.FinalPeer.String(),
 							alloc.Relocated,
-							shard.Metadata["helpers"],
+							shard.Metadata["common"],
 						)
 
+						// Reconstruction is executed on RepairPeer.
 						if alloc.RepairPeer == c.id {
 							c.Enqueue(c.ctx, shard)
 							continue
@@ -1580,9 +1571,8 @@ func (c *Cluster) alertsHandler() {
 							)
 						}
 					}
-
 				}
-			}*/
+			}
 			if (sim == 7) && fff {
 				SortCIDs(CIDsSim4)
 				if distance.isClosest(CIDsSim4[0].Cid) {
