@@ -1507,7 +1507,7 @@ func (c *Cluster) alertsHandler() {
 							shard.Metadata = make(map[string]string)
 						}
 
-						shard.Metadata["Strategy"] = "ASCLEPIUS"
+						shard.Metadata["Strategy"] = "Asc_old"
 
 						// Final placement of the repaired shard.
 						//
