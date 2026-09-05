@@ -1,18 +1,32 @@
 package ipfscluster
 
-// ASCLEPIUS paper-era scheduler.
-// This file intentionally models only incoming/download bandwidth.
-// All private identifiers are prefixed with ascOld to avoid collisions with
-// the current multi-resource ASCLEPIUS implementation in the same package.
+// ASCLEPIUS paper-era / HotStorage scheduler.
+//
+// This version intentionally models ONLY the incoming/download side of the
+// selected repair peer. It does not model relocation, final placement,
+// destination bandwidth, upload bandwidth, disk bandwidth, or free space.
+//
+// For each failed shard and candidate repair peer:
+//   - a chunk already present on the repair peer costs 0 incoming chunks;
+//   - a reusable duplicate available on another peer costs 1 incoming chunk;
+//   - a missing chunk that must be reconstructed costs n incoming chunks.
+//
+// Global Max-Min then schedules failed shards using only the accumulated
+// incoming load and incoming bandwidth of candidate repair peers.
+//
+// The scheduler returns the selected RepairPeer and the common/reusable chunk
+// CIDs as []string so the existing repair executor can populate
+// Metadata["common"].
 
 import (
 	"fmt"
-	"github.com/ipfs-cluster/ipfs-cluster/api"
-	"github.com/libp2p/go-libp2p/core/peer"
 	"math"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/ipfs-cluster/ipfs-cluster/api"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 func ascOldCleanCIDString(c string) string {
@@ -39,35 +53,13 @@ func ascOldTopologyNodeIn(t *NetworkTopology, p peer.ID) uint64 {
 	if t == nil || t.NodesByPeer == nil {
 		return 0
 	}
+
 	n := t.NodesByPeer[p]
 	if n == nil {
 		return 0
 	}
+
 	return n.GlobalIn
-}
-
-type ASCOldIndexedChunkKind string
-
-type ASCOldIndexedChunkRepair struct {
-	Index int
-	CID   string
-	Kind  ASCOldIndexedChunkKind
-	Cost  int // local=0, direct=1, missing=n
-}
-
-type ASCOldIndexedRepairEstimate struct {
-	Shard      api.Pin
-	RepairPeer peer.ID
-
-	Timeline    []ASCOldIndexedChunkRepair
-	LoadByIndex map[int]int
-
-	LocalChunkCount   int
-	DirectChunkCount  int
-	MissingChunkCount int
-
-	ProcessingTime float64
-	FinishTime     float64
 }
 
 func ascOldSortedUniquePeers(peers []peer.ID) []peer.ID {
@@ -89,33 +81,16 @@ func ascOldSortedUniquePeers(peers []peer.ID) []peer.ID {
 	return out
 }
 
-func ascOldEstimateIncomingOnlyProcessingTime(
-
-	incomingChunkCount int,
-	repairPeer peer.ID,
-	topology *NetworkTopology,
-	chunkMB float64,
-
-) float64 {
-	in := ascOldTopologyNodeIn(topology, repairPeer)
-	if in == 0 {
-		return math.Inf(1)
-	}
-
-	return float64(incomingChunkCount) * chunkMB / float64(in)
-}
-
-////////////////////////////////////////////////////////////////////////
-
+// ASCOldIncomingOnlyShardIndex is a compact per-shard index used to test
+// whether a CID is already available locally on a candidate repair peer or is
+// reusable from another valid peer.
 type ASCOldIncomingOnlyShardIndex struct {
 	PeerCIDSet map[peer.ID]map[string]bool
 	CIDSources map[string][]peer.ID
 }
 
 func ascOldBuildIncomingOnlyShardIndex(
-
 	peerMatchedCIDs map[peer.ID][]string,
-
 ) ASCOldIncomingOnlyShardIndex {
 	peerCIDSet := make(map[peer.ID]map[string]bool)
 	cidSources := make(map[string][]peer.ID)
@@ -149,11 +124,9 @@ func ascOldBuildIncomingOnlyShardIndex(
 }
 
 func ascOldIncomingOnlyPeerHasCIDFast(
-
 	index ASCOldIncomingOnlyShardIndex,
 	p peer.ID,
 	cidStr string,
-
 ) bool {
 	if index.PeerCIDSet[p] == nil {
 		return false
@@ -163,12 +136,10 @@ func ascOldIncomingOnlyPeerHasCIDFast(
 }
 
 func ascOldIncomingOnlyHasValidSourceFast(
-
 	index ASCOldIncomingOnlyShardIndex,
 	cidStr string,
 	repairPeer peer.ID,
 	failedPeer peer.ID,
-
 ) bool {
 	for _, src := range index.CIDSources[cidStr] {
 		if src == failedPeer || src == repairPeer {
@@ -180,14 +151,29 @@ func ascOldIncomingOnlyHasValidSourceFast(
 	return false
 }
 
+// ascOldBuildIncomingOnlyCountsFast classifies every chunk of a failed shard
+// relative to one candidate repair peer.
+//
+// localCount:
+//
+//	chunk already exists on the repair peer -> 0 incoming chunks.
+//
+// directCount:
+//
+//	chunk is duplicated on another valid peer -> 1 incoming chunk.
+//
+// missingCount:
+//
+//	chunk is not reusable and must be reconstructed -> n incoming chunks.
+//
+// commonChunks contains all reusable CIDs (both local and remote duplicates)
+// as plain strings for the repair executor.
 func ascOldBuildIncomingOnlyCountsFast(
-
 	repairPeer peer.ID,
 	failedPeer peer.ID,
 	shardCIDs []string,
 	index ASCOldIncomingOnlyShardIndex,
 	n int,
-
 ) (int, int, int, int, []string) {
 	localCount := 0
 	directCount := 0
@@ -200,38 +186,45 @@ func ascOldBuildIncomingOnlyCountsFast(
 			continue
 		}
 
-		// Local duplicate on the repair peer.
+		// The repair peer already has this chunk locally.
 		if ascOldIncomingOnlyPeerHasCIDFast(index, repairPeer, c) {
 			localCount++
 			commonChunks = append(commonChunks, c)
 			continue
 		}
 
-		// Remote duplicate. The old scheduler only cares that a valid
-		// duplicate exists; we return only its CID as a string.
-		if ascOldIncomingOnlyHasValidSourceFast(index, c, repairPeer, failedPeer) {
+		// The same chunk is available from another valid peer.
+		if ascOldIncomingOnlyHasValidSourceFast(
+			index,
+			c,
+			repairPeer,
+			failedPeer,
+		) {
 			directCount++
 			commonChunks = append(commonChunks, c)
 			continue
 		}
 
+		// Otherwise this chunk must be reconstructed using n helper chunks.
 		missingCount++
 	}
 
 	incomingChunkCount := directCount + (missingCount * n)
 
-	return localCount, directCount, missingCount, incomingChunkCount, commonChunks
+	return localCount,
+		directCount,
+		missingCount,
+		incomingChunkCount,
+		commonChunks
 }
 
-type ASCOldIncomingOnlyRelocationEstimate struct {
-	Shard api.Pin
-
+// ASCOldIncomingOnlyEstimate is the output produced for one scheduled failed
+// shard. There is intentionally no FinalPeer/Relocated field: placement and
+// relocation are outside the old HotStorage scheduling model.
+type ASCOldIncomingOnlyEstimate struct {
+	Shard      api.Pin
 	RepairPeer peer.ID
-	FinalPeer  peer.ID
-	Relocated  bool
 
-	// Same shape as the new ASCLEPIUS result.
-	// The caller only needs CommonChunks[i].CID for Metadata["common"].
 	CommonChunks []string
 
 	LocalChunkCount   int
@@ -240,52 +233,55 @@ type ASCOldIncomingOnlyRelocationEstimate struct {
 
 	IncomingChunkCount int
 
-	RepairIncomingChunkCount     int
-	RelocationIncomingChunkCount int
-
+	// ProcessingTime is the repair time without any previously accumulated
+	// load on the repair peer.
 	ProcessingTime float64
-	FinishTime     float64
+
+	// FinishTime is the completion estimate used by Global Max-Min after
+	// including the repair peer's currently accumulated incoming load.
+	FinishTime float64
 }
 
-func ascOldPeerSetRelocationFast(peers []peer.ID) map[peer.ID]bool {
-	out := make(map[peer.ID]bool)
-	for _, p := range peers {
-		if p != "" {
-			out[p] = true
-		}
-	}
-	return out
-}
-
-func ascOldPeerIncomingTimeRelocationFast(
-
-	p peer.ID,
-	chunks int,
+// ascOldIncomingFinishTime returns the completion time on one candidate repair
+// peer using only its accumulated incoming chunk load and GlobalIn bandwidth.
+func ascOldIncomingFinishTime(
+	repairPeer peer.ID,
+	incomingChunks int,
+	currentIncomingLoad int,
 	topology *NetworkTopology,
 	chunkMB float64,
-
 ) float64 {
-	if chunks == 0 {
-		return 0
-	}
-
-	in := ascOldTopologyNodeIn(topology, p)
+	in := ascOldTopologyNodeIn(topology, repairPeer)
 	if in == 0 {
 		return math.Inf(1)
 	}
 
-	return float64(chunks) * chunkMB / float64(in)
+	totalChunks := currentIncomingLoad + incomingChunks
+	return float64(totalChunks) * chunkMB / float64(in)
 }
 
-func ascOldMax2RelocationFast(a, b float64) float64 {
-	if b > a {
-		return b
-	}
-	return a
+func ascOldIncomingProcessingTime(
+	repairPeer peer.ID,
+	incomingChunks int,
+	topology *NetworkTopology,
+	chunkMB float64,
+) float64 {
+	return ascOldIncomingFinishTime(
+		repairPeer,
+		incomingChunks,
+		0,
+		topology,
+		chunkMB,
+	)
 }
 
+// ScheduleASCLEPIUSOldIncomingOnly implements the paper-era ASCLEPIUS Global
+// Max-Min scheduler using only incoming/download bandwidth of repair peers.
+//
+// assignments is keyed by RepairPeer, not by a final placement destination.
+// estimates contains the same selected RepairPeer together with the common CID
+// strings needed by the repair executor.
 func ScheduleASCLEPIUSOldIncomingOnly(
-
 	failedPeer peer.ID,
 	failedShards []api.Pin,
 	candidatePeers []peer.ID,
@@ -294,14 +290,13 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 
 	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
 	getSimilarity func(api.Pin) (peer.ID, []string, map[peer.ID]int, map[peer.ID][]string),
-
-) (map[peer.ID][]api.Pin, []ASCOldIncomingOnlyRelocationEstimate) {
-	fmt.Println("[ASC-OLD] incoming-only Global Max-Min repair strategy with relocation")
+) (map[peer.ID][]api.Pin, []ASCOldIncomingOnlyEstimate) {
+	fmt.Println("[ASC-OLD] incoming-only Global Max-Min repair strategy")
 
 	totalStart := time.Now()
 
 	assignments := make(map[peer.ID][]api.Pin)
-	estimates := make([]ASCOldIncomingOnlyRelocationEstimate, 0)
+	estimates := make([]ASCOldIncomingOnlyEstimate, 0)
 
 	if len(failedShards) == 0 || len(candidatePeers) == 0 {
 		fmt.Printf("[ASC-OLD][TOTAL] exited early in %v\n", time.Since(totalStart))
@@ -311,13 +306,10 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 	candidatePeers = ascOldSortedUniquePeers(candidatePeers)
 
 	type ShardPrecompute struct {
-		Shard           api.Pin
-		ShardCIDs       []string
-		ShardSize       int
-		N               int
-		SameStripePeers map[peer.ID]bool
-		PeerMatchedCIDs map[peer.ID][]string
-		Index           ASCOldIncomingOnlyShardIndex
+		Shard     api.Pin
+		ShardCIDs []string
+		N         int
+		Index     ASCOldIncomingOnlyShardIndex
 	}
 
 	type CandidateCost struct {
@@ -337,39 +329,42 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 		shardKey := shard.Cid.String()
 
 		shardCIDs := ascOldCIDListFromPin(shard)
-		shardSize := len(shardCIDs)
-		if shardSize == 0 {
+		if len(shardCIDs) == 0 {
 			continue
 		}
 
-		_, sameStripePeers, n, shardLength := getSameStripe(shard)
-		if shardLength > 0 {
-			shardSize = shardLength
+		// The old scheduler only needs n from the stripe metadata.
+		_, _, n, _ := getSameStripe(shard)
+		if n <= 0 {
+			continue
 		}
 
 		_, _, _, peerMatchedCIDs := getSimilarity(shard)
 		index := ascOldBuildIncomingOnlyShardIndex(peerMatchedCIDs)
 
 		precomputed[shardKey] = ShardPrecompute{
-			Shard:           shard,
-			ShardCIDs:       shardCIDs,
-			ShardSize:       shardSize,
-			N:               n,
-			SameStripePeers: ascOldPeerSetRelocationFast(sameStripePeers),
-			PeerMatchedCIDs: peerMatchedCIDs,
-			Index:           index,
+			Shard:     shard,
+			ShardCIDs: shardCIDs,
+			N:         n,
+			Index:     index,
 		}
 	}
 
-	fmt.Printf("[ASC-OLD][PHASE] precompute similarities + indexes took: %v\n", time.Since(start))
+	fmt.Printf(
+		"[ASC-OLD][PHASE] precompute similarities + indexes took: %v\n",
+		time.Since(start),
+	)
 
-	unscheduled := make([]api.Pin, 0)
+	unscheduled := make([]api.Pin, 0, len(failedShards))
 	for _, shard := range failedShards {
 		if _, ok := precomputed[shard.Cid.String()]; ok {
 			unscheduled = append(unscheduled, shard)
 		}
 	}
 
+	// Accumulated incoming work assigned to every repair peer. The unit is
+	// "number of chunk transfers", because all chunks are assumed to have the
+	// same chunkMB size in this model.
 	peerIncomingLoad := make(map[peer.ID]int)
 	for _, p := range candidatePeers {
 		peerIncomingLoad[p] = 0
@@ -377,6 +372,7 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 
 	start = time.Now()
 
+	// Counts are independent of accumulated load, so compute them once.
 	candidateCosts := make(map[string]map[peer.ID]CandidateCost)
 
 	for _, shard := range unscheduled {
@@ -394,18 +390,21 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 				continue
 			}
 
-			localCount, directCount, missingCount, incomingCount, commonChunks :=
-				ascOldBuildIncomingOnlyCountsFast(
-					repairPeer,
-					failedPeer,
-					pc.ShardCIDs,
-					pc.Index,
-					pc.N,
-				)
-
-			processing := ascOldEstimateIncomingOnlyProcessingTime(
+			localCount,
+				directCount,
+				missingCount,
 				incomingCount,
+				commonChunks := ascOldBuildIncomingOnlyCountsFast(
 				repairPeer,
+				failedPeer,
+				pc.ShardCIDs,
+				pc.Index,
+				pc.N,
+			)
+
+			processing := ascOldIncomingProcessingTime(
+				repairPeer,
+				incomingCount,
 				topology,
 				chunkMB,
 			)
@@ -425,25 +424,29 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 		}
 	}
 
-	fmt.Printf("[ASC-OLD][PHASE] precompute candidate costs took: %v\n", time.Since(start))
+	fmt.Printf(
+		"[ASC-OLD][PHASE] precompute candidate costs took: %v\n",
+		time.Since(start),
+	)
 
 	start = time.Now()
 
+	// Global Max-Min:
+	// 1. For each unscheduled shard, find the repair peer with minimum current
+	//    completion time.
+	// 2. Among those shard minima, select the shard with the maximum minimum
+	//    completion time.
+	// 3. Commit it and increase only that repair peer's incoming load.
 	for len(unscheduled) > 0 {
 		type CandidateBest struct {
-			Shard api.Pin
-
+			Shard      api.Pin
 			RepairPeer peer.ID
-			FinalPeer  peer.ID
-			Relocated  bool
 
-			LocalChunkCount   int
-			DirectChunkCount  int
-			MissingChunkCount int
-			CommonChunks      []string
-
-			RepairIncomingChunkCount     int
-			RelocationIncomingChunkCount int
+			LocalChunkCount    int
+			DirectChunkCount   int
+			MissingChunkCount  int
+			IncomingChunkCount int
+			CommonChunks       []string
 
 			ProcessingTime float64
 			CompletionTime float64
@@ -453,56 +456,10 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 
 		for _, shard := range unscheduled {
 			shardKey := shard.Cid.String()
-			pc := precomputed[shardKey]
 
 			bestRepairPeer := peer.ID("")
-			bestFinalPeer := peer.ID("")
-			bestRelocated := false
-
-			bestProcessing := math.Inf(1)
 			bestCompletion := math.Inf(1)
-
-			bestLocal := 0
-			bestDirect := 0
-			bestMissing := 0
-			var bestCommonChunks []string
-			bestRepairIncoming := 0
-			bestRelocationIncoming := 0
-
-			bestDestPeer := peer.ID("")
-			bestDestTime := math.Inf(1)
-
-			for _, finalPeer := range candidatePeers {
-				if finalPeer == failedPeer {
-					continue
-				}
-
-				if ascOldTopologyNodeIn(topology, finalPeer) == 0 {
-					continue
-				}
-
-				if pc.SameStripePeers[finalPeer] {
-					continue
-				}
-
-				destTime := ascOldPeerIncomingTimeRelocationFast(
-					finalPeer,
-					peerIncomingLoad[finalPeer]+pc.ShardSize,
-					topology,
-					chunkMB,
-				)
-
-				if math.IsInf(destTime, 1) {
-					continue
-				}
-
-				if destTime < bestDestTime ||
-					(destTime == bestDestTime &&
-						(bestDestPeer == "" || finalPeer.String() < bestDestPeer.String())) {
-					bestDestPeer = finalPeer
-					bestDestTime = destTime
-				}
-			}
+			bestCost := CandidateCost{}
 
 			for _, repairPeer := range candidatePeers {
 				cost, ok := candidateCosts[shardKey][repairPeer]
@@ -510,87 +467,39 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 					continue
 				}
 
-				repairTime := ascOldPeerIncomingTimeRelocationFast(
+				completion := ascOldIncomingFinishTime(
 					repairPeer,
-					peerIncomingLoad[repairPeer]+cost.IncomingChunkCount,
+					cost.IncomingChunkCount,
+					peerIncomingLoad[repairPeer],
 					topology,
 					chunkMB,
 				)
 
-				if math.IsInf(repairTime, 1) {
+				if math.IsInf(completion, 1) {
 					continue
-				}
-
-				repairPeerHasSameStripeShard := pc.SameStripePeers[repairPeer]
-
-				var finalPeer peer.ID
-				relocated := false
-				relocationIncoming := 0
-				completion := math.Inf(1)
-
-				if !repairPeerHasSameStripeShard {
-					finalPeer = repairPeer
-					relocated = false
-					relocationIncoming = 0
-
-					// No CurrentGlobalMax here.
-					completion = repairTime
-				} else {
-					if bestDestPeer == "" {
-						continue
-					}
-
-					finalPeer = bestDestPeer
-					relocated = true
-					relocationIncoming = pc.ShardSize
-
-					// No CurrentGlobalMax here.
-					// Candidate time is the bottleneck between repair and relocation.
-					completion = ascOldMax2RelocationFast(
-						repairTime,
-						bestDestTime,
-					)
 				}
 
 				if completion < bestCompletion ||
 					(completion == bestCompletion &&
-						(bestRepairPeer == "" ||
-							repairPeer.String() < bestRepairPeer.String() ||
-							(repairPeer.String() == bestRepairPeer.String() &&
-								finalPeer.String() < bestFinalPeer.String()))) {
+						(bestRepairPeer == "" || repairPeer.String() < bestRepairPeer.String())) {
 					bestRepairPeer = repairPeer
-					bestFinalPeer = finalPeer
-					bestRelocated = relocated
-
-					bestProcessing = cost.ProcessingTime
 					bestCompletion = completion
-
-					bestLocal = cost.LocalChunkCount
-					bestDirect = cost.DirectChunkCount
-					bestMissing = cost.MissingChunkCount
-					bestCommonChunks = append([]string(nil), cost.CommonChunks...)
-					bestRepairIncoming = cost.IncomingChunkCount
-					bestRelocationIncoming = relocationIncoming
+					bestCost = cost
 				}
 			}
 
-			if bestRepairPeer != "" && bestFinalPeer != "" && !math.IsInf(bestCompletion, 1) {
+			if bestRepairPeer != "" && !math.IsInf(bestCompletion, 1) {
 				bestForShard[shardKey] = CandidateBest{
-					Shard: shard,
-
+					Shard:      shard,
 					RepairPeer: bestRepairPeer,
-					FinalPeer:  bestFinalPeer,
-					Relocated:  bestRelocated,
 
-					LocalChunkCount:   bestLocal,
-					DirectChunkCount:  bestDirect,
-					MissingChunkCount: bestMissing,
-					CommonChunks:      append([]string(nil), bestCommonChunks...),
+					LocalChunkCount:    bestCost.LocalChunkCount,
+					DirectChunkCount:   bestCost.DirectChunkCount,
+					MissingChunkCount:  bestCost.MissingChunkCount,
+					IncomingChunkCount: bestCost.IncomingChunkCount,
+					CommonChunks:       append([]string(nil), bestCost.CommonChunks...),
 
-					RepairIncomingChunkCount:     bestRepairIncoming,
-					RelocationIncomingChunkCount: bestRelocationIncoming,
-
-					ProcessingTime: bestProcessing,
+					ProcessingTime: bestCost.ProcessingTime,
 					CompletionTime: bestCompletion,
 				}
 			}
@@ -600,6 +509,8 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 			break
 		}
 
+		// Max-Min step: choose the shard whose best achievable completion time
+		// is the largest.
 		chosenIndex := -1
 		chosenCompletion := -1.0
 		chosenKey := ""
@@ -627,52 +538,42 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 		chosenShard := unscheduled[chosenIndex]
 		chosen := bestForShard[chosenShard.Cid.String()]
 
-		peerIncomingLoad[chosen.RepairPeer] += chosen.RepairIncomingChunkCount
+		// Commit ONLY incoming work on the selected repair peer.
+		peerIncomingLoad[chosen.RepairPeer] += chosen.IncomingChunkCount
 
-		if chosen.Relocated {
-			peerIncomingLoad[chosen.FinalPeer] += chosen.RelocationIncomingChunkCount
-		}
+		// The assignment is keyed by the repairing peer. There is no final
+		// placement/destination decision in this scheduler.
+		assignments[chosen.RepairPeer] = append(
+			assignments[chosen.RepairPeer],
+			chosenShard,
+		)
 
-		assignments[chosen.FinalPeer] = append(assignments[chosen.FinalPeer], chosenShard)
-
-		estimates = append(estimates, ASCOldIncomingOnlyRelocationEstimate{
+		estimates = append(estimates, ASCOldIncomingOnlyEstimate{
 			Shard:      chosenShard,
 			RepairPeer: chosen.RepairPeer,
 
-			FinalPeer: chosen.FinalPeer,
-			Relocated: chosen.Relocated,
-
 			CommonChunks: append([]string(nil), chosen.CommonChunks...),
 
-			LocalChunkCount:   chosen.LocalChunkCount,
-			DirectChunkCount:  chosen.DirectChunkCount,
-			MissingChunkCount: chosen.MissingChunkCount,
-
-			IncomingChunkCount: chosen.RepairIncomingChunkCount,
-
-			RepairIncomingChunkCount:     chosen.RepairIncomingChunkCount,
-			RelocationIncomingChunkCount: chosen.RelocationIncomingChunkCount,
+			LocalChunkCount:    chosen.LocalChunkCount,
+			DirectChunkCount:   chosen.DirectChunkCount,
+			MissingChunkCount:  chosen.MissingChunkCount,
+			IncomingChunkCount: chosen.IncomingChunkCount,
 
 			ProcessingTime: chosen.ProcessingTime,
 			FinishTime:     chosen.CompletionTime,
 		})
 
-		commonCIDs := append([]string(nil), chosen.CommonChunks...)
-
 		fmt.Printf(
-			"[ASC-OLD] assigned shard=%s repairPeer=%s finalPeer=%s relocated=%v processing=%f finish=%f local=%d direct=%d missing=%d repairIncoming=%d relocationIncoming=%d common=%s\n",
+			"[ASC-OLD] assigned shard=%s repairPeer=%s processing=%f finish=%f local=%d direct=%d missing=%d incoming=%d common=%s\n",
 			chosenShard.Name,
 			chosen.RepairPeer.String(),
-			chosen.FinalPeer.String(),
-			chosen.Relocated,
 			chosen.ProcessingTime,
 			chosen.CompletionTime,
 			chosen.LocalChunkCount,
 			chosen.DirectChunkCount,
 			chosen.MissingChunkCount,
-			chosen.RepairIncomingChunkCount,
-			chosen.RelocationIncomingChunkCount,
-			strings.Join(commonCIDs, ","),
+			chosen.IncomingChunkCount,
+			strings.Join(chosen.CommonChunks, ","),
 		)
 
 		unscheduled = append(
@@ -681,8 +582,14 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 		)
 	}
 
-	fmt.Printf("[ASC-OLD][PHASE] scheduling loop took: %v\n", time.Since(start))
-	fmt.Printf("[ASC-OLD][TOTAL] ScheduleASCLEPIUSOldIncomingOnly WITHOUT CURRENT GLOBAL MAX took: %v\n", time.Since(totalStart))
+	fmt.Printf(
+		"[ASC-OLD][PHASE] scheduling loop took: %v\n",
+		time.Since(start),
+	)
+	fmt.Printf(
+		"[ASC-OLD][TOTAL] ScheduleASCLEPIUSOldIncomingOnly took: %v\n",
+		time.Since(totalStart),
+	)
 
 	return assignments, estimates
 }

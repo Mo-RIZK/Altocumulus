@@ -1514,7 +1514,6 @@ func (c *Cluster) alertsHandler() {
 						// If RepairPeer == FinalPeer, no relocation is needed.
 						// Otherwise the shard is reconstructed on RepairPeer and then
 						// stored on FinalPeer.
-						shard.Metadata["allocs"] = alloc.FinalPeer.String()
 
 						// Store the actual duplicated/common chunk CIDs selected for
 						// this repair peer.
@@ -1537,11 +1536,9 @@ func (c *Cluster) alertsHandler() {
 						}
 
 						fmt.Printf(
-							"ENQUEUE shard=%s repairPeer=%s finalPeer=%s relocated=%v common=%s\n",
+							"ENQUEUE shard=%s repairPeer=%s common=%s\n",
 							shard.Name,
 							alloc.RepairPeer.String(),
-							alloc.FinalPeer.String(),
-							alloc.Relocated,
 							shard.Metadata["common"],
 						)
 
