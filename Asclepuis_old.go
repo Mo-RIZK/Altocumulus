@@ -49,17 +49,21 @@ func ascOldCIDListFromPin(pin api.Pin) []string {
 	return out
 }
 
-func ascOldTopologyNodeIn(t *NetworkTopology, p peer.ID) uint64 {
-	if t == nil || t.NodesByPeer == nil {
+func ascOldValidNode(topology *NetworkTopology, p peer.ID) bool {
+	return topology != nil &&
+		topology.NodesByPeer != nil &&
+		topology.NodesByPeer[p] != nil
+}
+
+// NetworkTopology stores bandwidth in Mbit/s. The scheduler uses MB/s.
+// This is intentionally the same peer-to-topology lookup used by the newer
+// ASCLEPIUS scheduler.
+func ascOldInMBps(topology *NetworkTopology, p peer.ID) float64 {
+	if !ascOldValidNode(topology, p) {
 		return 0
 	}
 
-	n := t.NodesByPeer[p]
-	if n == nil {
-		return 0
-	}
-
-	return n.GlobalIn
+	return float64(topology.NodesByPeer[p].GlobalIn) / 8.0
 }
 
 func ascOldSortedUniquePeers(peers []peer.ID) []peer.ID {
@@ -243,21 +247,21 @@ type ASCOldIncomingOnlyEstimate struct {
 }
 
 // ascOldIncomingFinishTime returns the completion time on one candidate repair
-// peer using only its accumulated incoming chunk load and GlobalIn bandwidth.
+// peer using only its accumulated incoming MB load and GlobalIn bandwidth.
 func ascOldIncomingFinishTime(
 	repairPeer peer.ID,
 	incomingChunks int,
-	currentIncomingLoad int,
+	currentIncomingLoadMB float64,
 	topology *NetworkTopology,
 	chunkMB float64,
 ) float64 {
-	in := ascOldTopologyNodeIn(topology, repairPeer)
-	if in == 0 {
+	inMBps := ascOldInMBps(topology, repairPeer)
+	if inMBps <= 0 {
 		return math.Inf(1)
 	}
 
-	totalChunks := currentIncomingLoad + incomingChunks
-	return float64(totalChunks) * chunkMB / float64(in)
+	incomingMB := float64(incomingChunks) * chunkMB
+	return (currentIncomingLoadMB + incomingMB) / inMBps
 }
 
 func ascOldIncomingProcessingTime(
@@ -269,7 +273,7 @@ func ascOldIncomingProcessingTime(
 	return ascOldIncomingFinishTime(
 		repairPeer,
 		incomingChunks,
-		0,
+		0.0,
 		topology,
 		chunkMB,
 	)
@@ -304,6 +308,34 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 	}
 
 	candidatePeers = ascOldSortedUniquePeers(candidatePeers)
+
+	if topology == nil {
+		fmt.Printf("[ASC-OLD][TOTAL] nil network topology\n")
+		return assignments, estimates
+	}
+
+	if chunkMB <= 0 {
+		fmt.Printf("[ASC-OLD][TOTAL] invalid chunkMB=%f\n", chunkMB)
+		return assignments, estimates
+	}
+
+	// Use exactly the same peer-to-topology validity convention as the newer
+	// ASCLEPIUS scheduler: a candidate must exist in topology.NodesByPeer.
+	filteredPeers := make([]peer.ID, 0, len(candidatePeers))
+	for _, p := range candidatePeers {
+		if p == failedPeer ||
+			!ascOldValidNode(topology, p) ||
+			ascOldInMBps(topology, p) <= 0 {
+			continue
+		}
+		filteredPeers = append(filteredPeers, p)
+	}
+	candidatePeers = filteredPeers
+
+	if len(candidatePeers) == 0 {
+		fmt.Printf("[ASC-OLD][TOTAL] no valid candidate repair peers\n")
+		return assignments, estimates
+	}
 
 	type ShardPrecompute struct {
 		Shard     api.Pin
@@ -362,12 +394,12 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 		}
 	}
 
-	// Accumulated incoming work assigned to every repair peer. The unit is
-	// "number of chunk transfers", because all chunks are assumed to have the
-	// same chunkMB size in this model.
-	peerIncomingLoad := make(map[peer.ID]int)
+	// Accumulated incoming traffic assigned to every repair peer, in MB.
+	// This mirrors the newer ASCLEPIUS DownloadMB load representation while
+	// still modeling ONLY the repair peer's incoming side.
+	peerIncomingLoadMB := make(map[peer.ID]float64)
 	for _, p := range candidatePeers {
-		peerIncomingLoad[p] = 0
+		peerIncomingLoadMB[p] = 0
 	}
 
 	start = time.Now()
@@ -383,10 +415,6 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 
 		for _, repairPeer := range candidatePeers {
 			if repairPeer == failedPeer {
-				continue
-			}
-
-			if ascOldTopologyNodeIn(topology, repairPeer) == 0 {
 				continue
 			}
 
@@ -470,7 +498,7 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 				completion := ascOldIncomingFinishTime(
 					repairPeer,
 					cost.IncomingChunkCount,
-					peerIncomingLoad[repairPeer],
+					peerIncomingLoadMB[repairPeer],
 					topology,
 					chunkMB,
 				)
@@ -539,7 +567,8 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 		chosen := bestForShard[chosenShard.Cid.String()]
 
 		// Commit ONLY incoming work on the selected repair peer.
-		peerIncomingLoad[chosen.RepairPeer] += chosen.IncomingChunkCount
+		peerIncomingLoadMB[chosen.RepairPeer] +=
+			float64(chosen.IncomingChunkCount) * chunkMB
 
 		// The assignment is keyed by the repairing peer. There is no final
 		// placement/destination decision in this scheduler.
