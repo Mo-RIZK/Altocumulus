@@ -733,7 +733,7 @@ func (c *Cluster) alertsHandler() {
 				return
 			}
 			fff := false
-			sim := 8 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 6: bandwidth in model --- 7:badnwdith in and out model --- 8:selectiveEC --- 9:cmrepair
+			sim := 9 // 0: balanced --- 1: sim-peer --- 2: sim-global --- 3: xor --- 6: bandwidth in model --- 7:badnwdith in and out model --- 8:selectiveEC --- 9:cmrepair
 			CIDsSim4 := make([]api.Pin, 0)
 			enn := time.Now()
 			bet := enn.Sub(stt)
@@ -2154,27 +2154,27 @@ func (c *Cluster) alertsHandler() {
 
 					sstt := time.Now()
 
-					/*schedule, err :=
-					ScheduleCMRepairCTP(
-						alrt.Peer, // failed peer
-						CIDsSim4,  // failed shards
-						allpeers,  // candidate live peers
-						topology,  // heterogeneous network topology
-						0.25,      // chunk size in MB
-						func(pin api.Pin) (
-							[]api.Pin,
-							[]peer.ID,
-							int,
-							int,
-						) {
+					schedule, err :=
+						ScheduleCMRepairCTP(
+							alrt.Peer, // failed peer
+							CIDsSim4,  // failed shards
+							allpeers,  // candidate live peers
+							topology,  // heterogeneous network topology
+							0.25,      // chunk size in MB
+							func(pin api.Pin) (
+								[]api.Pin,
+								[]peer.ID,
+								int,
+								int,
+							) {
 
-							return c.get_shards_same_stripe(
-								pin,
-							)
-						},
-					)*/
+								return c.get_shards_same_stripe(
+									pin,
+								)
+							},
+						)
 
-					options :=
+					/*options :=
 						DefaultCMRepairRTPOptions()
 
 					// -------------------------------------------------------------
@@ -2200,7 +2200,7 @@ func (c *Cluster) alertsHandler() {
 								)
 							},
 							options,
-						)
+						)*/
 
 					if err != nil {
 
