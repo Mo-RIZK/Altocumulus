@@ -812,7 +812,17 @@ func (c *Cluster) alertsHandler() {
 								}
 
 								//pin.Metadata["allocs"] = strings.Join(allocs, ",")
-								c.Enqueue(c.ctx, pin)
+								//c.Enqueue(c.ctx, pin)
+								var out bool
+								err := c.Enqueue(c.ctx, pin, &out)
+
+								if err != nil {
+									logger.Errorf(
+										"failed to enqueue shard %s locally: %s",
+										pin.Cid.String(),
+										err,
+									)
+								}
 							}
 						}
 						if sim == 1 {
@@ -843,7 +853,16 @@ func (c *Cluster) alertsHandler() {
 										}
 									}*/
 									if ppp == c.id {
-										c.Enqueue(c.ctx, pin)
+										var out bool
+										err := c.Enqueue(c.ctx, pin, &out)
+
+										if err != nil {
+											logger.Errorf(
+												"failed to enqueue shard %s locally: %s",
+												pin.Cid.String(),
+												err,
+											)
+										}
 									} else {
 										var out bool
 										c.rpcClient.CallContext(
@@ -911,7 +930,16 @@ func (c *Cluster) alertsHandler() {
 										}
 									}*/
 									if ppp == c.id {
-										c.Enqueue(c.ctx, pin)
+										var out bool
+										err := c.Enqueue(c.ctx, pin, &out)
+
+										if err != nil {
+											logger.Errorf(
+												"failed to enqueue shard %s locally: %s",
+												pin.Cid.String(),
+												err,
+											)
+										}
 									} else {
 										var out bool
 										c.rpcClient.CallContext(
@@ -975,7 +1003,16 @@ func (c *Cluster) alertsHandler() {
 								}
 
 								pin.Metadata["allocs"] = strings.Join(allocs, ",")
-								c.Enqueue(c.ctx, pin)
+								var out bool
+								err := c.Enqueue(c.ctx, pin, &out)
+
+								if err != nil {
+									logger.Errorf(
+										"failed to enqueue shard %s locally: %s",
+										pin.Cid.String(),
+										err,
+									)
+								}
 							}
 						}
 						if sim == 5 || sim == 6 || sim == 7 || sim == 8 || sim == 9 {
@@ -1399,7 +1436,16 @@ func (c *Cluster) alertsHandler() {
 						for _, pin := range pins {
 
 							if peerID == c.id {
-								c.Enqueue(c.ctx, pin)
+								var out bool
+								err := c.Enqueue(c.ctx, pin, &out)
+
+								if err != nil {
+									logger.Errorf(
+										"failed to enqueue shard %s locally: %s",
+										pin.Cid.String(),
+										err,
+									)
+								}
 							} else {
 								var out bool
 								c.rpcClient.CallContext(
@@ -1544,7 +1590,16 @@ func (c *Cluster) alertsHandler() {
 
 						// Reconstruction is executed on RepairPeer.
 						if alloc.RepairPeer == c.id {
-							c.Enqueue(c.ctx, shard)
+							var out bool
+							err := c.Enqueue(c.ctx, shard, &out)
+
+							if err != nil {
+								logger.Errorf(
+									"failed to enqueue shard %s locally: %s",
+									shard.Cid.String(),
+									err,
+								)
+							}
 							continue
 						}
 
@@ -1649,7 +1704,16 @@ func (c *Cluster) alertsHandler() {
 						shard.Metadata["allocs"] = decision.FinalPeer.String()
 
 						if decision.RepairPeer == c.id {
-							c.Enqueue(c.ctx, shard)
+							var out bool
+							err := c.Enqueue(c.ctx, shard, &out)
+
+							if err != nil {
+								logger.Errorf(
+									"failed to enqueue shard %s locally: %s",
+									shard.Cid.String(),
+									err,
+								)
+							}
 							continue
 						}
 
@@ -1984,16 +2048,12 @@ func (c *Cluster) alertsHandler() {
 							if decision.RepairPeer ==
 								c.id {
 
-								err :=
-									c.Enqueue(
-										c.ctx,
-										shard,
-									)
+								var out bool
+								err := c.Enqueue(c.ctx, shard, &out)
 
 								if err != nil {
-
 									logger.Errorf(
-										"SELECTIVE_EC failed to enqueue shard %s locally: %s",
+										"failed to enqueue shard %s locally: %s",
 										shard.Cid.String(),
 										err,
 									)
@@ -2345,16 +2405,12 @@ func (c *Cluster) alertsHandler() {
 						if decision.RepairPeer ==
 							c.id {
 
-							err :=
-								c.Enqueue(
-									c.ctx,
-									shard,
-								)
+							var out bool
+							err := c.Enqueue(c.ctx, shard, &out)
 
 							if err != nil {
-
 								logger.Errorf(
-									"CMREPAIR failed to enqueue shard %s locally: %s",
+									"failed to enqueue shard %s locally: %s",
 									shard.Cid.String(),
 									err,
 								)
@@ -4637,11 +4693,26 @@ func (c *Cluster) similarities_new(ctx context.Context, pin api.Pin) (peer.ID, [
 	return bestPeer, CIDMatches
 }
 
-func (c *Cluster) Enqueue(ctx context.Context, cid api.Pin) error {
+/*func (c *Cluster) Enqueue(ctx context.Context, cid api.Pin) error {
 	err := c.RepairJobs.Enqueue(ctx, cid)
 	if err != nil {
 		return err
 	}
+	return nil
+}*/
+
+func (c *Cluster) Enqueue(
+	ctx context.Context,
+	pin api.Pin,
+	out *bool,
+) error {
+	err := c.RepairJobs.Enqueue(ctx, pin)
+	if err != nil {
+		*out = false
+		return err
+	}
+
+	*out = true
 	return nil
 }
 
@@ -5000,7 +5071,16 @@ func executeAssignments(
 	for peerID, pins := range assignments {
 		for _, pin := range pins {
 			if peerID == c.id {
-				c.Enqueue(c.ctx, pin)
+				var out bool
+				err := c.Enqueue(c.ctx, pin, &out)
+
+				if err != nil {
+					logger.Errorf(
+						"failed to enqueue shard %s locally: %s",
+						pin.Cid.String(),
+						err,
+					)
+				}
 			} else {
 				var out bool
 				c.rpcClient.CallContext(
