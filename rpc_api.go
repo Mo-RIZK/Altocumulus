@@ -8,7 +8,6 @@ import (
 	"github.com/ipfs-cluster/ipfs-cluster/state"
 	"github.com/ipfs-cluster/ipfs-cluster/version"
 	"github.com/ipfs/go-cid"
-	"os"
 	"strings"
 
 	rpc "github.com/libp2p/go-libp2p-gorpc"
@@ -198,9 +197,17 @@ func (rpcapi *ClusterRPCAPI) Unpin(ctx context.Context, in api.Pin, out *api.Pin
 }
 
 // Enqueue exposes Cluster.Enqueue over RPC
-func (rpcapi *ClusterRPCAPI) Enqueue(ctx context.Context, in api.Pin, out *struct{}) error {
+/*func (rpcapi *ClusterRPCAPI) Enqueue(ctx context.Context, in api.Pin, out *struct{}) error {
 	fmt.Fprintf(os.Stdout, "HHHHHHHHHHOOOOOOOOOOOOO")
 	return rpcapi.c.Enqueue(ctx, in)
+}*/
+
+func (rpcapi *ClusterRPCAPI) Enqueue(
+	ctx context.Context,
+	in api.Pin,
+	out *bool,
+) error {
+	return rpcapi.c.Enqueue(ctx, in, out)
 }
 
 // Enqueue repair runs Cluster.Unpin().
