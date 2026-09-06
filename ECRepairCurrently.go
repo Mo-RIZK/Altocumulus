@@ -29,7 +29,7 @@ import (
 
 const (
 	DefaultMaxPinQueueSize       = 1000000
-	DefaultConcurrentPins        = 20
+	DefaultConcurrentPins        = 50
 	DefaultPriorityPinMaxAge     = 24 * time.Hour
 	DefaultPriorityPinMaxRetries = 5
 )
