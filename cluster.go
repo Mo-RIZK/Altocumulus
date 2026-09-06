@@ -2246,27 +2246,27 @@ func (c *Cluster) alertsHandler() {
 
 					sstt := time.Now()
 
-					schedule, err :=
-						ScheduleCMRepairCTP(
-							alrt.Peer, // failed peer
-							CIDsSim4,  // failed shards
-							allpeers,  // candidate live peers
-							topology,  // heterogeneous network topology
-							0.25,      // chunk size in MB
-							func(pin api.Pin) (
-								[]api.Pin,
-								[]peer.ID,
-								int,
-								int,
-							) {
+					/*schedule, err :=
+					ScheduleCMRepairCTP(
+						alrt.Peer, // failed peer
+						CIDsSim4,  // failed shards
+						allpeers,  // candidate live peers
+						topology,  // heterogeneous network topology
+						0.25,      // chunk size in MB
+						func(pin api.Pin) (
+							[]api.Pin,
+							[]peer.ID,
+							int,
+							int,
+						) {
 
-								return c.get_shards_same_stripe(
-									pin,
-								)
-							},
-						)
+							return c.get_shards_same_stripe(
+								pin,
+							)
+						},
+					)*/
 
-					/*options :=
+					options :=
 						DefaultCMRepairRTPOptions()
 
 					// -------------------------------------------------------------
@@ -2292,7 +2292,7 @@ func (c *Cluster) alertsHandler() {
 								)
 							},
 							options,
-						)*/
+						)
 
 					if err != nil {
 
