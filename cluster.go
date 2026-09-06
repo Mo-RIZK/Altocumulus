@@ -1689,23 +1689,45 @@ func (c *Cluster) alertsHandler() {
 
 					for _, decision := range repairDecisions {
 						shard := decision.Shard
+
 						first := 1
 						for _, com := range decision.CommonChunks {
 							if first == 1 {
 								shard.Metadata["common"] = com.CID
 								first++
 							} else {
-								shard.Metadata["common"] = shard.Metadata["common"] + "," + com.CID
+								shard.Metadata["common"] =
+									shard.Metadata["common"] + "," + com.CID
 							}
 						}
-						shard.Metadata["Strategy"] = ""
+
 						shard.Metadata["Strategy"] = "ASCLEPIUS"
-						shard.Metadata["allocs"] = ""
 						shard.Metadata["allocs"] = decision.FinalPeer.String()
 
+						fmt.Printf(
+							"ASC_ENQUEUE_ATTEMPT shard=%s repairPeer=%s local=%v\n",
+							shard.Cid.String(),
+							decision.RepairPeer.String(),
+							decision.RepairPeer == c.id,
+						)
+
+						// Local repair
 						if decision.RepairPeer == c.id {
 							var out bool
-							err := c.Enqueue(c.ctx, shard, &out)
+
+							err := c.Enqueue(
+								c.ctx,
+								shard,
+								&out,
+							)
+
+							fmt.Printf(
+								"ASC_LOCAL_RESULT shard=%s repairPeer=%s out=%v err=%v\n",
+								shard.Cid.String(),
+								decision.RepairPeer.String(),
+								out,
+								err,
+							)
 
 							if err != nil {
 								logger.Errorf(
@@ -1714,9 +1736,11 @@ func (c *Cluster) alertsHandler() {
 									err,
 								)
 							}
+
 							continue
 						}
 
+						// Remote repair
 						var out bool
 
 						err := c.rpcClient.CallContext(
@@ -1726,6 +1750,14 @@ func (c *Cluster) alertsHandler() {
 							"Enqueue",
 							&shard,
 							&out,
+						)
+
+						fmt.Printf(
+							"ASC_RPC_RESULT shard=%s repairPeer=%s out=%v err=%v\n",
+							shard.Cid.String(),
+							decision.RepairPeer.String(),
+							out,
+							err,
 						)
 
 						if err != nil {
@@ -4706,6 +4738,43 @@ func (c *Cluster) Enqueue(
 	pin api.Pin,
 	out *bool,
 ) error {
+
+	fmt.Printf(
+		"CLUSTER_ENQUEUE_RECEIVED shard=%s node=%s\n",
+		pin.Cid.String(),
+		c.id.String(),
+	)
+
+	err := c.RepairJobs.Enqueue(ctx, pin)
+	if err != nil {
+		*out = false
+
+		fmt.Printf(
+			"CLUSTER_ENQUEUE_FAILED shard=%s node=%s err=%v\n",
+			pin.Cid.String(),
+			c.id.String(),
+			err,
+		)
+
+		return err
+	}
+
+	*out = true
+
+	fmt.Printf(
+		"CLUSTER_ENQUEUE_OK shard=%s node=%s\n",
+		pin.Cid.String(),
+		c.id.String(),
+	)
+
+	return nil
+}
+
+/*func (c *Cluster) Enqueue(
+	ctx context.Context,
+	pin api.Pin,
+	out *bool,
+) error {
 	err := c.RepairJobs.Enqueue(ctx, pin)
 	if err != nil {
 		*out = false
@@ -4714,7 +4783,7 @@ func (c *Cluster) Enqueue(
 
 	*out = true
 	return nil
-}
+}*/
 
 func (c *Cluster) similarities_new1(ctx context.Context, pin api.Pin) (peer.ID, []string, map[peer.ID]int) {
 	fmt.Fprintf(os.Stdout, "stePPPPPPPPPPPPPPPPPPP 2222222222222\n")
