@@ -2238,8 +2238,8 @@ func ScheduleSelectiveECBatches(
 	}
 
 	batchSize :=
-		len(cleanPeers)
-	//50
+		//len(cleanPeers)
+		50
 
 	// used[i]:
 	//
