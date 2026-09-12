@@ -2246,35 +2246,8 @@ func (c *Cluster) alertsHandler() {
 
 					sstt := time.Now()
 
-					/*schedule, err :=
-					ScheduleCMRepairCTP(
-						alrt.Peer, // failed peer
-						CIDsSim4,  // failed shards
-						allpeers,  // candidate live peers
-						topology,  // heterogeneous network topology
-						0.25,      // chunk size in MB
-						func(pin api.Pin) (
-							[]api.Pin,
-							[]peer.ID,
-							int,
-							int,
-						) {
-
-							return c.get_shards_same_stripe(
-								pin,
-							)
-						},
-					)*/
-
-					options :=
-						DefaultCMRepairRTPOptions()
-
-					// -------------------------------------------------------------
-					// Run CMRepair-RTP scheduling.
-					// -------------------------------------------------------------
-
 					schedule, err :=
-						ScheduleCMRepairRTP(
+						ScheduleCMRepairCTP(
 							alrt.Peer, // failed peer
 							CIDsSim4,  // failed shards
 							allpeers,  // candidate live peers
@@ -2291,8 +2264,35 @@ func (c *Cluster) alertsHandler() {
 									pin,
 								)
 							},
-							options,
 						)
+
+					//options :=
+					//	DefaultCMRepairRTPOptions()
+
+					// -------------------------------------------------------------
+					// Run CMRepair-RTP scheduling.
+					// -------------------------------------------------------------
+
+					/*schedule, err :=
+					ScheduleCMRepairRTP(
+						alrt.Peer, // failed peer
+						CIDsSim4,  // failed shards
+						allpeers,  // candidate live peers
+						topology,  // heterogeneous network topology
+						0.25,      // chunk size in MB
+						func(pin api.Pin) (
+							[]api.Pin,
+							[]peer.ID,
+							int,
+							int,
+						) {
+
+							return c.get_shards_same_stripe(
+								pin,
+							)
+						},
+						options,
+					)*/
 
 					if err != nil {
 
@@ -2482,6 +2482,328 @@ func (c *Cluster) alertsHandler() {
 						"CMREPAIR ALL %d REPAIRS QUEUED\n",
 						len(schedule.Decisions),
 					)
+				}
+			}
+			if sim == 10 {
+				if (sim == 9) && fff {
+
+					SortCIDs(CIDsSim4)
+
+					if distance.isClosest(CIDsSim4[0].Cid) {
+
+						fmt.Println("I am the CMRepair responsible peer")
+
+						// -------------------------------------------------------------
+						// Build candidate live-peer list.
+						// -------------------------------------------------------------
+
+						allpeers := append(
+							[]peer.ID{},
+							distance.otherPeers...,
+						)
+
+						allpeers = append(
+							allpeers,
+							c.id,
+						)
+
+						allpeers =
+							cmRepairSortedUniquePeers(
+								allpeers,
+							)
+
+						fmt.Println("CMREPAIR candidate peer IDs:")
+
+						for _, p := range allpeers {
+
+							fmt.Printf(
+								"CMREPAIR candidate peer=%s\n",
+								p.String(),
+							)
+						}
+
+						// -------------------------------------------------------------
+						// Load network topology.
+						//
+						// CMRepair uses the topology to evaluate the transmission cost
+						// between helper peers and candidate repair peers.
+						//
+						// EffectiveBandwidth(src,dst) already accounts for:
+						//
+						//     source GlobalOut
+						//     destination GlobalIn
+						//     pairwise link bandwidth
+						// -------------------------------------------------------------
+
+						topology, err :=
+							LoadNetworkTopology(
+								"/root/pairwise_bandwidth_log.csv",
+							)
+
+						if err != nil {
+
+							logger.Warnf(
+								"CMREPAIR could not load topology: %s",
+								err,
+							)
+
+							continue
+						}
+
+						topology.PrintFull()
+
+						// -------------------------------------------------------------
+						// Run CMRepair scheduling.
+						//
+						// Choose ONE of the following:
+						//
+						//     ScheduleCMRepairCTP(...)
+						//
+						// or:
+						//
+						//     ScheduleCMRepairRTP(...)
+						//
+						// -------------------------------------------------------------
+
+						sstt := time.Now()
+
+						/*schedule, err :=
+						ScheduleCMRepairCTP(
+							alrt.Peer, // failed peer
+							CIDsSim4,  // failed shards
+							allpeers,  // candidate live peers
+							topology,  // heterogeneous network topology
+							0.25,      // chunk size in MB
+							func(pin api.Pin) (
+								[]api.Pin,
+								[]peer.ID,
+								int,
+								int,
+							) {
+
+								return c.get_shards_same_stripe(
+									pin,
+								)
+							},
+						)*/
+
+						options :=
+							DefaultCMRepairRTPOptions()
+
+						// -------------------------------------------------------------
+						// Run CMRepair-RTP scheduling.
+						// -------------------------------------------------------------
+
+						schedule, err :=
+							ScheduleCMRepairRTP(
+								alrt.Peer, // failed peer
+								CIDsSim4,  // failed shards
+								allpeers,  // candidate live peers
+								topology,  // heterogeneous network topology
+								0.25,      // chunk size in MB
+								func(pin api.Pin) (
+									[]api.Pin,
+									[]peer.ID,
+									int,
+									int,
+								) {
+
+									return c.get_shards_same_stripe(
+										pin,
+									)
+								},
+								options,
+							)
+
+						if err != nil {
+
+							logger.Errorf(
+								"CMREPAIR scheduling failed: %s",
+								err,
+							)
+
+							continue
+						}
+
+						fmt.Printf(
+							"CMREPAIR scheduling finished in %s | repairs=%d | MT=%f\n",
+							time.Since(sstt),
+							len(schedule.Decisions),
+							schedule.MT,
+						)
+
+						// -------------------------------------------------------------
+						// Launch ALL CMRepair-selected repairs.
+						//
+						// Unlike SelectiveEC:
+						//
+						//     NO batches
+						//     NO 30-second waiting
+						//     NO leftovers
+						//
+						// Every repair decision is submitted immediately.
+						// -------------------------------------------------------------
+
+						for _, decision := range schedule.Decisions {
+
+							shard :=
+								decision.Shard
+
+							if shard.Metadata == nil {
+
+								shard.Metadata =
+									make(
+										map[string]string,
+									)
+							}
+
+							// ---------------------------------------------------------
+							// CMRepair strategy.
+							// ---------------------------------------------------------
+
+							shard.Metadata["Strategy"] =
+								string(schedule.Algorithm)
+
+							shard.Metadata["common"] =
+								""
+
+							shard.Metadata["allmatches"] =
+								""
+
+							shard.Metadata["allocs"] =
+								""
+
+							// ---------------------------------------------------------
+							// Store the exact helper shards selected by CMRepair.
+							//
+							// helper_cids[i] corresponds exactly to
+							// helper_indexes[i].
+							// ---------------------------------------------------------
+
+							helperCIDs :=
+								make(
+									[]string,
+									0,
+									len(decision.Helpers),
+								)
+
+							helperIndexes :=
+								make(
+									[]string,
+									0,
+									len(decision.Helpers),
+								)
+
+							helperMetadataValid :=
+								true
+
+							for _, helper := range decision.Helpers {
+
+								if !helper.CID.Defined() {
+
+									logger.Errorf(
+										"CMREPAIR selected undefined helper CID for shard %s",
+										shard.Name,
+									)
+
+									helperMetadataValid =
+										false
+
+									break
+								}
+
+								helperCIDs =
+									append(
+										helperCIDs,
+										helper.CID.String(),
+									)
+
+								helperIndexes =
+									append(
+										helperIndexes,
+										strconv.Itoa(
+											helper.RSIndex,
+										),
+									)
+							}
+
+							if !helperMetadataValid {
+								continue
+							}
+
+							shard.Metadata["helper_cids"] =
+								strings.Join(
+									helperCIDs,
+									",",
+								)
+
+							shard.Metadata["helper_indexes"] =
+								strings.Join(
+									helperIndexes,
+									",",
+								)
+
+							fmt.Printf(
+								"CMREPAIR shard=%s repairPeer=%s helperCIDs=%s helperIndexes=%s\n",
+								shard.Name,
+								decision.RepairPeer.String(),
+								shard.Metadata["helper_cids"],
+								shard.Metadata["helper_indexes"],
+							)
+
+							// ---------------------------------------------------------
+							// Local repair.
+							// ---------------------------------------------------------
+
+							if decision.RepairPeer ==
+								c.id {
+
+								var out bool
+								err := c.Enqueue(c.ctx, shard, &out)
+
+								if err != nil {
+									logger.Errorf(
+										"failed to enqueue shard %s locally: %s",
+										shard.Cid.String(),
+										err,
+									)
+								}
+
+								continue
+							}
+
+							// ---------------------------------------------------------
+							// Remote repair.
+							// ---------------------------------------------------------
+
+							var out bool
+
+							err =
+								c.rpcClient.CallContext(
+									c.ctx,
+									decision.RepairPeer,
+									"Cluster",
+									"Enqueue",
+									&shard,
+									&out,
+								)
+
+							if err != nil {
+
+								logger.Errorf(
+									"CMREPAIR failed to enqueue shard %s on repair peer %s: %s",
+									shard.Cid.String(),
+									decision.RepairPeer.String(),
+									err,
+								)
+							}
+						}
+
+						fmt.Printf(
+							"CMREPAIR ALL %d REPAIRS QUEUED\n",
+							len(schedule.Decisions),
+						)
+					}
 				}
 			}
 
