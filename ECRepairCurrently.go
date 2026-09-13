@@ -2349,6 +2349,8 @@ func (spt *ECRepairS) repinUsingRSExactCl(
 	pin *api.Pin,
 ) (time.Duration, time.Duration, time.Duration) {
 
+	cidString := pin.Metadata["Cids"]
+	CIDs := strings.Split(cidString, ",")
 	start := time.Now()
 
 	var timedownloadchunks time.Duration
@@ -2728,154 +2730,169 @@ func (spt *ECRepairS) repinUsingRSExactCl(
 
 	for i := 0; i < times; i++ {
 
-		reconstructShards :=
-			make(
-				[][]byte,
-				or+par,
-			)
-
-		wg :=
-			new(
-				sync.WaitGroup,
-			)
-
-		wg.Add(
-			or,
-		)
-
-		downloadStart :=
-			time.Now()
-
-		for _, shard := range repairShards {
-
-			go func(
-				chunkIndex int,
-				helper pinwithmeta,
-			) {
-
-				defer wg.Done()
-
-				chunkStart :=
-					time.Now()
-
-				bytess :=
-					spt.getData(
-						ctx,
-						helper.cids[chunkIndex],
-					)
-
-				fmt.Printf(
-					"SELECTIVE_EC chunk=%d helperRSIndex=%d took=%s\n",
-					chunkIndex,
-					helper.index,
-					time.Since(chunkStart),
+		cc, _ := cid.Decode(CIDs[i])
+		exists, bad := spt.connector.BlockLocalHas(spt.ctx, cc)
+		if !exists || (bad != nil) {
+			reconstructShards :=
+				make(
+					[][]byte,
+					or+par,
 				)
 
-				// Exact RS position selected by scheduler metadata.
-				reconstructShards[helper.index] = bytess
+			wg :=
+				new(
+					sync.WaitGroup,
+				)
 
-			}(
-				i,
-				shard,
+			wg.Add(
+				or,
 			)
+
+			downloadStart :=
+				time.Now()
+
+			for _, shard := range repairShards {
+
+				go func(
+					chunkIndex int,
+					helper pinwithmeta,
+				) {
+
+					defer wg.Done()
+
+					chunkStart :=
+						time.Now()
+
+					bytess :=
+						spt.getData(
+							ctx,
+							helper.cids[chunkIndex],
+						)
+
+					fmt.Printf(
+						"SELECTIVE_EC chunk=%d helperRSIndex=%d took=%s\n",
+						chunkIndex,
+						helper.index,
+						time.Since(chunkStart),
+					)
+
+					// Exact RS position selected by scheduler metadata.
+					reconstructShards[helper.index] = bytess
+
+				}(
+					i,
+					shard,
+				)
+			}
+
+			wg.Wait()
+
+			timedownloadchunks +=
+				time.Since(
+					downloadStart,
+				)
+
+			// ---------------------------------------------------------
+			// Reconstruct missing chunk.
+			// ---------------------------------------------------------
+
+			reconstructStart :=
+				time.Now()
+
+			reconstructErr :=
+				enc.Reconstruct(
+					reconstructShards,
+				)
+
+			timetorepairchunksonly +=
+				time.Since(
+					reconstructStart,
+				)
+
+			if reconstructErr != nil {
+
+				logger.Errorf(
+					"SELECTIVE_EC reconstruction failed for chunk %d: %s",
+					i,
+					reconstructErr,
+				)
+
+				return 0, 0, 0
+			}
+
+			// ---------------------------------------------------------
+			// Create reconstructed IPFS block.
+			// ---------------------------------------------------------
+
+			nodee :=
+				ipfsadd.NewFSNodeOverDagC(
+					ft.TFile,
+					prefix,
+				)
+
+			nodee.SetFileData(
+				reconstructShards[tosend],
+			)
+
+			rawnode, commitErr :=
+				nodee.Commit()
+
+			if commitErr != nil {
+
+				logger.Errorf(
+					"SELECTIVE_EC commit failed for chunk %d: %s",
+					i,
+					commitErr,
+				)
+
+				return 0, 0, 0
+			}
+
+			// ---------------------------------------------------------
+			// Send reconstructed chunk through local shard.
+			// ---------------------------------------------------------
+
+			sendErr :=
+				shh.SendBlock(
+					spt.ctx,
+					rawnode,
+				)
+
+			if sendErr != nil {
+
+				logger.Errorf(
+					"SELECTIVE_EC SendBlock failed for chunk %d: %s",
+					i,
+					sendErr,
+				)
+
+				return 0, 0, 0
+			}
+
+			size :=
+				uint64(
+					len(
+						rawnode.RawData(),
+					),
+				)
+
+			shh.AddLink(
+				ctx,
+				rawnode.Cid(),
+				size,
+			)
+		} else {
+			fmt.Printf("Entereddddddd to the have localllll part\n")
+			bytess := spt.getData(spt.ctx, cc.String())
+			fmt.Printf("This is the dataaaaaaaaaaaa size : %d \n", len(bytess))
+			nodee := ipfsadd.NewFSNodeOverDagC(ft.TFile, prefix)
+			nodee.SetFileData(bytess)
+			rawnode, _ := nodee.Commit()
+			//zid l blacklist heyye list li other pins kamen fiha
+			shh.SendBlock(spt.ctx, rawnode)
+			size := uint64(len(rawnode.RawData()))
+			shh.AddLink(ctx, rawnode.Cid(), size)
 		}
-
-		wg.Wait()
-
-		timedownloadchunks +=
-			time.Since(
-				downloadStart,
-			)
-
-		// ---------------------------------------------------------
-		// Reconstruct missing chunk.
-		// ---------------------------------------------------------
-
-		reconstructStart :=
-			time.Now()
-
-		reconstructErr :=
-			enc.Reconstruct(
-				reconstructShards,
-			)
-
-		timetorepairchunksonly +=
-			time.Since(
-				reconstructStart,
-			)
-
-		if reconstructErr != nil {
-
-			logger.Errorf(
-				"SELECTIVE_EC reconstruction failed for chunk %d: %s",
-				i,
-				reconstructErr,
-			)
-
-			return 0, 0, 0
-		}
-
-		// ---------------------------------------------------------
-		// Create reconstructed IPFS block.
-		// ---------------------------------------------------------
-
-		nodee :=
-			ipfsadd.NewFSNodeOverDagC(
-				ft.TFile,
-				prefix,
-			)
-
-		nodee.SetFileData(
-			reconstructShards[tosend],
-		)
-
-		rawnode, commitErr :=
-			nodee.Commit()
-
-		if commitErr != nil {
-
-			logger.Errorf(
-				"SELECTIVE_EC commit failed for chunk %d: %s",
-				i,
-				commitErr,
-			)
-
-			return 0, 0, 0
-		}
-
-		// ---------------------------------------------------------
-		// Send reconstructed chunk through local shard.
-		// ---------------------------------------------------------
-
-		sendErr :=
-			shh.SendBlock(
-				spt.ctx,
-				rawnode,
-			)
-
-		if sendErr != nil {
-
-			logger.Errorf(
-				"SELECTIVE_EC SendBlock failed for chunk %d: %s",
-				i,
-				sendErr,
-			)
-
-			return 0, 0, 0
-		}
-
-		size :=
-			uint64(
-				len(
-					rawnode.RawData(),
-				),
-			)
-
-		shh.AddLink(
-			ctx,
-			rawnode.Cid(),
-			size,
-		)
 	}
 
 	// -------------------------------------------------------------
