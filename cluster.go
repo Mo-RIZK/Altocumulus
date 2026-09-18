@@ -897,7 +897,7 @@ func (c *Cluster) alertsHandler() {
 									ss := time.Now()
 
 									//ppp, common := c.similarities(c.ctx, pin)
-									ppp, common, _, _ := c.s_Max_Min_Sauff(c.ctx, pin)
+									ppp, common, _, _ := c.similarities_Max_Min_Sauff(c.ctx, pin)
 									//ppp, common := c.similaritiessssss(c.ctx, pin)
 									fmt.Fprintf(os.Stdout, "Checkingggg %s\n", time.Now().Sub(ss).String())
 									first := 1
@@ -919,7 +919,7 @@ func (c *Cluster) alertsHandler() {
 										allocs = append(allocs, p.String())
 									}
 
-									pin.Metadata["allocs"] = strings.Join(allocs, ",")
+									//pin.Metadata["allocs"] = strings.Join(allocs, ",")
 									/*first = 1
 									for _, com := range allmatches {
 										if first == 1 {
@@ -1002,7 +1002,7 @@ func (c *Cluster) alertsHandler() {
 									allocs = append(allocs, p.String())
 								}
 
-								pin.Metadata["allocs"] = strings.Join(allocs, ",")
+								//pin.Metadata["allocs"] = strings.Join(allocs, ",")
 								var out bool
 								err := c.Enqueue(c.ctx, pin, &out)
 

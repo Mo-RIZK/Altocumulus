@@ -145,7 +145,7 @@ func (spt *ECRepairS) pin(op *api.Pin) error {
 	if op.Metadata["Strategy"] == "SELECTIVE_EC" || op.Metadata["Strategy"] == "CMREPAIR_CTP" || op.Metadata["Strategy"] == "CMREPAIR_RTP" {
 		download, repair, waittosend = spt.repinUsingRSExactCl(op)
 	} else {
-		if op.Metadata["Strategy"] == "ASCLEPIUS" || op.Metadata["Strategy"] == "Asc_old" {
+		if op.Metadata["Strategy"] == "ASCLEPIUS" || op.Metadata["Strategy"] == "Asc_old" || op.Metadata["Strategy"] == "MAXMIN" {
 			download, repair, waittosend = spt.repinUsingRSWithSwitching1(op)
 		}
 	}
