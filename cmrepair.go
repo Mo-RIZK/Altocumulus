@@ -815,6 +815,7 @@ func cmRepairAllCandidatesForTask(
 // Under one-node-per-rack, AZ initialization exhaustively enumerates every
 // valid helper-combination/requestor pair for one stripe and selects the
 // candidate with the smallest single-stripe MT.
+/*
 func cmRepairAZForTask(
 	task *cmRepairTask,
 	topology *NetworkTopology,
@@ -860,6 +861,7 @@ func cmRepairAZForTask(
 
 	return best, nil
 }
+*/
 
 func cmRepairAZInitialize(
 	tasks []*cmRepairTask,
@@ -2120,4 +2122,109 @@ func ScheduleCMRepairRTP(
 	)
 
 	return schedule, nil
+}
+func cmRepairAZForTask(
+	task *cmRepairTask,
+	topology *NetworkTopology,
+) (cmRepairSolution, error) {
+
+	// Keep the exact same exhaustive AZ candidate generation.
+	// This preserves the paper's search space:
+	//
+	//   every valid helper combination
+	//       x
+	//   every valid requestor/destination.
+	//
+	// cmRepairAllCandidatesForTask also preserves the existing
+	// deterministic candidate ordering.
+	candidates := cmRepairAllCandidatesForTask(task, topology)
+
+	if len(candidates) == 0 {
+		return cmRepairSolution{}, fmt.Errorf(
+			"CMRepair AZ: no valid solution for shard %s",
+			task.Shard.Name,
+		)
+	}
+
+	best := cmRepairSolution{}
+	bestMT := math.Inf(1)
+	found := false
+
+	for _, candidate := range candidates {
+
+		// ------------------------------------------------------------
+		// Exact single-stripe MT evaluation.
+		//
+		// For one AZ candidate:
+		//
+		//   Tu[h] = Cost(h, destination)
+		//
+		// for every selected helper h, while:
+		//
+		//   Td[destination] =
+		//       sum_h Cost(h, destination)
+		//
+		// Since every Cost is non-negative:
+		//
+		//   Td[destination] >= Tu[h]
+		//
+		// for every helper h.
+		//
+		// Therefore the exact single-stripe:
+		//
+		//   MT = Td[destination]
+		//      = sum_h Cost(h, destination)
+		//
+		// This is mathematically identical to calling
+		// cmRepairEvaluateMultiSolution() for one task and one
+		// candidate, but avoids constructing upload/download maps,
+		// initializing every topology peer, and scanning the topology
+		// for every AZ candidate.
+		// ------------------------------------------------------------
+
+		candidateMT := 0.0
+		valid := true
+
+		for _, helper := range candidate.Helpers {
+			cost := cmRepairTransferCostSeconds(
+				topology,
+				helper,
+				candidate.Destination,
+				task.ShardMB,
+			)
+
+			if math.IsInf(cost, 1) {
+				valid = false
+				break
+			}
+
+			candidateMT += cost
+		}
+
+		if !valid {
+			continue
+		}
+
+		// Preserve exactly the same objective and deterministic
+		// tie-breaking rule as the previous implementation.
+		if !found ||
+			cmRepairLess(candidateMT, bestMT) ||
+			(cmRepairEqual(candidateMT, bestMT) &&
+				cmRepairSolutionKey(candidate) <
+					cmRepairSolutionKey(best)) {
+
+			best = cmRepairCopySolution(candidate)
+			bestMT = candidateMT
+			found = true
+		}
+	}
+
+	if !found {
+		return cmRepairSolution{}, fmt.Errorf(
+			"CMRepair AZ: no finite solution for shard %s",
+			task.Shard.Name,
+		)
+	}
+
+	return best, nil
 }
