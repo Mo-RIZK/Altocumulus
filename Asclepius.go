@@ -260,15 +260,58 @@ func ascMax(values ...float64) float64 {
 	return maximum
 }
 
-// Phase 1: precompute immutable shard information.
+// ascIncomingOnlyShardIndex is the same indexed representation used by the
+// old incoming-only ASCLEPIUS preprocessing.  It is built once per failed
+// shard from getSimilarity() and then reused for all CID classification.
+type ascIncomingOnlyShardIndex struct {
+	PeerCIDSet map[peer.ID]map[string]bool
+	CIDSources map[string][]peer.ID
+}
+
+func ascBuildIncomingOnlyShardIndex(
+	failedPeer peer.ID,
+	topology *NetworkTopology,
+	peerMatchedCIDs map[peer.ID][]string,
+) ascIncomingOnlyShardIndex {
+	peerCIDSet := make(map[peer.ID]map[string]bool, len(peerMatchedCIDs))
+	cidSources := make(map[string][]peer.ID)
+
+	for p, matchedCIDs := range peerMatchedCIDs {
+		if p == "" || p == failedPeer || !ascValidNode(topology, p) {
+			continue
+		}
+
+		set := make(map[string]bool, len(matchedCIDs))
+		peerCIDSet[p] = set
+
+		for _, rawCID := range matchedCIDs {
+			cid := ascCleanCID(rawCID)
+			if cid == "" || set[cid] {
+				continue
+			}
+
+			set[cid] = true
+			cidSources[cid] = append(cidSources[cid], p)
+		}
+	}
+
+	for cid := range cidSources {
+		cidSources[cid] = ascSortedUniquePeers(cidSources[cid])
+	}
+
+	return ascIncomingOnlyShardIndex{
+		PeerCIDSet: peerCIDSet,
+		CIDSources: cidSources,
+	}
+}
+
+// Phase 1 uses the same preprocessing pattern as the old incoming-only code:
+//  1. get stripe metadata once per failed shard;
+//  2. get similarity once per failed shard;
+//  3. immediately build a CID -> surviving-source index;
+//  4. classify the shard's CIDs by O(1) index lookup.
 //
-// A chunk is "common" when at least one valid surviving peer has the same CID.
-// Otherwise it is "missing" and requires EC reconstruction.
-//
-// We retain the peers containing a common CID only so that, for a candidate
-// RepairPeer, we can determine whether that common chunk is already local.
-// We DO NOT select a remote common-chunk source and we DO NOT charge common
-// traffic to source upload load.
+// No similarity/CID-source scan is repeated in Global Max-Min.
 func ascBuildTasks(
 	failedPeer peer.ID,
 	failedShards []api.Pin,
@@ -290,6 +333,7 @@ func ascBuildTasks(
 			continue
 		}
 
+		// Same as the old preprocessing: stripe metadata is fetched once.
 		_, sameStripePeers, n, shardLength := getSameStripe(shard)
 		if n <= 0 {
 			return nil, fmt.Errorf(
@@ -304,42 +348,22 @@ func ascBuildTasks(
 			shardChunkCount = shardLength
 		}
 
+		// Same as the old preprocessing: similarity is fetched exactly once for
+		// this failed shard, then converted immediately into an indexed form.
 		_, _, _, peerMatchedCIDs := getSimilarity(shard)
-		cidSources := make(map[string][]peer.ID)
-
-		for p, matchedCIDs := range peerMatchedCIDs {
-			if p == "" ||
-				p == failedPeer ||
-				!ascValidNode(topology, p) {
-				continue
-			}
-
-			seenOnPeer := make(map[string]bool)
-
-			for _, rawCID := range matchedCIDs {
-				cid := ascCleanCID(rawCID)
-				if cid == "" || seenOnPeer[cid] {
-					continue
-				}
-
-				seenOnPeer[cid] = true
-				cidSources[cid] = append(cidSources[cid], p)
-			}
-		}
-
-		for cid := range cidSources {
-			cidSources[cid] = ascSortedUniquePeers(cidSources[cid])
-		}
+		index := ascBuildIncomingOnlyShardIndex(
+			failedPeer,
+			topology,
+			peerMatchedCIDs,
+		)
 
 		helperCandidates := make([]peer.ID, 0, len(sameStripePeers))
-
 		for _, p := range ascSortedUniquePeers(sameStripePeers) {
 			if p == failedPeer ||
 				!ascValidNode(topology, p) ||
 				ascOutMBps(topology, p) <= 0 {
 				continue
 			}
-
 			helperCandidates = append(helperCandidates, p)
 		}
 
@@ -356,17 +380,22 @@ func ascBuildTasks(
 			StaticCandidate:  make(map[peer.ID]ascStaticRepairCandidate),
 		}
 
-		for index, cid := range cids {
+		// Classification is now only indexed lookups.  CIDSources already contains
+		// only valid surviving peers, so a non-empty entry means the chunk is common.
+		for chunkIndex, rawCID := range cids {
+			cid := ascCleanCID(rawCID)
+			sources := index.CIDSources[cid]
+
 			chunk := ascChunk{
-				Index:   index,
+				Index:   chunkIndex,
 				CID:     cid,
-				Sources: cidSources[cid],
+				Sources: sources,
 			}
 
-			if len(chunk.Sources) > 0 {
-				task.CommonIndexes = append(task.CommonIndexes, index)
+			if len(sources) > 0 {
+				task.CommonIndexes = append(task.CommonIndexes, chunkIndex)
 			} else {
-				task.MissingIndexes = append(task.MissingIndexes, index)
+				task.MissingIndexes = append(task.MissingIndexes, chunkIndex)
 			}
 
 			task.Chunks = append(task.Chunks, chunk)
