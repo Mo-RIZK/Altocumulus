@@ -1638,6 +1638,7 @@ func ScheduleCMRepairCTP(
 //  4. returns the best multi-stripe solution seen before w/t stopping;
 //  5. returns exact helper CIDs/RS indexes + requestor peer;
 //  6. also returns Algorithm-3 link priority order.
+/*
 func ScheduleCMRepairRTP(
 	failedPeer peer.ID,
 	failedShards []api.Pin,
@@ -1704,6 +1705,7 @@ func ScheduleCMRepairRTP(
 		topology,
 	)
 }
+*/
 
 func cmRepairRunRTP(
 	tasks []*cmRepairTask,
@@ -1978,4 +1980,144 @@ func cmRepairRunRTP(
 
 	// Return mSolu: the minimum-MT solution encountered.
 	return best
+}
+
+func ScheduleCMRepairRTP(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	livePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+	getStripe CMRepairStripeInfoFunc,
+	options CMRepairRTPOptions,
+) (CMRepairSchedule, error) {
+
+	started := time.Now()
+
+	fmt.Printf(
+		"[CMREPAIR-RTP] starting scheduler | repairs=%d | W=%d | maxTime=%v\n",
+		len(failedShards),
+		options.W,
+		options.MaxComputationTime,
+	)
+
+	// -------------------------------------------------------------------------
+	// Input validation
+	// -------------------------------------------------------------------------
+	phase := time.Now()
+
+	if err := cmRepairValidateInputs(
+		failedPeer,
+		failedShards,
+		livePeers,
+		topology,
+		chunkMB,
+		getStripe,
+	); err != nil {
+		return CMRepairSchedule{}, err
+	}
+
+	fmt.Printf(
+		"[CMREPAIR-RTP] input validation took %v\n",
+		time.Since(phase),
+	)
+
+	if len(failedShards) == 0 {
+		return CMRepairSchedule{
+			Algorithm:       CMRepairRTP,
+			Decisions:       []CMRepairDecision{},
+			UploadTime:      map[peer.ID]float64{},
+			DownloadTime:    map[peer.ID]float64{},
+			OrderedLinks:    []CMRepairLink{},
+			ComputationTime: time.Since(started),
+		}, nil
+	}
+
+	// -------------------------------------------------------------------------
+	// Task construction
+	// -------------------------------------------------------------------------
+	phase = time.Now()
+
+	tasks, err := cmRepairBuildTasks(
+		failedPeer,
+		failedShards,
+		livePeers,
+		topology,
+		chunkMB,
+		getStripe,
+	)
+	if err != nil {
+		return CMRepairSchedule{}, err
+	}
+
+	fmt.Printf(
+		"[CMREPAIR-RTP] task construction took %v | tasks=%d\n",
+		time.Since(phase),
+		len(tasks),
+	)
+
+	// -------------------------------------------------------------------------
+	// AZ-Recovery initialization
+	// -------------------------------------------------------------------------
+	phase = time.Now()
+
+	initial, err := cmRepairAZInitialize(
+		tasks,
+		topology,
+	)
+	if err != nil {
+		return CMRepairSchedule{}, err
+	}
+
+	fmt.Printf(
+		"[CMREPAIR-RTP] AZ initialization took %v\n",
+		time.Since(phase),
+	)
+
+	// -------------------------------------------------------------------------
+	// RTP optimization
+	// -------------------------------------------------------------------------
+	phase = time.Now()
+
+	finalSolutions := cmRepairRunRTP(
+		tasks,
+		initial,
+		topology,
+		options,
+	)
+
+	fmt.Printf(
+		"[CMREPAIR-RTP] RTP optimization took %v\n",
+		time.Since(phase),
+	)
+
+	// -------------------------------------------------------------------------
+	// Finalization
+	// -------------------------------------------------------------------------
+	phase = time.Now()
+
+	schedule, err := cmRepairFinalizeSchedule(
+		CMRepairRTP,
+		started,
+		tasks,
+		finalSolutions,
+		topology,
+	)
+	if err != nil {
+		return CMRepairSchedule{}, err
+	}
+
+	fmt.Printf(
+		"[CMREPAIR-RTP] finalization took %v\n",
+		time.Since(phase),
+	)
+
+	fmt.Printf(
+		"[CMREPAIR-RTP] TOTAL scheduler time %v | repairs=%d | MT=%.6f\n",
+		time.Since(started),
+		len(schedule.Decisions),
+		schedule.MT,
+	)
+
+	return schedule, nil
 }
