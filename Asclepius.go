@@ -67,6 +67,25 @@ type ascTask struct {
 	Chunks         []ascChunk
 	CommonIndexes  []int
 	MissingIndexes []int
+
+	// StaticCandidate is computed ONCE before Global Max-Min starts.
+	// It contains all information that depends only on immutable chunk
+	// placement / stripe placement for a given candidate RepairPeer.
+	StaticCandidate map[peer.ID]ascStaticRepairCandidate
+}
+
+// ascStaticRepairCandidate contains immutable information for one
+// (shard, RepairPeer) pair.  Nothing in this structure depends on the
+// accumulated UploadMB/DownloadMB loads, so it must never be rebuilt in the
+// Global Max-Min loop.
+type ascStaticRepairCandidate struct {
+	CommonChunks      []ASCCommonChunk
+	LocalCommonCount  int
+	RemoteCommonCount int
+	RemoteCommonMB    float64
+
+	NeedsRelocation   bool
+	ValidDestinations []peer.ID
 }
 
 // ascShardHelpers is selected ONCE for one shard in one Global Max-Min
@@ -323,6 +342,7 @@ func ascBuildTasks(
 			Chunks:           make([]ascChunk, 0, len(cids)),
 			CommonIndexes:    make([]int, 0),
 			MissingIndexes:   make([]int, 0),
+			StaticCandidate:  make(map[peer.ID]ascStaticRepairCandidate),
 		}
 
 		for index, cid := range cids {
@@ -439,75 +459,113 @@ func ascSelectHelpersForShard(
 	}, nil
 }
 
-// Build common-chunk metadata for one candidate RepairPeer.
+// Phase 2: precompute immutable information for every (shard, RepairPeer).
 //
-// IMPORTANT:
-//   - If RepairPeer already has a common chunk, Source == RepairPeer.
-//   - Otherwise Source == "".
+// This is the same optimization used by the old incoming-only ASCLEPIUS code:
+// common/local/remote classification is performed ONCE before Global Max-Min.
 //
-// We intentionally do NOT choose which remote duplicate peer sends a common
-// chunk. Remote common chunks affect RepairPeer incoming traffic only.
-func ascBuildCommonChunksForRepairPeer(
-	task *ascTask,
-	repairPeer peer.ID,
-) ([]ASCCommonChunk, int) {
-	commonChunks := make([]ASCCommonChunk, 0, len(task.CommonIndexes))
-	localCommonCount := 0
-
-	for _, chunkIndex := range task.CommonIndexes {
-		chunk := task.Chunks[chunkIndex]
-
-		source := peer.ID("")
-		if ascContainsPeer(chunk.Sources, repairPeer) {
-			source = repairPeer
-			localCommonCount++
-		}
-
-		commonChunks = append(commonChunks, ASCCommonChunk{
-			ChunkIndex: chunk.Index,
-			CID:        chunk.CID,
-			Source:     source,
-		})
-	}
-
-	return commonChunks, localCommonCount
-}
-
-// Select the valid relocation destination with the smallest projected incoming
-// completion time:
+// For every candidate RepairPeer we precompute:
+//   - the CommonChunks metadata required by the executor;
+//   - how many common chunks are local;
+//   - how many common chunks are remote;
+//   - the corresponding remote-common incoming MB;
+//   - whether relocation is required;
+//   - all statically valid relocation destinations.
 //
-//	(D_k + S_i) / b_k^in
-//
-// Relocation is needed only when RepairPeer already stores another shard from
-// the same stripe.
-func ascBestRelocationDestination(
-	task *ascTask,
-	repairPeer peer.ID,
+// The dynamic Global Max-Min loop therefore never scans common CIDs or their
+// source lists again.
+func ascPrecomputeStaticCandidates(
+	tasks []*ascTask,
 	failedPeer peer.ID,
 	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+) {
+	for _, task := range tasks {
+		task.StaticCandidate = make(map[peer.ID]ascStaticRepairCandidate, len(candidatePeers))
+
+		for _, repairPeer := range candidatePeers {
+			if repairPeer == "" ||
+				repairPeer == failedPeer ||
+				!ascValidNode(topology, repairPeer) ||
+				ascInMBps(topology, repairPeer) <= 0 {
+				continue
+			}
+
+			commonChunks := make([]ASCCommonChunk, 0, len(task.CommonIndexes))
+			localCommonCount := 0
+
+			for _, chunkIndex := range task.CommonIndexes {
+				chunk := task.Chunks[chunkIndex]
+
+				source := peer.ID("")
+				if ascContainsPeer(chunk.Sources, repairPeer) {
+					source = repairPeer
+					localCommonCount++
+				}
+
+				commonChunks = append(commonChunks, ASCCommonChunk{
+					ChunkIndex: chunk.Index,
+					CID:        chunk.CID,
+					Source:     source,
+				})
+			}
+
+			remoteCommonCount := len(task.CommonIndexes) - localCommonCount
+			if remoteCommonCount < 0 {
+				remoteCommonCount = 0
+			}
+
+			needsRelocation := task.SameStripePeers[repairPeer]
+
+			validDestinations := make([]peer.ID, 0)
+			if needsRelocation {
+				for _, destination := range candidatePeers {
+					if destination == "" ||
+						destination == failedPeer ||
+						destination == repairPeer ||
+						task.SameStripePeers[destination] ||
+						!ascValidNode(topology, destination) ||
+						ascInMBps(topology, destination) <= 0 {
+						continue
+					}
+
+					validDestinations = append(validDestinations, destination)
+				}
+			}
+
+			task.StaticCandidate[repairPeer] = ascStaticRepairCandidate{
+				CommonChunks:      commonChunks,
+				LocalCommonCount:  localCommonCount,
+				RemoteCommonCount: remoteCommonCount,
+				RemoteCommonMB:    float64(remoteCommonCount) * chunkMB,
+				NeedsRelocation:   needsRelocation,
+				ValidDestinations: validDestinations,
+			}
+		}
+	}
+}
+
+// Select the currently best relocation destination from the statically
+// precomputed valid-destination list.
+//
+// Destination validity does not change during scheduling, so it is precomputed.
+// Only the projected destination completion time remains dynamic because
+// DownloadMB changes after every committed repair.
+func ascBestRelocationDestination(
+	task *ascTask,
+	static ascStaticRepairCandidate,
 	topology *NetworkTopology,
 	loads *ASCNetworkLoad,
 ) (peer.ID, float64) {
 	bestPeer := peer.ID("")
 	bestTime := math.Inf(1)
 
-	for _, destination := range candidatePeers {
-		if destination == "" ||
-			destination == failedPeer ||
-			destination == repairPeer ||
-			task.SameStripePeers[destination] {
-			continue
-		}
-
-		inSpeed := ascInMBps(topology, destination)
-		if inSpeed <= 0 {
-			continue
-		}
-
+	for _, destination := range static.ValidDestinations {
 		destinationTime := ascCompletion(
 			loads.DownloadMB[destination],
 			task.ShardMB,
-			inSpeed,
+			ascInMBps(topology, destination),
 		)
 		if math.IsInf(destinationTime, 1) {
 			continue
@@ -549,25 +607,14 @@ func ascEvaluateRepairCandidateWithFixedHelpers(
 	task *ascTask,
 	fixed ascShardHelpers,
 	repairPeer peer.ID,
-	failedPeer peer.ID,
-	candidatePeers []peer.ID,
 	topology *NetworkTopology,
 	loads *ASCNetworkLoad,
-	chunkMB float64,
 ) (ascRepairCandidate, bool) {
-	if repairPeer == "" ||
-		repairPeer == failedPeer ||
-		!ascValidNode(topology, repairPeer) ||
-		ascInMBps(topology, repairPeer) <= 0 {
+	// All common/local/remote and placement-validity work was done once before
+	// Global Max-Min.  The hot loop performs only a map lookup here.
+	static, ok := task.StaticCandidate[repairPeer]
+	if !ok {
 		return ascRepairCandidate{}, false
-	}
-
-	commonChunks, localCommonCount :=
-		ascBuildCommonChunksForRepairPeer(task, repairPeer)
-
-	remoteCommonCount := len(task.CommonIndexes) - localCommonCount
-	if remoteCommonCount < 0 {
-		remoteCommonCount = 0
 	}
 
 	// Fixed helper set; only remote helpers generate network upload/incoming.
@@ -580,16 +627,22 @@ func ascEvaluateRepairCandidateWithFixedHelpers(
 		remoteHelperCount = 0
 	}
 
+	// RepairPeer incoming traffic:
+	//
+	//   remote common chunks * q
+	// + remote EC helpers * missing chunks * q
+	//
+	// fixed.HelperMB == |MissingIndexes| * chunkMB.
 	repairIncomingMB :=
-		float64(remoteCommonCount)*chunkMB +
+		static.RemoteCommonMB +
 			float64(remoteHelperCount)*fixed.HelperMB
 
-	uploadAddMB := make(map[peer.ID]float64)
+	uploadAddMB := make(map[peer.ID]float64, len(fixed.Helpers))
 	helperUploadTime := 0.0
 
 	for _, helper := range fixed.Helpers {
-		// If the repair peer is itself one of the fixed helpers, that helper's
-		// contribution is local and creates neither network upload nor incoming.
+		// If RepairPeer is one of the fixed helpers, its reconstruction
+		// contribution is local for this candidate.
 		if helper == repairPeer {
 			continue
 		}
@@ -624,7 +677,7 @@ func ascEvaluateRepairCandidateWithFixedHelpers(
 		RepairPeer:       repairPeer,
 		FinalPeer:        repairPeer,
 		Helpers:          append([]peer.ID(nil), fixed.Helpers...),
-		CommonChunks:     append([]ASCCommonChunk(nil), commonChunks...),
+		CommonChunks:     static.CommonChunks,
 		UploadAddMB:      uploadAddMB,
 		RepairIncomingMB: repairIncomingMB,
 		CompletionTime: ascMax(
@@ -633,18 +686,16 @@ func ascEvaluateRepairCandidateWithFixedHelpers(
 		),
 	}
 
-	// If RepairPeer does not already store another shard of this stripe, the
-	// repaired shard stays there and no relocation is needed.
-	if !task.SameStripePeers[repairPeer] {
+	// No same-stripe conflict: repaired shard can remain on RepairPeer.
+	if !static.NeedsRelocation {
 		return candidate, true
 	}
 
-	// Otherwise select the best valid final destination.
+	// Same-stripe conflict: choose the currently best destination only from
+	// the already-precomputed valid destination list.
 	destination, destinationDownloadTime := ascBestRelocationDestination(
 		task,
-		repairPeer,
-		failedPeer,
-		candidatePeers,
+		static,
 		topology,
 		loads,
 	)
@@ -652,10 +703,6 @@ func ascEvaluateRepairCandidateWithFixedHelpers(
 		return ascRepairCandidate{}, false
 	}
 
-	// Common traffic is intentionally ignored on source uploads. If RepairPeer
-	// was one of the fixed helpers, its EC contribution was local and therefore
-	// also added no network upload. Thus relocation upload starts from the
-	// currently committed UploadMB of RepairPeer.
 	relocationUploadTime := ascCompletion(
 		loads.UploadMB[repairPeer],
 		task.ShardMB,
@@ -686,7 +733,6 @@ func ascEvaluateRepairCandidateWithFixedHelpers(
 func ascBestCandidateForTask(
 	taskIndex int,
 	task *ascTask,
-	failedPeer peer.ID,
 	candidatePeers []peer.ID,
 	topology *NetworkTopology,
 	loads *ASCNetworkLoad,
@@ -711,11 +757,8 @@ func ascBestCandidateForTask(
 			task,
 			fixedHelpers,
 			repairPeer,
-			failedPeer,
-			candidatePeers,
 			topology,
 			loads,
-			chunkMB,
 		)
 		if !ok {
 			continue
@@ -864,7 +907,22 @@ func ScheduleASCLEPIUSMultiResource(
 	}
 
 	fmt.Printf(
-		"[ASC-BW] common/missing classification took %v\n",
+		"[ASC-BW] common/missing shard classification took %v\n",
+		time.Since(phase),
+	)
+
+	// Precompute all immutable (shard, RepairPeer) information ONCE, exactly
+	// like the old incoming-only scheduler precomputed candidate costs.
+	phase = time.Now()
+	ascPrecomputeStaticCandidates(
+		tasks,
+		failedPeer,
+		candidatePeers,
+		topology,
+		chunkMB,
+	)
+	fmt.Printf(
+		"[ASC-BW] static per-(shard,repairPeer) common/relocation precompute took %v\n",
 		time.Since(phase),
 	)
 
@@ -886,7 +944,6 @@ func ScheduleASCLEPIUSMultiResource(
 			candidate, ok := ascBestCandidateForTask(
 				taskIndex,
 				tasks[taskIndex],
-				failedPeer,
 				candidatePeers,
 				topology,
 				loads,
@@ -927,17 +984,9 @@ func ScheduleASCLEPIUSMultiResource(
 		decisions = append(decisions, decision)
 		delete(unscheduled, chosenTaskIndex)
 
-		localCommon := 0
-		for _, common := range decision.CommonChunks {
-			if common.Source == decision.RepairPeer {
-				localCommon++
-			}
-		}
-
-		remoteCommon := len(task.CommonIndexes) - localCommon
-		if remoteCommon < 0 {
-			remoteCommon = 0
-		}
+		static := task.StaticCandidate[decision.RepairPeer]
+		localCommon := static.LocalCommonCount
+		remoteCommon := static.RemoteCommonCount
 
 		fmt.Printf(
 			"[ASC-BW] shard=%s missing=%d helpers=%d common=%d "+
