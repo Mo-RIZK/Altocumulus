@@ -94,6 +94,17 @@ type ascStaticRepairCandidate struct {
 type ascShardHelpers struct {
 	Helpers  []peer.ID
 	HelperMB float64
+
+	// HelperUploadTime is computed ONCE after helper selection for the current
+	// shard/Global-Max-Min iteration.  Candidate RepairPeers reuse it instead
+	// of recalculating the same helper completion times again and again.
+	//
+	// MaxUploadTime is the bottleneck when RepairPeer is not a helper.
+	// MaxUploadTimeWithout[h] is the bottleneck when helper h is the
+	// RepairPeer and therefore its reconstruction contribution is local.
+	MaxUploadTime        float64
+	MaxUploadTimeWithout map[peer.ID]float64
+	HelperSet            map[peer.ID]bool
 }
 
 // ascRepairCandidate is the complete plan for one fixed-helper shard and one
@@ -107,11 +118,11 @@ type ascRepairCandidate struct {
 	Helpers      []peer.ID
 	CommonChunks []ASCCommonChunk
 
-	// UploadAddMB contains ONLY EC-helper uploads for this candidate.
-	// Common/direct duplicate chunks do not contribute source upload load.
-	// Relocation upload is committed separately.
-	UploadAddMB map[peer.ID]float64
+	// Helpers is the fixed helper set selected once for this shard in the
+	// current Global Max-Min iteration.  It is shared by all RepairPeer
+	// candidates; we do not allocate/copy it per candidate.
 
+	HelperMB         float64
 	RepairIncomingMB float64
 	CompletionTime   float64
 }
@@ -400,62 +411,94 @@ func ascSelectHelpersForShard(
 ) (ascShardHelpers, error) {
 	if len(task.MissingIndexes) == 0 {
 		return ascShardHelpers{
-			Helpers:  nil,
-			HelperMB: 0,
+			Helpers:              nil,
+			HelperMB:             0,
+			MaxUploadTime:        0,
+			MaxUploadTimeWithout: nil,
+			HelperSet:            nil,
 		}, nil
 	}
 
 	helperMB := float64(len(task.MissingIndexes)) * chunkMB
-	temporaryUpload := make(map[peer.ID]float64, len(loads.UploadMB))
 
-	for p, value := range loads.UploadMB {
-		temporaryUpload[p] = value
+	// The provisional charge previously stored in temporaryUpload does not
+	// change the cost of any still-unselected helper: once a helper is chosen,
+	// it is excluded from the following choices.  Therefore helper selection
+	// is exactly equivalent to computing every candidate's projected cost ONCE,
+	// sorting by (cost, peer ID), and taking the first N.
+	type helperScore struct {
+		Peer peer.ID
+		Time float64
 	}
 
-	helpers := make([]peer.ID, 0, task.N)
+	scores := make([]helperScore, 0, len(task.HelperCandidates))
+	for _, helper := range task.HelperCandidates {
+		projected := ascCompletion(
+			loads.UploadMB[helper],
+			helperMB,
+			ascOutMBps(topology, helper),
+		)
+		if math.IsInf(projected, 1) {
+			continue
+		}
+		scores = append(scores, helperScore{Peer: helper, Time: projected})
+	}
 
-	for len(helpers) < task.N {
-		bestHelper := peer.ID("")
-		bestCost := math.Inf(1)
+	sort.Slice(scores, func(i, j int) bool {
+		if scores[i].Time != scores[j].Time {
+			return scores[i].Time < scores[j].Time
+		}
+		return scores[i].Peer.String() < scores[j].Peer.String()
+	})
 
-		for _, helper := range task.HelperCandidates {
-			if ascContainsPeer(helpers, helper) {
+	if len(scores) < task.N {
+		return ascShardHelpers{}, fmt.Errorf(
+			"cannot assign %d helpers for shard %s; only %d valid helpers exist",
+			task.N,
+			task.Shard.Name,
+			len(scores),
+		)
+	}
+
+	helpers := make([]peer.ID, task.N)
+	helperTimes := make([]float64, task.N)
+	helperSet := make(map[peer.ID]bool, task.N)
+	maxUploadTime := 0.0
+
+	for i := 0; i < task.N; i++ {
+		helpers[i] = scores[i].Peer
+		helperTimes[i] = scores[i].Time
+		helperSet[scores[i].Peer] = true
+		if scores[i].Time > maxUploadTime {
+			maxUploadTime = scores[i].Time
+		}
+	}
+
+	// Precompute the helper-upload bottleneck for the only special case that
+	// varies with RepairPeer: RepairPeer itself is one of the fixed helpers,
+	// so that helper's transfer is local and must be excluded.
+	// N is small, so this O(N^2) work is done once per shard evaluation and
+	// replaces an O(N) helper scan for every RepairPeer candidate.
+	maxWithout := make(map[peer.ID]float64, task.N)
+	for excludedIndex, excludedPeer := range helpers {
+		maximum := 0.0
+		for i, value := range helperTimes {
+			if i == excludedIndex {
 				continue
 			}
-
-			cost := ascCompletion(
-				temporaryUpload[helper],
-				helperMB,
-				ascOutMBps(topology, helper),
-			)
-			if math.IsInf(cost, 1) {
-				continue
-			}
-
-			if cost < bestCost ||
-				(cost == bestCost &&
-					(bestHelper == "" || helper.String() < bestHelper.String())) {
-				bestHelper = helper
-				bestCost = cost
+			if value > maximum {
+				maximum = value
 			}
 		}
-
-		if bestHelper == "" {
-			return ascShardHelpers{}, fmt.Errorf(
-				"cannot assign helper %d/%d for shard %s",
-				len(helpers)+1,
-				task.N,
-				task.Shard.Name,
-			)
-		}
-
-		helpers = append(helpers, bestHelper)
-		temporaryUpload[bestHelper] += helperMB
+		maxWithout[excludedPeer] = maximum
 	}
 
 	return ascShardHelpers{
-		Helpers:  helpers,
-		HelperMB: helperMB,
+		Helpers:              helpers,
+		HelperMB:             helperMB,
+		MaxUploadTime:        maxUploadTime,
+		MaxUploadTimeWithout: maxWithout,
+		HelperSet:            helperSet,
 	}, nil
 }
 
@@ -609,59 +652,37 @@ func ascEvaluateRepairCandidateWithFixedHelpers(
 	repairPeer peer.ID,
 	topology *NetworkTopology,
 	loads *ASCNetworkLoad,
+	relocationPeer peer.ID,
+	relocationDownloadTime float64,
 ) (ascRepairCandidate, bool) {
 	// All common/local/remote and placement-validity work was done once before
-	// Global Max-Min.  The hot loop performs only a map lookup here.
+	// Global Max-Min. The hot loop performs only a map lookup here.
 	static, ok := task.StaticCandidate[repairPeer]
 	if !ok {
 		return ascRepairCandidate{}, false
 	}
 
-	// Fixed helper set; only remote helpers generate network upload/incoming.
+	// Helper membership and helper-upload bottleneck were already computed once
+	// for this fixed helper set. Do not rescan/recalculate the same helpers for
+	// every RepairPeer candidate.
+	repairPeerIsHelper := fixed.HelperSet != nil && fixed.HelperSet[repairPeer]
 	remoteHelperCount := len(fixed.Helpers)
-	repairPeerIsHelper := ascContainsPeer(fixed.Helpers, repairPeer)
+	helperUploadTime := fixed.MaxUploadTime
+
 	if repairPeerIsHelper {
 		remoteHelperCount--
+		helperUploadTime = fixed.MaxUploadTimeWithout[repairPeer]
 	}
 	if remoteHelperCount < 0 {
 		remoteHelperCount = 0
 	}
 
 	// RepairPeer incoming traffic:
-	//
 	//   remote common chunks * q
-	// + remote EC helpers * missing chunks * q
-	//
-	// fixed.HelperMB == |MissingIndexes| * chunkMB.
+	// + remote EC helpers * missing chunks * q.
 	repairIncomingMB :=
 		static.RemoteCommonMB +
 			float64(remoteHelperCount)*fixed.HelperMB
-
-	uploadAddMB := make(map[peer.ID]float64, len(fixed.Helpers))
-	helperUploadTime := 0.0
-
-	for _, helper := range fixed.Helpers {
-		// If RepairPeer is one of the fixed helpers, its reconstruction
-		// contribution is local for this candidate.
-		if helper == repairPeer {
-			continue
-		}
-
-		uploadAddMB[helper] += fixed.HelperMB
-
-		projected := ascCompletion(
-			loads.UploadMB[helper],
-			fixed.HelperMB,
-			ascOutMBps(topology, helper),
-		)
-		if math.IsInf(projected, 1) {
-			return ascRepairCandidate{}, false
-		}
-
-		if projected > helperUploadTime {
-			helperUploadTime = projected
-		}
-	}
 
 	repairDownloadTime := ascCompletion(
 		loads.DownloadMB[repairPeer],
@@ -672,13 +693,16 @@ func ascEvaluateRepairCandidateWithFixedHelpers(
 		return ascRepairCandidate{}, false
 	}
 
+	// Reuse the fixed helper slice and static common-chunk slice.  They are
+	// immutable during this shard evaluation, so copying them for every
+	// RepairPeer candidate is unnecessary.
 	candidate := ascRepairCandidate{
 		TaskIndex:        taskIndex,
 		RepairPeer:       repairPeer,
 		FinalPeer:        repairPeer,
-		Helpers:          append([]peer.ID(nil), fixed.Helpers...),
+		Helpers:          fixed.Helpers,
 		CommonChunks:     static.CommonChunks,
-		UploadAddMB:      uploadAddMB,
+		HelperMB:         fixed.HelperMB,
 		RepairIncomingMB: repairIncomingMB,
 		CompletionTime: ascMax(
 			helperUploadTime,
@@ -686,20 +710,17 @@ func ascEvaluateRepairCandidateWithFixedHelpers(
 		),
 	}
 
-	// No same-stripe conflict: repaired shard can remain on RepairPeer.
 	if !static.NeedsRelocation {
 		return candidate, true
 	}
 
-	// Same-stripe conflict: choose the currently best destination only from
-	// the already-precomputed valid destination list.
-	destination, destinationDownloadTime := ascBestRelocationDestination(
-		task,
-		static,
-		topology,
-		loads,
-	)
-	if destination == "" || math.IsInf(destinationDownloadTime, 1) {
+	// For a given shard in one Global Max-Min iteration, every RepairPeer that
+	// needs relocation belongs to SameStripePeers.  The valid final destinations
+	// therefore have the same static constraint: not failed and not same-stripe.
+	// Their DownloadMB loads also stay unchanged while candidates of this shard
+	// are being evaluated.  Hence the best relocation destination/time is
+	// computed ONCE in ascBestCandidateForTask and reused here.
+	if relocationPeer == "" || math.IsInf(relocationDownloadTime, 1) {
 		return ascRepairCandidate{}, false
 	}
 
@@ -712,12 +733,12 @@ func ascEvaluateRepairCandidateWithFixedHelpers(
 		return ascRepairCandidate{}, false
 	}
 
-	candidate.FinalPeer = destination
+	candidate.FinalPeer = relocationPeer
 	candidate.CompletionTime = ascMax(
 		helperUploadTime,
 		repairDownloadTime,
 		relocationUploadTime,
-		destinationDownloadTime,
+		relocationDownloadTime,
 	)
 
 	return candidate, true
@@ -748,6 +769,28 @@ func ascBestCandidateForTask(
 		return ascRepairCandidate{}, false
 	}
 
+	// Relocation destination quality depends on current committed DownloadMB,
+	// but those loads do not change while we evaluate the RepairPeers of this
+	// one shard.  Compute the best destination ONCE and reuse it for every
+	// RepairPeer that needs relocation.
+	relocationPeer := peer.ID("")
+	relocationDownloadTime := math.Inf(1)
+
+	for _, repairPeer := range candidatePeers {
+		static, ok := task.StaticCandidate[repairPeer]
+		if !ok || !static.NeedsRelocation {
+			continue
+		}
+
+		relocationPeer, relocationDownloadTime = ascBestRelocationDestination(
+			task,
+			static,
+			topology,
+			loads,
+		)
+		break
+	}
+
 	best := ascRepairCandidate{}
 	found := false
 
@@ -759,6 +802,8 @@ func ascBestCandidateForTask(
 			repairPeer,
 			topology,
 			loads,
+			relocationPeer,
+			relocationDownloadTime,
 		)
 		if !ok {
 			continue
@@ -785,10 +830,14 @@ func ascCommitRepairCandidate(
 	candidate ascRepairCandidate,
 	loads *ASCNetworkLoad,
 ) {
-	// Commit ONLY EC-helper uploads.
-	// Common/direct duplicate source uploads are intentionally not modeled.
-	for p, additionalMB := range candidate.UploadAddMB {
-		loads.UploadMB[p] += additionalMB
+	// Commit ONLY remote EC-helper uploads.  The fixed helper set already
+	// tells us exactly which peers contribute; no per-candidate UploadAddMB map
+	// is needed.  If RepairPeer is a helper, its contribution is local.
+	for _, helper := range candidate.Helpers {
+		if helper == candidate.RepairPeer {
+			continue
+		}
+		loads.UploadMB[helper] += candidate.HelperMB
 	}
 
 	// Commit repair incoming traffic.
