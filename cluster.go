@@ -1670,7 +1670,7 @@ func (c *Cluster) alertsHandler() {
 								map[peer.ID]int,
 								map[peer.ID][]string,
 							) {
-								return c.similarities_Max_Min_Sauff(c.ctx, pin)
+								return c.s_Max_Min_Sauff(c.ctx, pin)
 							},
 						)
 
