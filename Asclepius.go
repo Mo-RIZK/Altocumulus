@@ -2880,6 +2880,44 @@ func ascValidNode(topology *NetworkTopology, p peer.ID) bool {
 		topology.NodesByPeer[p] != nil
 }
 
+// ascStablePeerKey returns a stable physical-node identifier for deterministic
+// ordering across cluster recreations. Peer IDs change when the cluster is
+// recreated, while topology node names (for example, dahu-17) remain stable.
+// Fall back to the peer ID only if no topology name is available.
+func ascStablePeerKey(topology *NetworkTopology, p peer.ID) string {
+	if ascValidNode(topology, p) && topology.NodesByPeer[p].Name != "" {
+		return topology.NodesByPeer[p].Name
+	}
+
+	return p.String()
+}
+
+// ascSortedUniquePeersStable removes duplicates and sorts peers by their stable
+// physical-node identity instead of their ephemeral libp2p peer ID.
+func ascSortedUniquePeersStable(peers []peer.ID, topology *NetworkTopology) []peer.ID {
+	seen := make(map[peer.ID]bool, len(peers))
+	out := make([]peer.ID, 0, len(peers))
+
+	for _, p := range peers {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		ki := ascStablePeerKey(topology, out[i])
+		kj := ascStablePeerKey(topology, out[j])
+		if ki != kj {
+			return ki < kj
+		}
+		return out[i].String() < out[j].String()
+	})
+
+	return out
+}
+
 func ascNewLoadState(topology *NetworkTopology) *ASCNetworkLoad {
 	loads := &ASCNetworkLoad{
 		UploadMB:   make(map[peer.ID]float64),
@@ -3015,12 +3053,12 @@ func ascBuildTasks(
 		}
 
 		for cid := range cidSources {
-			cidSources[cid] = ascSortedUniquePeers(cidSources[cid])
+			cidSources[cid] = ascSortedUniquePeersStable(cidSources[cid], topology)
 		}
 
 		helperCandidates := make([]peer.ID, 0, len(sameStripePeers))
 
-		for _, p := range ascSortedUniquePeers(sameStripePeers) {
+		for _, p := range ascSortedUniquePeersStable(sameStripePeers, topology) {
 			if p == failedPeer ||
 				!ascValidNode(topology, p) ||
 				ascOutMBps(topology, p) <= 0 {
@@ -3117,7 +3155,7 @@ func ascSelectHelpersForCandidate(
 
 			if cost < bestCost ||
 				(cost == bestCost &&
-					(bestHelper == "" || helper.String() < bestHelper.String())) {
+					(bestHelper == "" || ascStablePeerKey(topology, helper) < ascStablePeerKey(topology, bestHelper))) {
 				bestHelper = helper
 				bestCost = cost
 				bestAdditionalMB = additionalMB
@@ -3180,7 +3218,7 @@ func ascSelectCommonSourcesForCandidate(
 
 				if cost < bestCost ||
 					(cost == bestCost &&
-						(bestSource == "" || source.String() < bestSource.String())) {
+						(bestSource == "" || ascStablePeerKey(topology, source) < ascStablePeerKey(topology, bestSource))) {
 					bestSource = source
 					bestCost = cost
 				}
@@ -3283,7 +3321,7 @@ func ascBestRelocationDestination(
 
 		if destinationTime < bestTime ||
 			(destinationTime == bestTime &&
-				(bestPeer == "" || destination.String() < bestPeer.String())) {
+				(bestPeer == "" || ascStablePeerKey(topology, destination) < ascStablePeerKey(topology, bestPeer))) {
 			bestPeer = destination
 			bestTime = destinationTime
 		}
@@ -3445,10 +3483,10 @@ func ascBestCandidateForTask(
 		if !found ||
 			candidate.CompletionTime < best.CompletionTime ||
 			(candidate.CompletionTime == best.CompletionTime &&
-				candidate.RepairPeer.String() < best.RepairPeer.String()) ||
+				ascStablePeerKey(topology, candidate.RepairPeer) < ascStablePeerKey(topology, best.RepairPeer)) ||
 			(candidate.CompletionTime == best.CompletionTime &&
 				candidate.RepairPeer == best.RepairPeer &&
-				candidate.FinalPeer.String() < best.FinalPeer.String()) {
+				ascStablePeerKey(topology, candidate.FinalPeer) < ascStablePeerKey(topology, best.FinalPeer)) {
 			best = candidate
 			found = true
 		}
@@ -3538,7 +3576,7 @@ func ScheduleASCLEPIUSMultiResource(
 		return decisions, nil
 	}
 
-	candidatePeers = ascSortedUniquePeers(candidatePeers)
+	candidatePeers = ascSortedUniquePeersStable(candidatePeers, topology)
 
 	filtered := make([]peer.ID, 0, len(candidatePeers))
 	for _, p := range candidatePeers {
@@ -3636,13 +3674,15 @@ func ScheduleASCLEPIUSMultiResource(
 
 		fmt.Printf(
 			"[ASC-BW] shard=%s missing=%d helpers=%d common=%d "+
-				"localCommon=%d repair=%s final=%s relocated=%v "+
-				"incomingMB=%.3f finish=%.6f\n",
+				"localCommon=%d repairNode=%s finalNode=%s "+
+				"repairPeer=%s finalPeer=%s relocated=%v incomingMB=%.3f finish=%.6f\n",
 			task.Shard.Name,
 			len(task.MissingIndexes),
 			len(decision.Helpers),
 			len(task.CommonIndexes),
 			localCommon,
+			ascStablePeerKey(topology, decision.RepairPeer),
+			ascStablePeerKey(topology, decision.FinalPeer),
 			decision.RepairPeer.String(),
 			decision.FinalPeer.String(),
 			decision.FinalPeer != decision.RepairPeer,
