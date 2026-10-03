@@ -2832,26 +2832,6 @@ func ascCIDList(pin api.Pin) []string {
 	return out
 }
 
-func ascSortedUniquePeers(peers []peer.ID) []peer.ID {
-	seen := make(map[peer.ID]bool, len(peers))
-	out := make([]peer.ID, 0, len(peers))
-
-	for _, p := range peers {
-		if p == "" || seen[p] {
-			continue
-		}
-
-		seen[p] = true
-		out = append(out, p)
-	}
-
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].String() < out[j].String()
-	})
-
-	return out
-}
-
 func ascPeerSet(peers []peer.ID) map[peer.ID]bool {
 	out := make(map[peer.ID]bool, len(peers))
 
@@ -2880,16 +2860,16 @@ func ascValidNode(topology *NetworkTopology, p peer.ID) bool {
 		topology.NodesByPeer[p] != nil
 }
 
-// ascStablePeerKey returns a stable physical-node identifier for deterministic
-// ordering across cluster recreations. Peer IDs change when the cluster is
-// recreated, while topology node names (for example, dahu-17) remain stable.
-// Fall back to the peer ID only if no topology name is available.
+// ascStablePeerKey returns the stable physical-node identifier used ONLY for
+// deterministic scheduling order and tie-breaking. Peer IDs are intentionally
+// never used as a scheduling key because they change when the cluster is
+// recreated.
 func ascStablePeerKey(topology *NetworkTopology, p peer.ID) string {
-	if ascValidNode(topology, p) && topology.NodesByPeer[p].Name != "" {
+	if ascValidNode(topology, p) {
 		return topology.NodesByPeer[p].Name
 	}
 
-	return p.String()
+	return ""
 }
 
 // ascSortedUniquePeersStable removes duplicates and sorts peers by their stable
@@ -2906,13 +2886,8 @@ func ascSortedUniquePeersStable(peers []peer.ID, topology *NetworkTopology) []pe
 		out = append(out, p)
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		ki := ascStablePeerKey(topology, out[i])
-		kj := ascStablePeerKey(topology, out[j])
-		if ki != kj {
-			return ki < kj
-		}
-		return out[i].String() < out[j].String()
+	sort.SliceStable(out, func(i, j int) bool {
+		return ascStablePeerKey(topology, out[i]) < ascStablePeerKey(topology, out[j])
 	})
 
 	return out
