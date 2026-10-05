@@ -1632,7 +1632,6 @@ func (c *Cluster) alertsHandler() {
 
 					allpeers := append([]peer.ID{}, distance.otherPeers...)
 					allpeers = append(allpeers, c.id)
-					allpeers = ascSortedUniquePeers(allpeers)
 
 					fmt.Println("DEBUG candidate peer IDs:")
 					for _, p := range allpeers {
@@ -1643,6 +1642,7 @@ func (c *Cluster) alertsHandler() {
 						logger.Warnf("could not load topology: %s", err)
 						continue
 					}
+					allpeers = ascSortedUniquePeersStable(allpeers, topology)
 
 					topology.PrintFull()
 					for p, node := range topology.NodesByPeer {

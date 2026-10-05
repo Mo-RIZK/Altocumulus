@@ -1,4 +1,4 @@
-/*package ipfscluster
+package ipfscluster
 
 // ASCLEPIUS paper-era / HotStorage scheduler.
 //
@@ -622,8 +622,8 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 
 	return assignments, estimates
 }
-*/
 
+/*
 package ipfscluster
 
 // ASCLEPIUS paper-era / HotStorage scheduler.
@@ -1266,3 +1266,4 @@ func ScheduleASCLEPIUSOldIncomingOnly(
 
 	return assignments, estimates
 }
+*/
