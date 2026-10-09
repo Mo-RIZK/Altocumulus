@@ -2733,6 +2733,8 @@ func ScheduleASCLEPIUSMultiResource(
 
     return decisions, nil
 }*/
+
+/*
 package ipfscluster
 
 import (
@@ -5315,3 +5317,1217 @@ func ScheduleASCLEPIUSMultiResource(
 
     return decisions, nil
 }*/
+
+package ipfscluster
+
+import (
+	"fmt"
+	"math"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/ipfs-cluster/ipfs-cluster/api"
+	peer "github.com/libp2p/go-libp2p/core/peer"
+)
+
+// ASCNetworkLoad tracks committed network traffic.
+// Remote duplicate sources, EC helpers and relocation are charged to upload loads.
+// UploadMB models duplicate-source uploads, EC helper uploads, and relocation.
+//
+// DownloadMB models:
+//  1. repair incoming traffic;
+//  2. relocation incoming traffic at FinalPeer.
+type ASCNetworkLoad struct {
+	UploadMB   map[peer.ID]float64
+	DownloadMB map[peer.ID]float64
+}
+
+// ASCCommonChunk is kept for compatibility with the existing repair decision.
+//
+// Source == RepairPeer means the common chunk is already local on RepairPeer.
+// Source != RepairPeer identifies the selected remote duplicate source.
+//
+// The executor must use the selected Source for remote duplicate retrieval.
+type ASCCommonChunk struct {
+	ChunkIndex int
+	CID        string
+	Source     peer.ID
+}
+
+// FinalPeer == RepairPeer means the repaired shard remains on RepairPeer.
+// Otherwise, the repaired shard is relocated from RepairPeer to FinalPeer.
+type ASCRepairDecision struct {
+	Shard        api.Pin
+	RepairPeer   peer.ID
+	Helpers      []peer.ID
+	CommonChunks []ASCCommonChunk
+	FinalPeer    peer.ID
+}
+
+type ascChunk struct {
+	Index   int
+	CID     string
+	Sources []peer.ID
+}
+
+type ascTask struct {
+	Shard api.Pin
+	Key   string
+
+	N       int
+	ShardMB float64
+
+	SameStripePeers  map[peer.ID]bool
+	HelperCandidates []peer.ID
+
+	Chunks         []ascChunk
+	CommonIndexes  []int
+	MissingIndexes []int
+
+	// StaticCandidate is computed ONCE before Global Max-Min starts.
+	// It contains all information that depends only on immutable chunk
+	// placement / stripe placement for a given candidate RepairPeer.
+	StaticCandidate map[peer.ID]ascStaticRepairCandidate
+}
+
+// ascStaticRepairCandidate contains immutable information for one
+// (shard, RepairPeer) pair.  Nothing in this structure depends on the
+// accumulated UploadMB/DownloadMB loads, so it must never be rebuilt in the
+// Global Max-Min loop.
+type ascStaticRepairCandidate struct {
+	CommonChunks      []ASCCommonChunk
+	LocalCommonCount  int
+	RemoteCommonCount int
+	RemoteCommonMB    float64
+
+	NeedsRelocation   bool
+	ValidDestinations []peer.ID
+}
+
+// ascShardHelpers is selected ONCE for one shard in one Global Max-Min
+// iteration. The same helper set is then used while evaluating every possible
+// RepairPeer for that shard.
+type ascShardHelpers struct {
+	Helpers  []peer.ID
+	HelperMB float64
+
+	// HelperUploadTime is computed ONCE after helper selection for the current
+	// shard/Global-Max-Min iteration.  Candidate RepairPeers reuse it instead
+	// of recalculating the same helper completion times again and again.
+	//
+	// MaxUploadTime is the bottleneck when RepairPeer is not a helper.
+	// MaxUploadTimeWithout[h] is the bottleneck when helper h is the
+	// RepairPeer and therefore its reconstruction contribution is local.
+	MaxUploadTime        float64
+	MaxUploadTimeWithout map[peer.ID]float64
+	HelperSet            map[peer.ID]bool
+}
+
+// ascRepairCandidate is the complete plan for one fixed-helper shard and one
+// candidate repair peer.
+type ascRepairCandidate struct {
+	TaskIndex int
+
+	RepairPeer peer.ID
+	FinalPeer  peer.ID
+
+	Helpers      []peer.ID
+	CommonChunks []ASCCommonChunk
+
+	// Helpers is the fixed helper set selected once for this shard in the
+	// current Global Max-Min iteration.  It is shared by all RepairPeer
+	// candidates; we do not allocate/copy it per candidate.
+
+	HelperMB           float64
+	SourceUploadMB     map[peer.ID]float64
+	RepairIncomingMB   float64
+	RepairDownloadTime float64 // Projected incoming completion at RepairPeer; secondary tie-break.
+	CompletionTime     float64
+}
+
+func ascCleanCID(c string) string {
+	c = strings.TrimSpace(c)
+	c = strings.Trim(c, "<>")
+	return c
+}
+
+func ascCIDList(pin api.Pin) []string {
+	parts := strings.Split(pin.Metadata["Cids"], ",")
+	out := make([]string, 0, len(parts))
+
+	for _, raw := range parts {
+		cid := ascCleanCID(raw)
+		if cid != "" {
+			out = append(out, cid)
+		}
+	}
+
+	return out
+}
+
+// ascStablePeerName is independent of regenerated libp2p peer IDs.
+// Callers validate topology node names before scheduling.
+func ascStablePeerName(topology *NetworkTopology, p peer.ID) string {
+	if !ascValidNode(topology, p) {
+		return ""
+	}
+	return topology.NodesByPeer[p].Name
+}
+
+func ascSortedUniquePeers(peers []peer.ID, topology *NetworkTopology) []peer.ID {
+	seen := make(map[peer.ID]bool, len(peers))
+	out := make([]peer.ID, 0, len(peers))
+
+	for _, p := range peers {
+		if p == "" || seen[p] {
+			continue
+		}
+
+		seen[p] = true
+		out = append(out, p)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return ascStablePeerName(topology, out[i]) < ascStablePeerName(topology, out[j])
+	})
+
+	return out
+}
+
+func ascPeerSet(peers []peer.ID) map[peer.ID]bool {
+	out := make(map[peer.ID]bool, len(peers))
+
+	for _, p := range peers {
+		if p != "" {
+			out[p] = true
+		}
+	}
+
+	return out
+}
+
+func ascContainsPeer(peers []peer.ID, target peer.ID) bool {
+	for _, p := range peers {
+		if p == target {
+			return true
+		}
+	}
+
+	return false
+}
+
+func ascValidNode(topology *NetworkTopology, p peer.ID) bool {
+	return topology != nil &&
+		topology.NodesByPeer != nil &&
+		topology.NodesByPeer[p] != nil
+}
+
+func ascNewLoadState(topology *NetworkTopology) *ASCNetworkLoad {
+	loads := &ASCNetworkLoad{
+		UploadMB:   make(map[peer.ID]float64),
+		DownloadMB: make(map[peer.ID]float64),
+	}
+
+	if topology != nil {
+		for p := range topology.NodesByPeer {
+			loads.UploadMB[p] = 0
+			loads.DownloadMB[p] = 0
+		}
+	}
+
+	return loads
+}
+
+// NetworkTopology stores bandwidth in Mbit/s. The scheduler uses MB/s.
+func ascOutMBps(topology *NetworkTopology, p peer.ID) float64 {
+	if !ascValidNode(topology, p) {
+		return 0
+	}
+
+	return float64(topology.NodesByPeer[p].GlobalOut) / 8.0
+}
+
+// NetworkTopology stores bandwidth in Mbit/s. The scheduler uses MB/s.
+func ascInMBps(topology *NetworkTopology, p peer.ID) float64 {
+	if !ascValidNode(topology, p) {
+		return 0
+	}
+
+	return float64(topology.NodesByPeer[p].GlobalIn) / 8.0
+}
+
+// ascCompletion computes:
+//
+//	(current assigned traffic + new traffic) / bandwidth.
+func ascCompletion(
+	loadMB float64,
+	additionalMB float64,
+	capacityMBps float64,
+) float64 {
+	if loadMB == 0 && additionalMB == 0 {
+		return 0
+	}
+
+	if capacityMBps <= 0 {
+		return math.Inf(1)
+	}
+
+	return (loadMB + additionalMB) / capacityMBps
+}
+
+func ascMax(values ...float64) float64 {
+	maximum := 0.0
+
+	for _, value := range values {
+		if value > maximum {
+			maximum = value
+		}
+	}
+
+	return maximum
+}
+
+// ascIncomingOnlyShardIndex is the same indexed representation used by the
+// old incoming-only ASCLEPIUS preprocessing.  It is built once per failed
+// shard from getSimilarity() and then reused for all CID classification.
+type ascIncomingOnlyShardIndex struct {
+	PeerCIDSet map[peer.ID]map[string]bool
+	CIDSources map[string][]peer.ID
+}
+
+func ascBuildIncomingOnlyShardIndex(
+	failedPeer peer.ID,
+	topology *NetworkTopology,
+	peerMatchedCIDs map[peer.ID][]string,
+) ascIncomingOnlyShardIndex {
+	peerCIDSet := make(map[peer.ID]map[string]bool, len(peerMatchedCIDs))
+	cidSources := make(map[string][]peer.ID)
+
+	for p, matchedCIDs := range peerMatchedCIDs {
+		if p == "" || p == failedPeer || !ascValidNode(topology, p) {
+			continue
+		}
+
+		set := make(map[string]bool, len(matchedCIDs))
+		peerCIDSet[p] = set
+
+		for _, rawCID := range matchedCIDs {
+			cid := ascCleanCID(rawCID)
+			if cid == "" || set[cid] {
+				continue
+			}
+
+			set[cid] = true
+			cidSources[cid] = append(cidSources[cid], p)
+		}
+	}
+
+	for cid := range cidSources {
+		cidSources[cid] = ascSortedUniquePeers(cidSources[cid], topology)
+	}
+
+	return ascIncomingOnlyShardIndex{
+		PeerCIDSet: peerCIDSet,
+		CIDSources: cidSources,
+	}
+}
+
+// Phase 1 uses the same preprocessing pattern as the old incoming-only code:
+//  1. get stripe metadata once per failed shard;
+//  2. get similarity once per failed shard;
+//  3. immediately build a CID -> surviving-source index;
+//  4. classify the shard's CIDs by O(1) index lookup.
+//
+// No similarity/CID-source scan is repeated in Global Max-Min.
+func ascBuildTasks(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	topology *NetworkTopology,
+	chunkMB float64,
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (
+		peer.ID,
+		[]string,
+		map[peer.ID]int,
+		map[peer.ID][]string,
+	),
+) ([]*ascTask, error) {
+	tasks := make([]*ascTask, 0, len(failedShards))
+
+	for _, shard := range failedShards {
+		cids := ascCIDList(shard)
+		if len(cids) == 0 {
+			continue
+		}
+
+		// Same as the old preprocessing: stripe metadata is fetched once.
+		_, sameStripePeers, n, shardLength := getSameStripe(shard)
+		if n <= 0 {
+			return nil, fmt.Errorf(
+				"shard %s has invalid EC helper count n=%d",
+				shard.Name,
+				n,
+			)
+		}
+
+		shardChunkCount := len(cids)
+		if shardLength > 0 {
+			shardChunkCount = shardLength
+		}
+
+		// Same as the old preprocessing: similarity is fetched exactly once for
+		// this failed shard, then converted immediately into an indexed form.
+		_, _, _, peerMatchedCIDs := getSimilarity(shard)
+		index := ascBuildIncomingOnlyShardIndex(
+			failedPeer,
+			topology,
+			peerMatchedCIDs,
+		)
+
+		helperCandidates := make([]peer.ID, 0, len(sameStripePeers))
+		for _, p := range ascSortedUniquePeers(sameStripePeers, topology) {
+			if p == failedPeer ||
+				!ascValidNode(topology, p) ||
+				ascOutMBps(topology, p) <= 0 {
+				continue
+			}
+			helperCandidates = append(helperCandidates, p)
+		}
+
+		task := &ascTask{
+			Shard:            shard,
+			Key:              shard.Cid.String(),
+			N:                n,
+			ShardMB:          float64(shardChunkCount) * chunkMB,
+			SameStripePeers:  ascPeerSet(sameStripePeers),
+			HelperCandidates: helperCandidates,
+			Chunks:           make([]ascChunk, 0, len(cids)),
+			CommonIndexes:    make([]int, 0),
+			MissingIndexes:   make([]int, 0),
+			StaticCandidate:  make(map[peer.ID]ascStaticRepairCandidate),
+		}
+
+		// Classification is now only indexed lookups.  CIDSources already contains
+		// only valid surviving peers, so a non-empty entry means the chunk is common.
+		for chunkIndex, rawCID := range cids {
+			cid := ascCleanCID(rawCID)
+			sources := index.CIDSources[cid]
+
+			chunk := ascChunk{
+				Index:   chunkIndex,
+				CID:     cid,
+				Sources: sources,
+			}
+
+			if len(sources) > 0 {
+				task.CommonIndexes = append(task.CommonIndexes, chunkIndex)
+			} else {
+				task.MissingIndexes = append(task.MissingIndexes, chunkIndex)
+			}
+
+			task.Chunks = append(task.Chunks, chunk)
+		}
+
+		if len(task.MissingIndexes) > 0 &&
+			len(task.HelperCandidates) < task.N {
+			return nil, fmt.Errorf(
+				"shard %s needs %d helpers but only %d valid helpers exist",
+				shard.Name,
+				task.N,
+				len(task.HelperCandidates),
+			)
+		}
+
+		tasks = append(tasks, task)
+	}
+
+	return tasks, nil
+}
+
+// Select the N EC helpers ONCE for this shard in the CURRENT Global Max-Min
+// iteration.
+//
+// Helper choice depends only on the currently committed upload loads and each
+// helper's outgoing bandwidth. It does NOT depend on the candidate RepairPeer.
+//
+// Every selected helper is provisionally charged:
+//
+//	|MissingIndexes| * chunkMB
+//
+// while selecting the next helper, so the N selected helpers are themselves
+// load-aware.
+//
+// The helper set is then FIXED while all RepairPeer candidates for this shard
+// are evaluated.
+func ascSelectHelpersForShard(
+	task *ascTask,
+	topology *NetworkTopology,
+	loads *ASCNetworkLoad,
+	chunkMB float64,
+) (ascShardHelpers, error) {
+	if len(task.MissingIndexes) == 0 {
+		return ascShardHelpers{
+			Helpers:              nil,
+			HelperMB:             0,
+			MaxUploadTime:        0,
+			MaxUploadTimeWithout: nil,
+			HelperSet:            nil,
+		}, nil
+	}
+
+	helperMB := float64(len(task.MissingIndexes)) * chunkMB
+
+	// The provisional charge previously stored in temporaryUpload does not
+	// change the cost of any still-unselected helper: once a helper is chosen,
+	// it is excluded from the following choices.  Therefore helper selection
+	// is exactly equivalent to computing every candidate's projected cost ONCE,
+	// sorting by (cost, stable node name), and taking the first N.
+	type helperScore struct {
+		Peer peer.ID
+		Time float64
+	}
+
+	scores := make([]helperScore, 0, len(task.HelperCandidates))
+	for _, helper := range task.HelperCandidates {
+		projected := ascCompletion(
+			loads.UploadMB[helper],
+			helperMB,
+			ascOutMBps(topology, helper),
+		)
+		if math.IsInf(projected, 1) {
+			continue
+		}
+		scores = append(scores, helperScore{Peer: helper, Time: projected})
+	}
+
+	sort.Slice(scores, func(i, j int) bool {
+		if scores[i].Time != scores[j].Time {
+			return scores[i].Time < scores[j].Time
+		}
+		return ascStablePeerName(topology, scores[i].Peer) < ascStablePeerName(topology, scores[j].Peer)
+	})
+
+	if len(scores) < task.N {
+		return ascShardHelpers{}, fmt.Errorf(
+			"cannot assign %d helpers for shard %s; only %d valid helpers exist",
+			task.N,
+			task.Shard.Name,
+			len(scores),
+		)
+	}
+
+	helpers := make([]peer.ID, task.N)
+	helperTimes := make([]float64, task.N)
+	helperSet := make(map[peer.ID]bool, task.N)
+	maxUploadTime := 0.0
+
+	for i := 0; i < task.N; i++ {
+		helpers[i] = scores[i].Peer
+		helperTimes[i] = scores[i].Time
+		helperSet[scores[i].Peer] = true
+		if scores[i].Time > maxUploadTime {
+			maxUploadTime = scores[i].Time
+		}
+	}
+
+	// Precompute the helper-upload bottleneck for the only special case that
+	// varies with RepairPeer: RepairPeer itself is one of the fixed helpers,
+	// so that helper's transfer is local and must be excluded.
+	// N is small, so this O(N^2) work is done once per shard evaluation and
+	// replaces an O(N) helper scan for every RepairPeer candidate.
+	maxWithout := make(map[peer.ID]float64, task.N)
+	for excludedIndex, excludedPeer := range helpers {
+		maximum := 0.0
+		for i, value := range helperTimes {
+			if i == excludedIndex {
+				continue
+			}
+			if value > maximum {
+				maximum = value
+			}
+		}
+		maxWithout[excludedPeer] = maximum
+	}
+
+	return ascShardHelpers{
+		Helpers:              helpers,
+		HelperMB:             helperMB,
+		MaxUploadTime:        maxUploadTime,
+		MaxUploadTimeWithout: maxWithout,
+		HelperSet:            helperSet,
+	}, nil
+}
+
+// Phase 2: precompute immutable information for every (shard, RepairPeer).
+//
+// This is the same optimization used by the old incoming-only ASCLEPIUS code:
+// common/local/remote classification is performed ONCE before Global Max-Min.
+//
+// For every candidate RepairPeer we precompute:
+//   - the CommonChunks metadata required by the executor;
+//   - how many common chunks are local;
+//   - how many common chunks are remote;
+//   - the corresponding remote-common incoming MB;
+//   - whether relocation is required;
+//   - all statically valid relocation destinations.
+//
+// The dynamic Global Max-Min loop therefore never scans common CIDs or their
+// source lists again.
+func ascPrecomputeStaticCandidates(
+	tasks []*ascTask,
+	failedPeer peer.ID,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+) {
+	for _, task := range tasks {
+		task.StaticCandidate = make(map[peer.ID]ascStaticRepairCandidate, len(candidatePeers))
+
+		for _, repairPeer := range candidatePeers {
+			if repairPeer == "" ||
+				repairPeer == failedPeer ||
+				!ascValidNode(topology, repairPeer) ||
+				ascInMBps(topology, repairPeer) <= 0 {
+				continue
+			}
+
+			commonChunks := make([]ASCCommonChunk, 0, len(task.CommonIndexes))
+			localCommonCount := 0
+
+			for _, chunkIndex := range task.CommonIndexes {
+				chunk := task.Chunks[chunkIndex]
+
+				source := peer.ID("")
+				if ascContainsPeer(chunk.Sources, repairPeer) {
+					source = repairPeer
+					localCommonCount++
+				}
+
+				commonChunks = append(commonChunks, ASCCommonChunk{
+					ChunkIndex: chunk.Index,
+					CID:        chunk.CID,
+					Source:     source,
+				})
+			}
+
+			remoteCommonCount := len(task.CommonIndexes) - localCommonCount
+			if remoteCommonCount < 0 {
+				remoteCommonCount = 0
+			}
+
+			needsRelocation := task.SameStripePeers[repairPeer]
+
+			validDestinations := make([]peer.ID, 0)
+			if needsRelocation {
+				for _, destination := range candidatePeers {
+					if destination == "" ||
+						destination == failedPeer ||
+						destination == repairPeer ||
+						task.SameStripePeers[destination] ||
+						!ascValidNode(topology, destination) ||
+						ascInMBps(topology, destination) <= 0 {
+						continue
+					}
+
+					validDestinations = append(validDestinations, destination)
+				}
+			}
+
+			task.StaticCandidate[repairPeer] = ascStaticRepairCandidate{
+				CommonChunks:      commonChunks,
+				LocalCommonCount:  localCommonCount,
+				RemoteCommonCount: remoteCommonCount,
+				RemoteCommonMB:    float64(remoteCommonCount) * chunkMB,
+				NeedsRelocation:   needsRelocation,
+				ValidDestinations: validDestinations,
+			}
+		}
+	}
+}
+
+// Select the currently best relocation destination from the statically
+// precomputed valid-destination list.
+//
+// Destination validity does not change during scheduling, so it is precomputed.
+// Only the projected destination completion time remains dynamic because
+// DownloadMB changes after every committed repair.
+func ascBestRelocationDestination(
+	task *ascTask,
+	static ascStaticRepairCandidate,
+	topology *NetworkTopology,
+	loads *ASCNetworkLoad,
+) (peer.ID, float64) {
+	bestPeer := peer.ID("")
+	bestTime := math.Inf(1)
+
+	for _, destination := range static.ValidDestinations {
+		destinationTime := ascCompletion(
+			loads.DownloadMB[destination],
+			task.ShardMB,
+			ascInMBps(topology, destination),
+		)
+		if math.IsInf(destinationTime, 1) {
+			continue
+		}
+
+		if destinationTime < bestTime ||
+			(destinationTime == bestTime &&
+				(bestPeer == "" || ascStablePeerName(topology, destination) < ascStablePeerName(topology, bestPeer))) {
+			bestPeer = destination
+			bestTime = destinationTime
+		}
+	}
+
+	return bestPeer, bestTime
+}
+
+// Choose a concrete upload source for each nonlocal duplicated chunk.
+// Selection starts with committed upload loads plus the EC-helper uploads
+// belonging to this candidate. This prevents assigning a duplicate source
+// to an already-saturated helper without accounting for contention.
+// The source list and local/common classification were precomputed once.
+func ascSelectDuplicateSources(
+	task *ascTask, static ascStaticRepairCandidate, fixed ascShardHelpers,
+	repairPeer peer.ID, topology *NetworkTopology, loads *ASCNetworkLoad,
+	chunkMB float64,
+) ([]ASCCommonChunk, map[peer.ID]float64, float64, bool) {
+	projected := make(map[peer.ID]float64, len(loads.UploadMB))
+	for p, mb := range loads.UploadMB {
+		projected[p] = mb
+	}
+	for _, h := range fixed.Helpers {
+		if h != repairPeer {
+			projected[h] += fixed.HelperMB
+		}
+	}
+	chosen := make([]ASCCommonChunk, len(static.CommonChunks))
+	copy(chosen, static.CommonChunks)
+	additions := make(map[peer.ID]float64)
+	maxSourceTime := 0.0
+	for i := range chosen {
+		if chosen[i].Source == repairPeer {
+			continue
+		}
+		chunk := task.Chunks[chosen[i].ChunkIndex]
+		best := peer.ID("")
+		bestTime := math.Inf(1)
+		for _, src := range chunk.Sources {
+			if src == repairPeer || ascOutMBps(topology, src) <= 0 {
+				continue
+			}
+			t := ascCompletion(projected[src], chunkMB, ascOutMBps(topology, src))
+			if t < bestTime || (t == bestTime && (best == "" || ascStablePeerName(topology, src) < ascStablePeerName(topology, best))) {
+				best, bestTime = src, t
+			}
+		}
+		if best == "" {
+			return nil, nil, 0, false
+		}
+		chosen[i].Source = best
+		projected[best] += chunkMB
+		additions[best] += chunkMB
+		if bestTime > maxSourceTime {
+			maxSourceTime = bestTime
+		}
+	}
+	return chosen, additions, maxSourceTime, true
+}
+
+// Evaluate one RepairPeer candidate using a helper set that was already
+// selected and FIXED for this shard in the current Global Max-Min iteration.
+//
+// Common/direct duplicate chunks:
+//   - local common chunk: 0 incoming;
+//   - remote common chunk: 1 * chunkMB incoming;
+//   - choose a concrete remote source and charge its outgoing bandwidth;
+//   - account for contention with selected EC helpers.
+//
+// Missing chunks:
+//   - normally require N * |M| * chunkMB incoming;
+//   - if RepairPeer is one of the fixed helpers, that helper contribution is
+//     local, so only (N-1) helper streams are incoming;
+//   - only remote fixed helpers contribute UploadMB.
+//
+// Candidate completion time is the maximum of:
+//   - the sum of projected EC-helper and duplicate-source upload times;
+//   - projected RepairPeer download completion (EC helpers + remote duplicates);
+//   - relocation upload completion, when relocation is needed;
+//   - relocation destination download completion, when relocation is needed.
+func ascEvaluateRepairCandidateWithFixedHelpers(
+	taskIndex int,
+	task *ascTask,
+	fixed ascShardHelpers,
+	repairPeer peer.ID,
+	topology *NetworkTopology,
+	loads *ASCNetworkLoad,
+	relocationPeer peer.ID,
+	relocationDownloadTime float64,
+	chunkMB float64,
+) (ascRepairCandidate, bool) {
+	// All common/local/remote and placement-validity work was done once before
+	// Global Max-Min. The hot loop performs only a map lookup here.
+	static, ok := task.StaticCandidate[repairPeer]
+	if !ok {
+		return ascRepairCandidate{}, false
+	}
+
+	// Helper membership and helper-upload bottleneck were already computed once
+	// for this fixed helper set. Do not rescan/recalculate the same helpers for
+	// every RepairPeer candidate.
+	repairPeerIsHelper := fixed.HelperSet != nil && fixed.HelperSet[repairPeer]
+	remoteHelperCount := len(fixed.Helpers)
+	helperUploadTime := fixed.MaxUploadTime
+
+	if repairPeerIsHelper {
+		remoteHelperCount--
+		helperUploadTime = fixed.MaxUploadTimeWithout[repairPeer]
+	}
+	if remoteHelperCount < 0 {
+		remoteHelperCount = 0
+	}
+
+	commonChunks, sourceUploads, sourceUploadTime, ok := ascSelectDuplicateSources(
+		task, static, fixed, repairPeer, topology, loads,
+		chunkMB,
+	)
+	if !ok {
+		return ascRepairCandidate{}, false
+	}
+
+	// RepairPeer incoming traffic:
+	//   remote common chunks * q
+	// + remote EC helpers * missing chunks * q.
+	repairIncomingMB :=
+		static.RemoteCommonMB +
+			float64(remoteHelperCount)*fixed.HelperMB
+
+	repairDownloadTime := ascCompletion(
+		loads.DownloadMB[repairPeer],
+		repairIncomingMB,
+		ascInMBps(topology, repairPeer),
+	)
+	if math.IsInf(repairDownloadTime, 1) {
+		return ascRepairCandidate{}, false
+	}
+
+	// Reuse the fixed helper slice and static common-chunk slice.  They are
+	// immutable during this shard evaluation, so copying them for every
+	// RepairPeer candidate is unnecessary.
+	candidate := ascRepairCandidate{
+		TaskIndex:          taskIndex,
+		RepairPeer:         repairPeer,
+		FinalPeer:          repairPeer,
+		Helpers:            fixed.Helpers,
+		CommonChunks:       commonChunks,
+		HelperMB:           fixed.HelperMB,
+		SourceUploadMB:     sourceUploads,
+		RepairIncomingMB:   repairIncomingMB,
+		RepairDownloadTime: repairDownloadTime,
+		CompletionTime: ascMax(
+			helperUploadTime+sourceUploadTime,
+			repairDownloadTime,
+		),
+	}
+
+	if !static.NeedsRelocation {
+		return candidate, true
+	}
+
+	// For a given shard in one Global Max-Min iteration, every RepairPeer that
+	// needs relocation belongs to SameStripePeers.  The valid final destinations
+	// therefore have the same static constraint: not failed and not same-stripe.
+	// Their DownloadMB loads also stay unchanged while candidates of this shard
+	// are being evaluated.  Hence the best relocation destination/time is
+	// computed ONCE in ascBestCandidateForTask and reused here.
+	if relocationPeer == "" || math.IsInf(relocationDownloadTime, 1) {
+		return ascRepairCandidate{}, false
+	}
+
+	relocationUploadTime := ascCompletion(
+		loads.UploadMB[repairPeer]+sourceUploads[repairPeer],
+		task.ShardMB,
+		ascOutMBps(topology, repairPeer),
+	)
+	if math.IsInf(relocationUploadTime, 1) {
+		return ascRepairCandidate{}, false
+	}
+
+	candidate.FinalPeer = relocationPeer
+	candidate.CompletionTime = ascMax(
+		helperUploadTime+sourceUploadTime,
+		repairDownloadTime,
+		relocationUploadTime,
+		relocationDownloadTime,
+	)
+
+	return candidate, true
+}
+
+// For task i in the CURRENT Global Max-Min iteration:
+//
+//  1. select the N EC helpers ONCE using current UploadMB/BWout;
+//  2. FIX that helper set;
+//  3. evaluate every candidate RepairPeer j using the same helpers;
+//  4. include relocation/final placement when needed;
+//  5. return min_j P_ij.
+func ascBestCandidateForTask(
+	taskIndex int,
+	task *ascTask,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	loads *ASCNetworkLoad,
+	chunkMB float64,
+) (ascRepairCandidate, bool) {
+	fixedHelpers, err := ascSelectHelpersForShard(
+		task,
+		topology,
+		loads,
+		chunkMB,
+	)
+	if err != nil {
+		return ascRepairCandidate{}, false
+	}
+
+	// Relocation destination quality depends on current committed DownloadMB,
+	// but those loads do not change while we evaluate the RepairPeers of this
+	// one shard.  Compute the best destination ONCE and reuse it for every
+	// RepairPeer that needs relocation.
+	relocationPeer := peer.ID("")
+	relocationDownloadTime := math.Inf(1)
+
+	for _, repairPeer := range candidatePeers {
+		static, ok := task.StaticCandidate[repairPeer]
+		if !ok || !static.NeedsRelocation {
+			continue
+		}
+
+		relocationPeer, relocationDownloadTime = ascBestRelocationDestination(
+			task,
+			static,
+			topology,
+			loads,
+		)
+		break
+	}
+
+	best := ascRepairCandidate{}
+	found := false
+
+	for _, repairPeer := range candidatePeers {
+		candidate, ok := ascEvaluateRepairCandidateWithFixedHelpers(
+			taskIndex,
+			task,
+			fixedHelpers,
+			repairPeer,
+			topology,
+			loads,
+			relocationPeer,
+			relocationDownloadTime,
+			chunkMB,
+		)
+		if !ok {
+			continue
+		}
+
+		// Lexicographic: overall completion, projected repair-peer download,
+		// then stable physical/topology node name (never peer ID).
+		if !found ||
+			candidate.CompletionTime < best.CompletionTime ||
+			(candidate.CompletionTime == best.CompletionTime &&
+				(candidate.RepairDownloadTime < best.RepairDownloadTime ||
+					(candidate.RepairDownloadTime == best.RepairDownloadTime &&
+						ascStablePeerName(topology, candidate.RepairPeer) <
+							ascStablePeerName(topology, best.RepairPeer)))) {
+			best = candidate
+			found = true
+		}
+	}
+
+	return best, found
+}
+
+// Commit only the plan selected by Global Max-Min.
+func ascCommitRepairCandidate(
+	task *ascTask,
+	candidate ascRepairCandidate,
+	loads *ASCNetworkLoad,
+) {
+	// Commit ONLY remote EC-helper uploads.  The fixed helper set already
+	// tells us exactly which peers contribute; no per-candidate UploadAddMB map
+	// is needed.  If RepairPeer is a helper, its contribution is local.
+	for _, helper := range candidate.Helpers {
+		if helper == candidate.RepairPeer {
+			continue
+		}
+		loads.UploadMB[helper] += candidate.HelperMB
+	}
+
+	// Commit remote duplicate-source uploads, including sources that also
+	// serve as EC helpers in the same repair.
+	for src, mb := range candidate.SourceUploadMB {
+		loads.UploadMB[src] += mb
+	}
+
+	// Commit repair incoming traffic.
+	loads.DownloadMB[candidate.RepairPeer] += candidate.RepairIncomingMB
+
+	if candidate.FinalPeer == candidate.RepairPeer {
+		return
+	}
+
+	// Relocation: RepairPeer uploads the repaired shard.
+	loads.UploadMB[candidate.RepairPeer] += task.ShardMB
+
+	// Relocation: FinalPeer downloads the repaired shard.
+	loads.DownloadMB[candidate.FinalPeer] += task.ShardMB
+}
+
+func ascBuildDecision(
+	task *ascTask,
+	candidate ascRepairCandidate,
+) ASCRepairDecision {
+	return ASCRepairDecision{
+		Shard:        task.Shard,
+		RepairPeer:   candidate.RepairPeer,
+		Helpers:      append([]peer.ID(nil), candidate.Helpers...),
+		CommonChunks: append([]ASCCommonChunk(nil), candidate.CommonChunks...),
+		FinalPeer:    candidate.FinalPeer,
+	}
+}
+
+// ScheduleASCLEPIUSMultiResource applies the intended joint bandwidth-aware
+// ASCLEPIUS Global Max-Min scheduler.
+//
+// In EACH Global Max-Min iteration, for EACH remaining shard:
+//
+//  1. Select N EC helpers ONCE using current committed helper upload load and
+//     each helper's outgoing bandwidth.
+//  2. FIX those helpers for that shard for the whole current iteration.
+//  3. Evaluate every candidate RepairPeer using the SAME fixed helpers.
+//  4. Common chunks: local = 0 incoming; remote = 1 incoming chunk.
+//     Select remote duplicate sources dynamically and charge their uploads.
+//  5. Missing chunks use fixed EC helpers. Both EC helpers and remote
+//     duplicate sources contribute to the projected upload load.
+//  6. If a RepairPeer already stores another shard of the same stripe, select
+//     the valid relocation destination with minimum projected incoming time.
+//  7. Candidate completion is max(helper upload + duplicate upload,
+//     total repair download, relocation upload, relocation download).
+//  8. Keep the minimum candidate for each shard.
+//  9. Global Max-Min commits max_i(min_j P_ij).
+//
+// After one shard is committed, UploadMB/DownloadMB change. In the NEXT
+// Global Max-Min iteration, each still-unscheduled shard selects its helpers
+// again once using the new committed loads.
+func ScheduleASCLEPIUSMultiResource(
+	failedPeer peer.ID,
+	failedShards []api.Pin,
+	candidatePeers []peer.ID,
+	topology *NetworkTopology,
+	chunkMB float64,
+	getSameStripe func(api.Pin) ([]api.Pin, []peer.ID, int, int),
+	getSimilarity func(api.Pin) (
+		peer.ID,
+		[]string,
+		map[peer.ID]int,
+		map[peer.ID][]string,
+	),
+) ([]ASCRepairDecision, error) {
+	started := time.Now()
+	decisions := make([]ASCRepairDecision, 0, len(failedShards))
+
+	if topology == nil {
+		return decisions, fmt.Errorf("nil network topology")
+	}
+	if chunkMB <= 0 {
+		return decisions, fmt.Errorf("chunkMB must be positive")
+	}
+	if getSameStripe == nil {
+		return decisions, fmt.Errorf("nil getSameStripe callback")
+	}
+	if getSimilarity == nil {
+		return decisions, fmt.Errorf("nil getSimilarity callback")
+	}
+	if len(failedShards) == 0 {
+		return decisions, nil
+	}
+
+	// Stable names must uniquely identify nodes across runs. Validate the
+	// entire topology because helper and duplicate sources may not be candidates.
+	seenNames := make(map[string]bool, len(topology.NodesByPeer))
+	for p, node := range topology.NodesByPeer {
+		if node == nil || strings.TrimSpace(node.Name) == "" {
+			return decisions, fmt.Errorf("missing stable topology node name for peer %s", p)
+		}
+		if seenNames[node.Name] {
+			return decisions, fmt.Errorf("duplicate stable topology node name %q", node.Name)
+		}
+		seenNames[node.Name] = true
+	}
+
+	candidatePeers = ascSortedUniquePeers(candidatePeers, topology)
+
+	filtered := make([]peer.ID, 0, len(candidatePeers))
+	for _, p := range candidatePeers {
+		if p != failedPeer && ascValidNode(topology, p) {
+			filtered = append(filtered, p)
+		}
+	}
+
+	candidatePeers = filtered
+	if len(candidatePeers) == 0 {
+		return decisions, fmt.Errorf("no valid candidate peers")
+	}
+
+	loads := ascNewLoadState(topology)
+
+	phase := time.Now()
+	tasks, err := ascBuildTasks(
+		failedPeer,
+		failedShards,
+		topology,
+		chunkMB,
+		getSameStripe,
+		getSimilarity,
+	)
+	if err != nil {
+		return decisions, err
+	}
+
+	fmt.Printf(
+		"[ASC-BW] common/missing shard classification took %v\n",
+		time.Since(phase),
+	)
+
+	// Precompute all immutable (shard, RepairPeer) information ONCE, exactly
+	// like the old incoming-only scheduler precomputed candidate costs.
+	phase = time.Now()
+	ascPrecomputeStaticCandidates(
+		tasks,
+		failedPeer,
+		candidatePeers,
+		topology,
+		chunkMB,
+	)
+	fmt.Printf(
+		"[ASC-BW] static per-(shard,repairPeer) common/relocation precompute took %v\n",
+		time.Since(phase),
+	)
+
+	unscheduled := make(map[int]bool, len(tasks))
+	for taskIndex := range tasks {
+		unscheduled[taskIndex] = true
+	}
+
+	phase = time.Now()
+
+	for len(unscheduled) > 0 {
+		bestByTask := make(map[int]ascRepairCandidate, len(unscheduled))
+
+		// For each remaining shard:
+		//   - select helpers ONCE;
+		//   - fix them;
+		//   - evaluate all RepairPeers + relocation with those same helpers.
+		for taskIndex := range unscheduled {
+			candidate, ok := ascBestCandidateForTask(
+				taskIndex,
+				tasks[taskIndex],
+				candidatePeers,
+				topology,
+				loads,
+				chunkMB,
+			)
+			if ok {
+				bestByTask[taskIndex] = candidate
+			}
+		}
+
+		if len(bestByTask) == 0 {
+			return decisions, fmt.Errorf(
+				"no feasible repair/relocation assignment for %d remaining tasks",
+				len(unscheduled),
+			)
+		}
+
+		// Global Max-Min: choose max_i(min_j P_ij).
+		chosenTaskIndex := -1
+		chosen := ascRepairCandidate{}
+
+		for taskIndex, candidate := range bestByTask {
+			if chosenTaskIndex == -1 ||
+				candidate.CompletionTime > chosen.CompletionTime ||
+				(candidate.CompletionTime == chosen.CompletionTime &&
+					tasks[taskIndex].Key < tasks[chosenTaskIndex].Key) {
+				chosenTaskIndex = taskIndex
+				chosen = candidate
+			}
+		}
+
+		task := tasks[chosenTaskIndex]
+
+		// Only the Global Max-Min winner becomes committed load.
+		ascCommitRepairCandidate(task, chosen, loads)
+
+		decision := ascBuildDecision(task, chosen)
+		decisions = append(decisions, decision)
+		delete(unscheduled, chosenTaskIndex)
+
+		static := task.StaticCandidate[decision.RepairPeer]
+		localCommon := static.LocalCommonCount
+		remoteCommon := static.RemoteCommonCount
+
+		fmt.Printf(
+			"[ASC-BW] shard=%s missing=%d helpers=%d common=%d "+
+				"localCommon=%d remoteCommon=%d repair=%s final=%s relocated=%v "+
+				"incomingMB=%.3f finish=%.6f\n",
+			task.Shard.Name,
+			len(task.MissingIndexes),
+			len(decision.Helpers),
+			len(task.CommonIndexes),
+			localCommon,
+			remoteCommon,
+			decision.RepairPeer.String(),
+			decision.FinalPeer.String(),
+			decision.FinalPeer != decision.RepairPeer,
+			chosen.RepairIncomingMB,
+			chosen.CompletionTime,
+		)
+	}
+
+	fmt.Printf(
+		"[ASC-BW] joint Global Max-Min scheduling phase took %v\n",
+		time.Since(phase),
+	)
+	fmt.Printf(
+		"[ASC-BW] total scheduling time %v\n",
+		time.Since(started),
+	)
+
+	return decisions, nil
+}
+
+func ascSortedUniquePeersStable(peers []peer.ID, topology *NetworkTopology) []peer.ID {
+	seen := make(map[peer.ID]bool, len(peers))
+	out := make([]peer.ID, 0, len(peers))
+
+	for _, p := range peers {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		return ascStablePeerKey(topology, out[i]) < ascStablePeerKey(topology, out[j])
+	})
+
+	return out
+}
+func ascStablePeerKey(topology *NetworkTopology, p peer.ID) string {
+	if ascValidNode(topology, p) {
+		return topology.NodesByPeer[p].Name
+	}
+
+	return ""
+}

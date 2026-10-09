@@ -1479,7 +1479,6 @@ func (c *Cluster) alertsHandler() {
 					// Make a copy so append does not modify distance.otherPeers.
 					allpeers := append([]peer.ID(nil), distance.otherPeers...)
 					allpeers = append(allpeers, c.id)
-					allpeers = ascOldSortedUniquePeers(allpeers)
 
 					fmt.Println("DEBUG topology peer IDs:")
 					for p, n := range topology.NodesByPeer {
@@ -1489,6 +1488,7 @@ func (c *Cluster) alertsHandler() {
 							n.Name,
 						)
 					}
+					allpeers = ascOldSortedUniquePeers(allpeers, topology)
 
 					fmt.Println("DEBUG candidate peer IDs:")
 					for _, p := range allpeers {
