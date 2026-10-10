@@ -2137,9 +2137,9 @@ func (c *Cluster) alertsHandler() {
 								"SELECTIVE_EC waiting 30 seconds before next batch",
 							)
 
-							time.Sleep(
-								30 * time.Second,
-							)
+							//time.Sleep(
+							//30 * time.Second,
+							//)
 						}
 					}
 
