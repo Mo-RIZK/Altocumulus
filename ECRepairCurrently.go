@@ -1552,9 +1552,9 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 	wgg.Wait()
 	fmt.Printf("Extracting !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! everything took : %s and localllllll is %t \n", time.Now().Sub(ssss).String(), Local)
 
-	if pin.Metadata["allocs"] != spt.peerID.String() {
+	/*if pin.Metadata["allocs"] != spt.peerID.String() {
 		Local = false
-	}
+	}*/
 	//Local
 	if Local {
 		shh, _ := sharding.NewShard(spt.ctx, spt.ctx, spt.rpcClient, pin.PinOptions, spt.peerID)
@@ -1998,6 +1998,10 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 				}
 			}
 			wait1 := time.Now()
+			pin.Allocations = make([]peer.ID, 0)
+			for _, all := range shh.Allocations() {
+				pin.Allocations = append(pin.Allocations, all)
+			}
 			shh.FlushForStateless(spt.ctx, *pin)
 			wait2 := time.Since(wait1)
 			cancell()
