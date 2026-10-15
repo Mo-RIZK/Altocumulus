@@ -1763,6 +1763,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 		cancell()
 		shh.FlushForStateless(spt.ctx, *pin)
 		fmt.Printf("REPAIR TOOK %s \n", time.Now().Sub(start).String())
+		fmt.Printf("LOCAL REPAIR SHARD \n")
 
 		return timedownloadchunks, timetorepairchunksonly, wait2
 	} else {
@@ -2002,6 +2003,7 @@ func (spt *ECRepairS) repinUsingRSWithSwitching1(pin *api.Pin) (time.Duration, t
 			for _, all := range shh.Allocations() {
 				pin.Allocations = append(pin.Allocations, all)
 			}
+
 			shh.FlushForStateless(spt.ctx, *pin)
 			wait2 := time.Since(wait1)
 			cancell()
