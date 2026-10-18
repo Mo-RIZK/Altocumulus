@@ -1553,7 +1553,73 @@ func (c *Cluster) alertsHandler() {
 							shard.Metadata = make(map[string]string)
 						}
 
-						shard.Metadata["Strategy"] = "Asc_old"
+						/*shard.Metadata["Strategy"] = ""
+						shard.Metadata["Strategy"] = "ASCLEPIUS"
+						top14Peers := topology.TopPeersByGlobalIn(14)
+						shard.Metadata["allocs"] = ""
+						allocs := make([]string, 0, len(top14Peers))
+
+						for _, p := range top14Peers {
+							allocs = append(allocs, p.String())
+						}
+
+						shard.Metadata["allocs"] = strings.Join(allocs, ",")*/
+
+						shard.Metadata["Strategy"] = "ASCLEPIUS"
+
+						// Get peers holding shards of the same stripe.
+						_, stripePeers, _, _ := c.get_shards_same_stripe(shard)
+
+						// Build exclusion set.
+						excludedPeers := make(map[peer.ID]bool)
+
+						// Exclude the failed peer.
+						excludedPeers[alrt.Peer] = true
+
+						// Exclude peers already holding shards of the same stripe.
+						for _, p := range stripePeers {
+							excludedPeers[p] = true
+						}
+
+						// Build a set of available peers.
+						availablePeers := make(map[peer.ID]bool)
+						for _, p := range allpeers {
+							availablePeers[p] = true
+						}
+
+						// Get peers ranked by download bandwidth (fastest first).
+						rankedPeers := topology.TopPeersByGlobalIn(len(topology.NodesByPeer))
+
+						// Select the fastest available peer not holding a shard of the same stripe.
+						var storagePeer peer.ID
+
+						for _, p := range rankedPeers {
+							if excludedPeers[p] || !availablePeers[p] {
+								continue
+							}
+
+							storagePeer = p
+							break
+						}
+
+						// If no eligible storage peer exists, skip this shard.
+						if storagePeer == "" {
+							fmt.Printf(
+								"WARNING: No eligible storage peer for shard %s\n",
+								shard.Cid.String(),
+							)
+							continue
+						}
+
+						// Store only the selected peer ID.
+						shard.Metadata["allocs"] = storagePeer.String()
+
+						fmt.Printf(
+							"ASCLEPIUS shard=%s repairPeer=%s storagePeer=%s\n",
+							shard.Cid.String(),
+							alloc.RepairPeer.String(),
+							storagePeer.String(),
+						)
 
 						// Final placement of the repaired shard.
 						//
