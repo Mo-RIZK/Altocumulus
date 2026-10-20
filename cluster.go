@@ -1565,7 +1565,7 @@ func (c *Cluster) alertsHandler() {
 
 						shard.Metadata["allocs"] = strings.Join(allocs, ",")*/
 
-						shard.Metadata["Strategy"] = "ASCLEPIUS"
+						shard.Metadata["Strategy"] = ""
 
 						// Get peers holding shards of the same stripe.
 						_, stripePeers, _, _ := c.get_shards_same_stripe(shard)
